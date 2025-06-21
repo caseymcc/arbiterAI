@@ -6,10 +6,16 @@ namespace hermesaxiom
 ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
+    std::string apiKey;
+    auto result = getApiKey(request, apiKey);
+    if (result != ErrorCode::Success) {
+        return result;
+    }
+
     // Create request body and headers
     auto body=createRequestBody(request, false);
-    auto headers=createHeaders();
-
+    auto headers=createHeaders(apiKey);
+ 
     // Make the API request
     auto raw_response=cpr::Post(
         cpr::Url{ m_apiUrl },
@@ -17,13 +23,13 @@ ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
         cpr::Body{ body.dump() },
         cpr::VerifySsl{ true }
     );
-
+ 
     // Check for HTTP errors
     if(raw_response.status_code!=200)
     {
         return ErrorCode::NetworkError;
     }
-
+ 
     // Parse the response
     return parseResponse(raw_response, response);
 }
@@ -65,12 +71,12 @@ nlohmann::json DeepseekLLM::createRequestBody(const CompletionRequest &request, 
     return body;
 }
 
-cpr::Header DeepseekLLM::createHeaders()
+cpr::Header DeepseekLLM::createHeaders(const std::string &apiKey)
 {
     return cpr::Header{
         {"Content-Type", "application/json"},
         {"Accept", "application/json"},
-        {"Authorization", "Bearer "+m_apiKey}
+        {"Authorization", "Bearer "+apiKey}
     };
 }
 
@@ -115,9 +121,16 @@ ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
 ErrorCode DeepseekLLM::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string&)> callback)
 {
-    auto headers = createHeaders();
-    auto body = createRequestBody(request, true);
+    std::string apiKey;
+    auto result = getApiKey(request, apiKey);
+    if (result != ErrorCode::Success) {
+        // Handle error, maybe by calling callback with an error message
+        return result;
+    }
 
+    auto headers = createHeaders(apiKey);
+    auto body = createRequestBody(request, true);
+ 
     // Setup streaming request
     auto session = cpr::Session();
     session.SetUrl(cpr::Url{m_apiUrl});

@@ -9,6 +9,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fdiagnostics-color=always")
 # Find dependencies
 find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(llama CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 set(hermes_src
     ./src/hermesaxiom/hermesaxiom.h
@@ -23,6 +25,8 @@ set(hermes_src
     ./src/hermesaxiom/providers/anthropic_llm.cpp
     ./src/hermesaxiom/providers/deepseek_llm.h
     ./src/hermesaxiom/providers/deepseek_llm.cpp
+    ./src/hermesaxiom/providers/llama_llm.h
+    ./src/hermesaxiom/providers/llama_llm.cpp
 )
 
 # Add library
@@ -30,12 +34,16 @@ add_library(hermesaxiom
     ${hermes_src}
 )
 
-target_include_directories(hermesaxiom 
+target_include_directories(hermesaxiom
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(hermesaxiom PUBLIC
+target_link_libraries(hermesaxiom 
+#PUBLIC
+PRIVATE
     cpr::cpr
     nlohmann_json::nlohmann_json
+    llama
+    spdlog::spdlog
 )

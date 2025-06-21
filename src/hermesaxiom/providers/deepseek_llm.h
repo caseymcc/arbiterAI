@@ -26,7 +26,7 @@ private:
         CompletionResponse &response);
 
     nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming = false);
-    cpr::Header createHeaders();
+    cpr::Header createHeaders(const std::string &apiKey);
 
     ModelInfo m_modelInfo;
 

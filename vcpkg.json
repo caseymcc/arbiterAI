@@ -5,6 +5,8 @@
         "cpr",
         "nlohmann-json",
         "yaml-cpp",
-        "cpp-httplib"
+        "cpp-httplib",
+        "llama-cpp",
+        "spdlog"
     ]
 }

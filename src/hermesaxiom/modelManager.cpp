@@ -71,6 +71,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
             if (modelJson.contains("api_base")) {
                 info.apiBase = modelJson["api_base"].get<std::string>();
             }
+            if (modelJson.contains("api_key")) {
+               info.apiKey = modelJson["api_key"].get<std::string>();
+            }
             if (modelJson.contains("examples_as_sys_msg")) {
                 info.examplesAsSysMsg = modelJson["examples_as_sys_msg"].get<bool>();
             }
@@ -104,6 +107,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
                 }
                 if (modelJson.contains("api_base")) {
                     it->apiBase = info.apiBase;
+                }
+                if (modelJson.contains("api_key")) {
+                   it->apiKey = info.apiKey;
                 }
                 if (modelJson.contains("examples_as_sys_msg")) {
                     it->examplesAsSysMsg = info.examplesAsSysMsg;

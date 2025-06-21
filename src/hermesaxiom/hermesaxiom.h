@@ -21,7 +21,9 @@ enum class ErrorCode
     NetworkError,
     InvalidResponse,
     InvalidRequest,
-    NotImplemented
+    NotImplemented,
+    ModelNotLoaded,
+    GenerationError
 };
 
 struct Message

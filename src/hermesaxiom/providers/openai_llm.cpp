@@ -19,10 +19,16 @@ OpenAILLM::OpenAILLM(const ModelInfo &modelInfo):
 ErrorCode OpenAILLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
-    // Create request headers and body
-    auto headers=createHeaders();
-    auto body=createRequestBody(request, false);
+    std::string apiKey;
+    auto result = getApiKey(request, apiKey);
+    if (result != ErrorCode::Success) {
+        return result;
+    }
 
+    // Create request headers and body
+    auto headers=createHeaders(apiKey);
+    auto body=createRequestBody(request, false);
+ 
     std::string completionUrl=m_apiUrl+"/chat/completions";
     
     // Make the API request
@@ -32,13 +38,13 @@ ErrorCode OpenAILLM::completion(const CompletionRequest &request,
         cpr::Body{ body.dump() },
         cpr::VerifySsl{ true }
     );
-
+ 
     // Check for HTTP errors
     if(raw_response.status_code!=200)
     {
         return ErrorCode::NetworkError;
     }
-
+ 
     // Parse the response
     return parseResponse(raw_response, response);
 }
@@ -73,18 +79,18 @@ nlohmann::json OpenAILLM::createRequestBody(const CompletionRequest &request, bo
     return body;
 }
 
-cpr::Header OpenAILLM::createHeaders()
+cpr::Header OpenAILLM::createHeaders(const std::string &apiKey)
 {
-    if(m_apiKey.empty())
+    if(apiKey.empty())
     {
         return cpr::Header{
             {"Content-Type", "application/json"}
         };
     }
-
+ 
     return cpr::Header{
         {"Content-Type", "application/json"},
-        {"Authorization", "Bearer "+m_apiKey}
+        {"Authorization", "Bearer "+apiKey}
     };
 }
 
@@ -129,7 +135,14 @@ ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
 ErrorCode OpenAILLM::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string&)> callback)
 {
-    auto headers = createHeaders();
+    std::string apiKey;
+    auto result = getApiKey(request, apiKey);
+    if (result != ErrorCode::Success) {
+        // Handle error, maybe by calling callback with an error message
+        return result;
+    }
+
+    auto headers = createHeaders(apiKey);
     auto body = createRequestBody(request, true);
     std::string completionUrl = m_apiUrl + "/chat/completions";
 

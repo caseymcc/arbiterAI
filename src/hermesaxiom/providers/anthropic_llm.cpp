@@ -6,20 +6,12 @@ namespace hermesaxiom
 ErrorCode AnthropicLLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
-    std::string api_key;
-    if(request.api_key.has_value())
-    {
-        api_key=request.api_key.value();
+    std::string apiKey;
+    auto result = getApiKey(request, apiKey);
+    if (result != ErrorCode::Success) {
+        return result;
     }
-    else
-    {
-        auto result=getApiKey("anthropic", api_key);
-        if(result!=ErrorCode::Success)
-        {
-            return result;
-        }
-    }
-
+ 
     // Implementation using cpr for Anthropic API
     // TODO: Implement actual API call
     response.provider="anthropic";

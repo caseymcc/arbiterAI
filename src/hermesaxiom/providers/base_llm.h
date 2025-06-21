@@ -19,7 +19,7 @@ public:
         std::function<void(const std::string&)> callback)=0;
 
 protected:
-    ErrorCode getApiKey(const std::string &provider, std::string &apiKey);
+    ErrorCode getApiKey(const CompletionRequest &request, std::string &apiKey);
 };
 
 } // namespace hermesaxiom
