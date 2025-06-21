@@ -39,6 +39,7 @@ struct CompletionRequest
     std::optional<float> temperature;
     std::optional<int> max_tokens;
     std::optional<std::string> api_key;
+    std::optional<std::string> provider;
 };
 
 struct CompletionResponse
@@ -47,6 +48,22 @@ struct CompletionResponse
     std::string model;
     int tokens_used;
     std::string provider;  // "openai", "anthropic", etc.
+};
+
+struct EmbeddingRequest
+{
+    std::string model;
+    std::string input;
+    std::optional<std::string> api_key;
+    std::optional<std::string> provider;
+};
+
+struct EmbeddingResponse
+{
+    std::vector<float> embedding;
+    std::string model;
+    int tokens_used;
+    std::string provider;
 };
 
 // Library initialization
@@ -59,8 +76,11 @@ bool doesModelNeedApiKey(const std::string &model);
 ErrorCode completion(const CompletionRequest &request, CompletionResponse &response);
 
 // Streaming completion function
-ErrorCode streamingCompletion(const CompletionRequest &request, 
-    std::function<void(const std::string&)> callback);
+ErrorCode streamingCompletion(const CompletionRequest &request,
+    std::function<void(const std::string &)> callback);
+
+// Embedding function
+ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response);
 
 }//namespace hermesaxiom
 

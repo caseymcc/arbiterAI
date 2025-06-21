@@ -16,17 +16,20 @@ public:
     ~LlamaLLM();
 
     ErrorCode completion(const CompletionRequest &request,
-                        CompletionResponse &response) override;
-    
+        CompletionResponse &response) override;
+
     ErrorCode streamingCompletion(const CompletionRequest &request,
-        std::function<void(const std::string&)> callback) override;
+        std::function<void(const std::string &)> callback) override;
+
+    ErrorCode getEmbeddings(const EmbeddingRequest &request,
+        EmbeddingResponse &response) override;
 
 private:
     void loadModel();
 
     ModelInfo m_modelInfo;
-    llama_model* m_model = nullptr;
-    llama_context* m_ctx = nullptr;
+    llama_model *m_model=nullptr;
+    llama_context *m_ctx=nullptr;
 };
 
 } // namespace hermesaxiom

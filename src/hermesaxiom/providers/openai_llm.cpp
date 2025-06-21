@@ -2,7 +2,7 @@
 
 namespace hermesaxiom
 {
-OpenAILLM::OpenAILLM(const ModelInfo &modelInfo):
+OpenAILLM::OpenAILLM(const ModelInfo &modelInfo) :
     m_modelInfo(modelInfo)
 {
     if(m_modelInfo.apiBase.has_value())
@@ -20,17 +20,18 @@ ErrorCode OpenAILLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
-    auto result = getApiKey(request, apiKey);
-    if (result != ErrorCode::Success) {
+    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
         return result;
     }
 
     // Create request headers and body
     auto headers=createHeaders(apiKey);
     auto body=createRequestBody(request, false);
- 
+
     std::string completionUrl=m_apiUrl+"/chat/completions";
-    
+
     // Make the API request
     auto raw_response=cpr::Post(
         cpr::Url{ completionUrl },
@@ -38,13 +39,13 @@ ErrorCode OpenAILLM::completion(const CompletionRequest &request,
         cpr::Body{ body.dump() },
         cpr::VerifySsl{ true }
     );
- 
+
     // Check for HTTP errors
     if(raw_response.status_code!=200)
     {
         return ErrorCode::NetworkError;
     }
- 
+
     // Parse the response
     return parseResponse(raw_response, response);
 }
@@ -87,7 +88,7 @@ cpr::Header OpenAILLM::createHeaders(const std::string &apiKey)
             {"Content-Type", "application/json"}
         };
     }
- 
+
     return cpr::Header{
         {"Content-Type", "application/json"},
         {"Authorization", "Bearer "+apiKey}
@@ -98,9 +99,11 @@ ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
     CompletionResponse &response)
 {
     nlohmann::json jsonResponse;
-    try {
-        jsonResponse = nlohmann::json::parse(rawResponse.text);
-    } catch(const nlohmann::json::parse_error&)
+    try
+    {
+        jsonResponse=nlohmann::json::parse(rawResponse.text);
+    }
+    catch(const nlohmann::json::parse_error &)
     {
         return ErrorCode::InvalidResponse;
     }
@@ -133,54 +136,133 @@ ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
 }
 
 ErrorCode OpenAILLM::streamingCompletion(const CompletionRequest &request,
-    std::function<void(const std::string&)> callback)
+    std::function<void(const std::string &)> callback)
 {
     std::string apiKey;
-    auto result = getApiKey(request, apiKey);
-    if (result != ErrorCode::Success) {
+    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
         // Handle error, maybe by calling callback with an error message
         return result;
     }
 
-    auto headers = createHeaders(apiKey);
-    auto body = createRequestBody(request, true);
-    std::string completionUrl = m_apiUrl + "/chat/completions";
+    auto headers=createHeaders(apiKey);
+    auto body=createRequestBody(request, true);
+    std::string completionUrl=m_apiUrl+"/chat/completions";
 
     // Setup streaming request
-    auto session = cpr::Session();
-    session.SetUrl(cpr::Url{completionUrl});
+    auto session=cpr::Session();
+    session.SetUrl(cpr::Url{ completionUrl });
     session.SetHeader(headers);
     session.SetBody(body.dump());
     session.SetVerifySsl(true);
 
     // Make streaming request
-    session.SetOption(cpr::WriteCallback([callback](const std::string_view& data, intptr_t) -> bool {
-        if (data.empty() || data == "\n") return true;
-        
-        try {
-            if (data.substr(0, 6) == "data: ") {
-                std::string jsonStr = std::string(data.substr(6)); // Remove "data: " prefix
-                if (jsonStr == "[DONE]") return true;
-                
-                auto json = nlohmann::json::parse(jsonStr);
-                if (json.contains("choices") && !json["choices"].empty() &&
-                    json["choices"][0].contains("delta") &&
-                    json["choices"][0]["delta"].contains("content")) {
-                    
-                    std::string content = json["choices"][0]["delta"]["content"];
-                    callback(content);
+    session.SetOption(cpr::WriteCallback([callback](const std::string_view &data, intptr_t) -> bool
+        {
+            if(data.empty()||data=="\n") return true;
+
+            try
+            {
+                if(data.substr(0, 6)=="data: ")
+                {
+                    std::string jsonStr=std::string(data.substr(6)); // Remove "data: " prefix
+                    if(jsonStr=="[DONE]") return true;
+
+                    auto json=nlohmann::json::parse(jsonStr);
+                    if(json.contains("choices")&&!json["choices"].empty()&&
+                        json["choices"][0].contains("delta")&&
+                        json["choices"][0]["delta"].contains("content"))
+                    {
+
+                        std::string content=json["choices"][0]["delta"]["content"];
+                        callback(content);
+                    }
                 }
             }
-        } catch (const std::exception&) {
-            return false;
-        }
-        return true;
-    }));
+            catch(const std::exception &)
+            {
+                return false;
+            }
+            return true;
+        }));
 
-    auto response = session.Post();
-    
-    if (response.status_code != 200) {
+    auto response=session.Post();
+
+    if(response.status_code!=200)
+    {
         return ErrorCode::NetworkError;
+    }
+
+    return ErrorCode::Success;
+}
+
+ErrorCode OpenAILLM::getEmbeddings(const EmbeddingRequest &request,
+    EmbeddingResponse &response)
+{
+    std::string apiKey;
+    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    auto headers=createHeaders(apiKey);
+
+    nlohmann::json body;
+    body["model"]=request.model;
+    body["input"]=request.input;
+
+    std::string embeddingUrl=m_apiUrl+"/embeddings";
+
+    auto raw_response=cpr::Post(
+        cpr::Url{ embeddingUrl },
+        headers,
+        cpr::Body{ body.dump() },
+        cpr::VerifySsl{ true }
+    );
+
+    if(raw_response.status_code!=200)
+    {
+        return ErrorCode::NetworkError;
+    }
+
+    return parseResponse(raw_response, response);
+}
+
+ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
+    EmbeddingResponse &response)
+{
+    nlohmann::json jsonResponse;
+    try
+    {
+        jsonResponse=nlohmann::json::parse(rawResponse.text);
+    }
+    catch(const nlohmann::json::parse_error &)
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    if(!jsonResponse.contains("data")||
+        !jsonResponse["data"].is_array()||
+        jsonResponse["data"].empty()||
+        !jsonResponse["data"][0].contains("embedding"))
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    response.embedding=jsonResponse["data"][0]["embedding"].get<std::vector<float>>();
+    response.provider="openai";
+
+    if(jsonResponse.contains("model"))
+    {
+        response.model=jsonResponse["model"];
+    }
+
+    if(jsonResponse.contains("usage")&&
+        jsonResponse["usage"].contains("total_tokens"))
+    {
+        response.tokens_used=jsonResponse["usage"]["total_tokens"];
     }
 
     return ErrorCode::Success;

@@ -7,15 +7,16 @@ ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
-    auto result = getApiKey(request, apiKey);
-    if (result != ErrorCode::Success) {
+    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
         return result;
     }
 
     // Create request body and headers
     auto body=createRequestBody(request, false);
     auto headers=createHeaders(apiKey);
- 
+
     // Make the API request
     auto raw_response=cpr::Post(
         cpr::Url{ m_apiUrl },
@@ -23,13 +24,13 @@ ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
         cpr::Body{ body.dump() },
         cpr::VerifySsl{ true }
     );
- 
+
     // Check for HTTP errors
     if(raw_response.status_code!=200)
     {
         return ErrorCode::NetworkError;
     }
- 
+
     // Parse the response
     return parseResponse(raw_response, response);
 }
@@ -84,9 +85,11 @@ ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
     CompletionResponse &response)
 {
     nlohmann::json jsonResponse;
-    try {
-        jsonResponse = nlohmann::json::parse(rawResponse.text);
-    } catch(const nlohmann::json::parse_error&)
+    try
+    {
+        jsonResponse=nlohmann::json::parse(rawResponse.text);
+    }
+    catch(const nlohmann::json::parse_error &)
     {
         return ErrorCode::InvalidResponse;
     }
@@ -119,53 +122,132 @@ ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
 }
 
 ErrorCode DeepseekLLM::streamingCompletion(const CompletionRequest &request,
-    std::function<void(const std::string&)> callback)
+    std::function<void(const std::string &)> callback)
 {
     std::string apiKey;
-    auto result = getApiKey(request, apiKey);
-    if (result != ErrorCode::Success) {
+    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
         // Handle error, maybe by calling callback with an error message
         return result;
     }
 
-    auto headers = createHeaders(apiKey);
-    auto body = createRequestBody(request, true);
- 
+    auto headers=createHeaders(apiKey);
+    auto body=createRequestBody(request, true);
+
     // Setup streaming request
-    auto session = cpr::Session();
-    session.SetUrl(cpr::Url{m_apiUrl});
+    auto session=cpr::Session();
+    session.SetUrl(cpr::Url{ m_apiUrl });
     session.SetHeader(headers);
     session.SetBody(body.dump());
     session.SetVerifySsl(true);
 
     // Make streaming request
-    session.SetOption(cpr::WriteCallback([callback](const std::string_view& data, intptr_t) -> bool {
-        if (data.empty() || data == "\n") return true;
-        
-        try {
-            if (data.substr(0, 6) == "data: ") {
-                std::string jsonStr = std::string(data.substr(6)); // Remove "data: " prefix
-                if (jsonStr == "[DONE]") return true;
-                
-                auto json = nlohmann::json::parse(jsonStr);
-                if (json.contains("choices") && !json["choices"].empty() &&
-                    json["choices"][0].contains("delta") &&
-                    json["choices"][0]["delta"].contains("content")) {
-                    
-                    std::string content = json["choices"][0]["delta"]["content"];
-                    callback(content);
+    session.SetOption(cpr::WriteCallback([callback](const std::string_view &data, intptr_t) -> bool
+        {
+            if(data.empty()||data=="\n") return true;
+
+            try
+            {
+                if(data.substr(0, 6)=="data: ")
+                {
+                    std::string jsonStr=std::string(data.substr(6)); // Remove "data: " prefix
+                    if(jsonStr=="[DONE]") return true;
+
+                    auto json=nlohmann::json::parse(jsonStr);
+                    if(json.contains("choices")&&!json["choices"].empty()&&
+                        json["choices"][0].contains("delta")&&
+                        json["choices"][0]["delta"].contains("content"))
+                    {
+
+                        std::string content=json["choices"][0]["delta"]["content"];
+                        callback(content);
+                    }
                 }
             }
-        } catch (const std::exception&) {
-            return false;
-        }
-        return true;
-    }));
+            catch(const std::exception &)
+            {
+                return false;
+            }
+            return true;
+        }));
 
-    auto response = session.Get();
-    
-    if (response.status_code != 200) {
+    auto response=session.Get();
+
+    if(response.status_code!=200)
+    {
         return ErrorCode::NetworkError;
+    }
+
+    return ErrorCode::Success;
+}
+
+ErrorCode DeepseekLLM::getEmbeddings(const EmbeddingRequest &request,
+    EmbeddingResponse &response)
+{
+    std::string apiKey;
+    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    auto headers=createHeaders(apiKey);
+
+    nlohmann::json body;
+    body["model"]=request.model;
+    body["input"]=request.input;
+
+    std::string embeddingUrl="https://api.deepseek.com/embeddings";
+
+    auto raw_response=cpr::Post(
+        cpr::Url{ embeddingUrl },
+        headers,
+        cpr::Body{ body.dump() },
+        cpr::VerifySsl{ true }
+    );
+
+    if(raw_response.status_code!=200)
+    {
+        return ErrorCode::NetworkError;
+    }
+
+    return parseResponse(raw_response, response);
+}
+
+ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
+    EmbeddingResponse &response)
+{
+    nlohmann::json jsonResponse;
+    try
+    {
+        jsonResponse=nlohmann::json::parse(rawResponse.text);
+    }
+    catch(const nlohmann::json::parse_error &)
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    if(!jsonResponse.contains("data")||
+        !jsonResponse["data"].is_array()||
+        jsonResponse["data"].empty()||
+        !jsonResponse["data"][0].contains("embedding"))
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    response.embedding=jsonResponse["data"][0]["embedding"].get<std::vector<float>>();
+    response.provider="deepseek";
+
+    if(jsonResponse.contains("model"))
+    {
+        response.model=jsonResponse["model"];
+    }
+
+    if(jsonResponse.contains("usage")&&
+        jsonResponse["usage"].contains("total_tokens"))
+    {
+        response.tokens_used=jsonResponse["usage"]["total_tokens"];
     }
 
     return ErrorCode::Success;

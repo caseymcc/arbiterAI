@@ -14,18 +14,23 @@ class DeepseekLLM : public BaseLLM
 {
 public:
     DeepseekLLM(const ModelInfo &modelInfo) : m_modelInfo(modelInfo) {};
-    
+
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
-        
+
     ErrorCode streamingCompletion(const CompletionRequest &request,
-        std::function<void(const std::string&)> callback) override;
+        std::function<void(const std::string &)> callback) override;
+
+    ErrorCode getEmbeddings(const EmbeddingRequest &request,
+        EmbeddingResponse &response) override;
 
 private:
     ErrorCode parseResponse(const cpr::Response &rawResponse,
         CompletionResponse &response);
+    ErrorCode parseResponse(const cpr::Response &rawResponse,
+        EmbeddingResponse &response);
 
-    nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming = false);
+    nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming=false);
     cpr::Header createHeaders(const std::string &apiKey);
 
     ModelInfo m_modelInfo;

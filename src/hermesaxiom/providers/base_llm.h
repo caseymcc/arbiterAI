@@ -14,12 +14,17 @@ public:
 
     virtual ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response)=0;
-    
+
     virtual ErrorCode streamingCompletion(const CompletionRequest &request,
-        std::function<void(const std::string&)> callback)=0;
+        std::function<void(const std::string &)> callback)=0;
+
+    virtual ErrorCode getEmbeddings(const EmbeddingRequest &request,
+        EmbeddingResponse &response)=0;
 
 protected:
-    ErrorCode getApiKey(const CompletionRequest &request, std::string &apiKey);
+    ErrorCode getApiKey(const std::string &modelName,
+        const std::optional<std::string> &providerName,
+        const std::optional<std::string> &requestApiKey, std::string &apiKey);
 };
 
 } // namespace hermesaxiom

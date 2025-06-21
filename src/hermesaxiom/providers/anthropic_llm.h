@@ -10,14 +10,16 @@ namespace hermesaxiom
 class AnthropicLLM : public BaseLLM
 {
 public:
-    AnthropicLLM(const ModelInfo& modelInfo) : m_modelInfo(modelInfo) {};
+    AnthropicLLM(const ModelInfo &modelInfo) : m_modelInfo(modelInfo) {};
 
-    ErrorCode completion(const CompletionRequest& request,
-                        CompletionResponse& response) override;
-                        
+    ErrorCode completion(const CompletionRequest &request,
+        CompletionResponse &response) override;
+
     ErrorCode streamingCompletion(const CompletionRequest &request,
-        std::function<void(const std::string&)> callback) override;
+        std::function<void(const std::string &)> callback) override;
 
+    ErrorCode getEmbeddings(const EmbeddingRequest &request,
+        EmbeddingResponse &response) override;
 private:
     ModelInfo m_modelInfo;
 };

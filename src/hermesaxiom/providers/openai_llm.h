@@ -7,23 +7,30 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
-namespace hermesaxiom {
+namespace hermesaxiom
+{
 
-class OpenAILLM : public BaseLLM {
+class OpenAILLM : public BaseLLM
+{
 public:
     OpenAILLM(const ModelInfo &modelInfo);
 
-    ErrorCode completion(const CompletionRequest& request,
-                        CompletionResponse& response) override;
-    
+    ErrorCode completion(const CompletionRequest &request,
+        CompletionResponse &response) override;
+
     ErrorCode streamingCompletion(const CompletionRequest &request,
-        std::function<void(const std::string&)> callback) override;
+        std::function<void(const std::string &)> callback) override;
+
+    ErrorCode getEmbeddings(const EmbeddingRequest &request,
+        EmbeddingResponse &response) override;
 
 private:
-    ErrorCode parseResponse(const cpr::Response& rawResponse,
-                          CompletionResponse& response);
-    
-    nlohmann::json createRequestBody(const CompletionRequest& request, bool streaming = false);
+    ErrorCode parseResponse(const cpr::Response &rawResponse,
+        CompletionResponse &response);
+    ErrorCode parseResponse(const cpr::Response &rawResponse,
+        EmbeddingResponse &response);
+
+    nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming=false);
     cpr::Header createHeaders(const std::string &apiKey);
 
     ModelInfo m_modelInfo;
