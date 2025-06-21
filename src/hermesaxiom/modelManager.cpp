@@ -57,12 +57,12 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
             ModelInfo info;
             
             // Required fields
-            if (!modelJson.contains("model") || !modelJson.contains("litellm_provider")) {
+            if (!modelJson.contains("model") || !modelJson.contains("provider")) {
                 continue;
             }
             
             info.model = modelJson["model"].get<std::string>();
-            info.provider = modelJson["litellm_provider"].get<std::string>();
+            info.provider = modelJson["provider"].get<std::string>();
             
             // Optional fields
             if (modelJson.contains("mode")) {
