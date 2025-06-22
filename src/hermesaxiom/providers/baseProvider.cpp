@@ -1,4 +1,4 @@
-#include "hermesaxiom/providers/base_llm.h"
+#include "hermesaxiom/providers/baseProvider.h"
 #include "hermesaxiom/modelManager.h"
 #include <cstdlib>
 #include <algorithm>
@@ -7,7 +7,7 @@
 namespace hermesaxiom
 {
 
-BaseLLM::BaseLLM(std::string provider)
+BaseProvider::BaseProvider(std::string provider)
     : m_provider(provider)
 {
 }
@@ -20,7 +20,7 @@ std::string to_upper(std::string s)
     return s;
 }
 
-ErrorCode BaseLLM::getApiKey(const std::string &modelName,
+ErrorCode BaseProvider::getApiKey(const std::string &modelName,
     const std::optional<std::string> &requestApiKey, std::string &apiKey)
 {
     // 1. Check the request itself
@@ -52,13 +52,13 @@ ErrorCode BaseLLM::getApiKey(const std::string &modelName,
     return ErrorCode::ApiKeyNotFound;
 }
 
-ErrorCode BaseLLM::getEmbeddings(const EmbeddingRequest &request,
+ErrorCode BaseProvider::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     return ErrorCode::NotImplemented;
 }
 
-DownloadStatus BaseLLM::getDownloadStatus(const std::string& modelName, std::string& error)
+DownloadStatus BaseProvider::getDownloadStatus(const std::string& modelName, std::string& error)
 {
     return DownloadStatus::Completed;
 }

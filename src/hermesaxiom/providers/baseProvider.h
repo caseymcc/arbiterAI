@@ -1,5 +1,5 @@
-#ifndef _hermesaxiom_providers_base_llm_h_
-#define _hermesaxiom_providers_base_llm_h_
+#ifndef _hermesaxiom_providers_baseProvider_h_
+#define _hermesaxiom_providers_baseProvider_h_
 
 #include "hermesaxiom/hermesaxiom.h"
 #include <functional>
@@ -7,11 +7,11 @@
 namespace hermesaxiom
 {
 
-class BaseLLM
+class BaseProvider
 {
 public:
-    BaseLLM(const std::string provider);
-    virtual ~BaseLLM()=default;
+    BaseProvider(const std::string provider);
+    virtual ~BaseProvider()=default;
 
     virtual ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response)=0;
@@ -34,4 +34,4 @@ protected:
 
 } // namespace hermesaxiom
 
-#endif//_hermesaxiom_providers_base_llm_h_
+#endif//_hermesaxiom_providers_baseProvider_h_

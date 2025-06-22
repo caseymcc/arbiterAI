@@ -1,13 +1,13 @@
-#include "hermesaxiom/providers/openai_llm.h"
+#include "hermesaxiom/providers/openai.h"
 
 namespace hermesaxiom
 {
-OpenAILLM::OpenAILLM()
-    : BaseLLM("openai")
+OpenAI::OpenAI()
+    : BaseProvider("openai")
 {
 }
 
-ErrorCode OpenAILLM::completion(const CompletionRequest &request,
+ErrorCode OpenAI::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
@@ -41,7 +41,7 @@ ErrorCode OpenAILLM::completion(const CompletionRequest &request,
     return parseResponse(raw_response, response);
 }
 
-nlohmann::json OpenAILLM::createRequestBody(const CompletionRequest &request, bool streaming)
+nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool streaming)
 {
     nlohmann::json body;
     body["model"]=request.model;
@@ -71,7 +71,7 @@ nlohmann::json OpenAILLM::createRequestBody(const CompletionRequest &request, bo
     return body;
 }
 
-cpr::Header OpenAILLM::createHeaders(const std::string &apiKey)
+cpr::Header OpenAI::createHeaders(const std::string &apiKey)
 {
     if(apiKey.empty())
     {
@@ -86,7 +86,7 @@ cpr::Header OpenAILLM::createHeaders(const std::string &apiKey)
     };
 }
 
-ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
+ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
     CompletionResponse &response)
 {
     nlohmann::json jsonResponse;
@@ -126,7 +126,7 @@ ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
     return ErrorCode::Success;
 }
 
-ErrorCode OpenAILLM::streamingCompletion(const CompletionRequest &request,
+ErrorCode OpenAI::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
     std::string apiKey;
@@ -188,7 +188,7 @@ ErrorCode OpenAILLM::streamingCompletion(const CompletionRequest &request,
     return ErrorCode::Success;
 }
 
-ErrorCode OpenAILLM::getEmbeddings(const EmbeddingRequest &request,
+ErrorCode OpenAI::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     std::string apiKey;
@@ -221,7 +221,7 @@ ErrorCode OpenAILLM::getEmbeddings(const EmbeddingRequest &request,
     return parseResponse(raw_response, response);
 }
 
-ErrorCode OpenAILLM::parseResponse(const cpr::Response &rawResponse,
+ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
     EmbeddingResponse &response)
 {
     nlohmann::json jsonResponse;

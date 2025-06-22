@@ -1,9 +1,9 @@
 #include "hermesaxiom/hermesaxiom.h"
 #include "hermesaxiom/modelManager.h"
-#include "hermesaxiom/providers/openai_llm.h"
-#include "hermesaxiom/providers/anthropic_llm.h"
-#include "hermesaxiom/providers/deepseek_llm.h"
-#include "hermesaxiom/providers/llama_llm.h"
+#include "hermesaxiom/providers/openai.h"
+#include "hermesaxiom/providers/anthropic.h"
+#include "hermesaxiom/providers/deepseek.h"
+#include "hermesaxiom/providers/llama.h"
 
 #include <memory>
 
@@ -19,7 +19,7 @@ struct HermesAxiom
     }
 
     bool initialized=false;
-    std::map<std::string, std::unique_ptr<BaseLLM>> llms;
+    std::map<std::string, std::unique_ptr<BaseProvider>> providers;
 };
 
 ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths)
@@ -54,35 +54,35 @@ bool supportModelDownload(const std::string &provider)
     return false;
 }
 
-std::unique_ptr<BaseLLM> createLLM(const std::string& provider)
+std::unique_ptr<BaseProvider> createLLM(const std::string &provider)
 {
     if(provider=="openai")
     {
-        return std::make_unique<OpenAILLM>();
+        return std::make_unique<OpenAI>();
     }
     else if(provider=="anthropic")
     {
-        return std::make_unique<AnthropicLLM>();
+        return std::make_unique<Anthropic>();
     }
     else if(provider=="deepseek")
     {
-        return std::make_unique<DeepseekLLM>();
+        return std::make_unique<Deepseek>();
     }
     else if(provider=="llama")
     {
-        return std::make_unique<LlamaLLM>();
+        return std::make_unique<Llama>();
     }
     return nullptr;
 }
 
-BaseLLM *getLLM(const std::string &provider)
+BaseProvider *getLLM(const std::string &provider)
 {
     auto &hermes=HermesAxiom::instance();
 
     // Check if we already have an LLM instance for this provider
-    auto it=hermes.llms.find(provider);
+    auto it=hermes.providers.find(provider);
 
-    if(it==hermes.llms.end())
+    if(it==hermes.providers.end())
     {
         // Create new LLM instance
         auto llm=createLLM(provider);
@@ -90,7 +90,7 @@ BaseLLM *getLLM(const std::string &provider)
         {
             return nullptr;
         }
-        it=hermes.llms.emplace(provider, std::move(llm)).first;
+        it=hermes.providers.emplace(provider, std::move(llm)).first;
     }
 
     return it->second.get();
@@ -109,7 +109,7 @@ ErrorCode completion(const CompletionRequest &request, CompletionResponse &respo
         return ErrorCode::UnknownModel;
     }
 
-    BaseLLM *llm=getLLM(modelInfo->provider);
+    BaseProvider *llm=getLLM(modelInfo->provider);
 
     if(!llm)
     {
@@ -133,7 +133,7 @@ ErrorCode streamingCompletion(const CompletionRequest &request,
         return ErrorCode::UnknownModel;
     }
 
-    BaseLLM *llm=getLLM(modelInfo->provider);
+    BaseProvider *llm=getLLM(modelInfo->provider);
 
     if(!llm)
     {
@@ -156,7 +156,7 @@ ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &resp
         return ErrorCode::UnknownModel;
     }
 
-    BaseLLM *llm=getLLM(modelInfo->provider);
+    BaseProvider *llm=getLLM(modelInfo->provider);
 
     if(!llm)
     {
@@ -174,7 +174,7 @@ ErrorCode getDownloadStatus(const std::string &modelName, std::string &error)
         return ErrorCode::UnknownModel;
     }
 
-    BaseLLM *llm=getLLM(modelInfo->provider);
+    BaseProvider *llm=getLLM(modelInfo->provider);
 
     if(llm)
     {

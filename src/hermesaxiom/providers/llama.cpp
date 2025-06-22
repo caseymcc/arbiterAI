@@ -1,6 +1,6 @@
-#include "hermesaxiom/providers/llama_llm.h"
+#include "hermesaxiom/providers/llama.h"
 
-#include "hermesaxiom/providers/llama_provider.h"
+#include "hermesaxiom/providers/llamaInterface.h"
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -13,19 +13,19 @@
 namespace hermesaxiom
 {
 
-LlamaLLM::LlamaLLM()
-    : BaseLLM("llama")
+Llama::Llama() :
+    BaseProvider("llama")
 {
 }
 
-LlamaLLM::~LlamaLLM()
+Llama::~Llama()
 {
 }
 
-ErrorCode LlamaLLM::completion(const CompletionRequest &request,
+ErrorCode Llama::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
-    LlamaProvider &llamaProvider=LlamaProvider::instance();
+    LlamaInterface &llamaInterface=LlamaInterface::instance();
 
     std::string error;
     DownloadStatus status=getDownloadStatus(request.model, error);
@@ -38,9 +38,9 @@ ErrorCode LlamaLLM::completion(const CompletionRequest &request,
         return ErrorCode::DownloadFailed;
     }
 
-    if(!llamaProvider.isLoaded(request.model))
+    if(!llamaInterface.isLoaded(request.model))
     {
-        if(!llamaProvider.loadModel(request.model))
+        if(!llamaInterface.loadModel(request.model))
             return ErrorCode::ModelNotLoaded;
     }
 
@@ -51,7 +51,7 @@ ErrorCode LlamaLLM::completion(const CompletionRequest &request,
     }
 
     std::string result_text;
-    ErrorCode code=llamaProvider.completion(prompt, result_text);
+    ErrorCode code=llamaInterface.completion(prompt, result_text);
 
     if(code==ErrorCode::Success)
     {
@@ -63,10 +63,10 @@ ErrorCode LlamaLLM::completion(const CompletionRequest &request,
     return code;
 }
 
-ErrorCode LlamaLLM::streamingCompletion(const CompletionRequest &request,
+ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    LlamaProvider &llamaProvider=LlamaProvider::instance();
+    LlamaInterface &llamaInterface=LlamaInterface::instance();
 
     std::string error;
     DownloadStatus status=getDownloadStatus(request.model, error);
@@ -79,9 +79,9 @@ ErrorCode LlamaLLM::streamingCompletion(const CompletionRequest &request,
         return ErrorCode::DownloadFailed;
     }
 
-    if(!llamaProvider.isLoaded(request.model))
+    if(!llamaInterface.isLoaded(request.model))
     {
-        if(!llamaProvider.loadModel(request.model))
+        if(!llamaInterface.loadModel(request.model))
             return ErrorCode::ModelNotLoaded;
     }
 
@@ -91,17 +91,17 @@ ErrorCode LlamaLLM::streamingCompletion(const CompletionRequest &request,
         prompt+=msg.content;
     }
 
-    return llamaProvider.streamingCompletion(prompt, callback);
+    return llamaInterface.streamingCompletion(prompt, callback);
 }
 
-ErrorCode LlamaLLM::getEmbeddings(const EmbeddingRequest &request,
+ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
-    LlamaProvider &llamaProvider=LlamaProvider::instance();
+    LlamaInterface &llamaInterface=LlamaInterface::instance();
 
-    if(!llamaProvider.isLoaded(request.model))
+    if(!llamaInterface.isLoaded(request.model))
     {
-        if(!llamaProvider.loadModel(request.model))
+        if(!llamaInterface.loadModel(request.model))
             return ErrorCode::ModelNotLoaded;
     }
 
@@ -117,7 +117,7 @@ ErrorCode LlamaLLM::getEmbeddings(const EmbeddingRequest &request,
     }
 
     int tokens_used=0;
-    ErrorCode code=llamaProvider.getEmbeddings(request.input, response.embedding, tokens_used);
+    ErrorCode code=llamaInterface.getEmbeddings(request.input, response.embedding, tokens_used);
 
     if(code==ErrorCode::Success)
     {

@@ -1,17 +1,17 @@
-#ifndef _hermesaxiom_providers_llama_llm_h_
-#define _hermesaxiom_providers_llama_llm_h_
+#ifndef _hermesaxiom_providers_llama_h_
+#define _hermesaxiom_providers_llama_h_
 
-#include "hermesaxiom/providers/base_llm.h"
+#include "hermesaxiom/providers/baseProvider.h"
 #include <vector>
 
 namespace hermesaxiom
 {
 
-class LlamaLLM : public BaseLLM
+class Llama : public BaseProvider
 {
 public:
-    LlamaLLM();
-    ~LlamaLLM();
+Llama();
+    ~Llama();
 
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
@@ -25,4 +25,4 @@ public:
 
 } // namespace hermesaxiom
 
-#endif//_hermesaxiom_providers_llama_llm_h_
+#endif//_hermesaxiom_providers_llama_h_

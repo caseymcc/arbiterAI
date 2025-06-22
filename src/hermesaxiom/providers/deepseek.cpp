@@ -1,14 +1,14 @@
-#include "hermesaxiom/providers/deepseek_llm.h"
+#include "hermesaxiom/providers/deepseek.h"
 
 namespace hermesaxiom
 {
 
-DeepseekLLM::DeepseekLLM()
-    : BaseLLM("deepseek")
+Deepseek::Deepseek()
+    : BaseProvider("deepseek")
 {
 }
 
-ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
+ErrorCode Deepseek::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
@@ -40,7 +40,7 @@ ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
     return parseResponse(raw_response, response);
 }
 
-nlohmann::json DeepseekLLM::createRequestBody(const CompletionRequest &request, bool streaming)
+nlohmann::json Deepseek::createRequestBody(const CompletionRequest &request, bool streaming)
 {
     nlohmann::json body;
     body["model"]="deepseek-chat";  // Currently only supporting main chat model
@@ -77,7 +77,7 @@ nlohmann::json DeepseekLLM::createRequestBody(const CompletionRequest &request, 
     return body;
 }
 
-cpr::Header DeepseekLLM::createHeaders(const std::string &apiKey)
+cpr::Header Deepseek::createHeaders(const std::string &apiKey)
 {
     return cpr::Header{
         {"Content-Type", "application/json"},
@@ -86,7 +86,7 @@ cpr::Header DeepseekLLM::createHeaders(const std::string &apiKey)
     };
 }
 
-ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
+ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     CompletionResponse &response)
 {
     nlohmann::json jsonResponse;
@@ -126,7 +126,7 @@ ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
     return ErrorCode::Success;
 }
 
-ErrorCode DeepseekLLM::streamingCompletion(const CompletionRequest &request,
+ErrorCode Deepseek::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
     std::string apiKey;
@@ -187,7 +187,7 @@ ErrorCode DeepseekLLM::streamingCompletion(const CompletionRequest &request,
     return ErrorCode::Success;
 }
 
-ErrorCode DeepseekLLM::getEmbeddings(const EmbeddingRequest &request,
+ErrorCode Deepseek::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     std::string apiKey;
@@ -220,7 +220,7 @@ ErrorCode DeepseekLLM::getEmbeddings(const EmbeddingRequest &request,
     return parseResponse(raw_response, response);
 }
 
-ErrorCode DeepseekLLM::parseResponse(const cpr::Response &rawResponse,
+ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     EmbeddingResponse &response)
 {
     nlohmann::json jsonResponse;

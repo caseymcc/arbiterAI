@@ -1,16 +1,16 @@
-#ifndef _hermesaxiom_providers_anthropic_llm_h_
-#define _hermesaxiom_providers_anthropic_llm_h_
+#ifndef _hermesaxiom_providers_anthropic_h_
+#define _hermesaxiom_providers_anthropic_h_
 
-#include "hermesaxiom/providers/base_llm.h"
+#include "hermesaxiom/providers/baseProvider.h"
 #include "hermesaxiom/modelManager.h"
 
 namespace hermesaxiom
 {
 
-class AnthropicLLM : public BaseLLM
+class Anthropic : public BaseProvider
 {
 public:
-    AnthropicLLM();
+    Anthropic();
 
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
@@ -25,4 +25,4 @@ private:
 
 } // namespace hermesaxiom
 
-#endif//_hermesaxiom_providers_anthropic_llm_h_
+#endif//_hermesaxiom_providers_anthropic_h_

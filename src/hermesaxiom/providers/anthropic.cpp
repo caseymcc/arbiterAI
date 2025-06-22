@@ -1,14 +1,14 @@
-#include "hermesaxiom/providers/anthropic_llm.h"
+#include "hermesaxiom/providers/anthropic.h"
 
 namespace hermesaxiom
 {
 
-AnthropicLLM::AnthropicLLM()
-    : BaseLLM("anthropic")
+Anthropic::Anthropic()
+    : BaseProvider("anthropic")
 {
 }
 
-ErrorCode AnthropicLLM::completion(const CompletionRequest &request,
+ErrorCode Anthropic::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
@@ -24,7 +24,7 @@ ErrorCode AnthropicLLM::completion(const CompletionRequest &request,
     return ErrorCode::Success;
 }
 
-ErrorCode AnthropicLLM::streamingCompletion(const CompletionRequest &request,
+ErrorCode Anthropic::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
     // TODO: Implement Anthropic streaming API
@@ -32,7 +32,7 @@ ErrorCode AnthropicLLM::streamingCompletion(const CompletionRequest &request,
     return ErrorCode::NotImplemented;
 }
 
-ErrorCode AnthropicLLM::getEmbeddings(const EmbeddingRequest &request,
+ErrorCode Anthropic::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     return ErrorCode::NotImplemented;

@@ -20,16 +20,18 @@ set(hermes_src
     ./src/hermesaxiom/modelManager.cpp
     ./src/hermesaxiom/modelDownloader.h
     ./src/hermesaxiom/modelDownloader.cpp
-    ./src/hermesaxiom/providers/base_llm.h
-    ./src/hermesaxiom/providers/base_llm.cpp
-    ./src/hermesaxiom/providers/openai_llm.h
-    ./src/hermesaxiom/providers/openai_llm.cpp
-    ./src/hermesaxiom/providers/anthropic_llm.h
-    ./src/hermesaxiom/providers/anthropic_llm.cpp
-    ./src/hermesaxiom/providers/deepseek_llm.h
-    ./src/hermesaxiom/providers/deepseek_llm.cpp
-    ./src/hermesaxiom/providers/llama_llm.h
-    ./src/hermesaxiom/providers/llama_llm.cpp
+    ./src/hermesaxiom/providers/baseProvider.h
+    ./src/hermesaxiom/providers/baseProvider.cpp
+    ./src/hermesaxiom/providers/openai.h
+    ./src/hermesaxiom/providers/openai.cpp
+    ./src/hermesaxiom/providers/anthropic.h
+    ./src/hermesaxiom/providers/anthropic.cpp
+    ./src/hermesaxiom/providers/deepseek.h
+    ./src/hermesaxiom/providers/deepseek.cpp
+    ./src/hermesaxiom/providers/llama.h
+    ./src/hermesaxiom/providers/llama.cpp
+    ./src/hermesaxiom/providers/llamaInterface.h
+    ./src/hermesaxiom/providers/llamaInterface.cpp
 )
 
 # Add library

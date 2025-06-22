@@ -1,7 +1,7 @@
-#ifndef _hermesaxiom_providers_deepseek_llm_h_
-#define _hermesaxiom_providers_deepseek_llm_h_
+#ifndef _hermesaxiom_providers_openai_h_
+#define _hermesaxiom_providers_openai_h_
 
-#include "hermesaxiom/providers/base_llm.h"
+#include "hermesaxiom/providers/baseProvider.h"
 #include "hermesaxiom/modelManager.h"
 
 #include <cpr/cpr.h>
@@ -10,10 +10,10 @@
 namespace hermesaxiom
 {
 
-class DeepseekLLM : public BaseLLM
+class OpenAI : public BaseProvider
 {
 public:
-    DeepseekLLM();
+    OpenAI();
 
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
@@ -33,10 +33,10 @@ private:
     nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming=false);
     cpr::Header createHeaders(const std::string &apiKey);
 
-    std::string m_apiUrl="https://api.deepseek.com/chat/completions";
+    std::string m_apiUrl="https://api.openai.com/v1";
     std::string m_apiKey="";
 };
 
 } // namespace hermesaxiom
 
-#endif//_hermesaxiom_providers_deepseek_llm_h_
+#endif//_hermesaxiom_providers_openai_h_

@@ -2,6 +2,8 @@
 #define _hermesaxiom_modelDownloader_h_
 
 #include "hermesaxiom/modelManager.h"
+#include "hermesaxiom/hermesaxiom.h"
+
 #include <string>
 #include <future>
 
