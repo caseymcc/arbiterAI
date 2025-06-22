@@ -54,7 +54,7 @@ bool supportModelDownload(const std::string &provider)
     return false;
 }
 
-std::unique_ptr<BaseProvider> createLLM(const std::string &provider)
+std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
 {
     if(provider=="openai")
     {
@@ -75,22 +75,23 @@ std::unique_ptr<BaseProvider> createLLM(const std::string &provider)
     return nullptr;
 }
 
-BaseProvider *getLLM(const std::string &provider)
+BaseProvider *getProvider(const std::string &providerName)
 {
     auto &hermes=HermesAxiom::instance();
 
-    // Check if we already have an LLM instance for this provider
-    auto it=hermes.providers.find(provider);
+    // Check if we already have an Provider instance for this provider
+    auto it=hermes.providers.find(providerName);
 
     if(it==hermes.providers.end())
     {
-        // Create new LLM instance
-        auto llm=createLLM(provider);
-        if(!llm)
+        // Create new Provider instance
+        auto provider=createProvider(providerName);
+
+        if(!provider)
         {
             return nullptr;
         }
-        it=hermes.providers.emplace(provider, std::move(llm)).first;
+        it=hermes.providers.emplace(providerName, std::move(provider)).first;
     }
 
     return it->second.get();
@@ -109,14 +110,14 @@ ErrorCode completion(const CompletionRequest &request, CompletionResponse &respo
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *llm=getLLM(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider);
 
-    if(!llm)
+    if(!provider)
     {
         return ErrorCode::UnsupportedProvider;
     }
 
-    return llm->completion(request, response);
+    return provider->completion(request, response);
 }
 
 ErrorCode streamingCompletion(const CompletionRequest &request,
@@ -133,14 +134,14 @@ ErrorCode streamingCompletion(const CompletionRequest &request,
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *llm=getLLM(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider);
 
-    if(!llm)
+    if(!provider)
     {
         return ErrorCode::UnsupportedProvider;
     }
 
-    return llm->streamingCompletion(request, callback);
+    return provider->streamingCompletion(request, callback);
 }
 
 ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
@@ -156,14 +157,14 @@ ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &resp
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *llm=getLLM(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider);
 
-    if(!llm)
+    if(!provider)
     {
         return ErrorCode::UnsupportedProvider;
     }
 
-    return llm->getEmbeddings(request, response);
+    return provider->getEmbeddings(request, response);
 }
 
 ErrorCode getDownloadStatus(const std::string &modelName, std::string &error)
@@ -174,11 +175,11 @@ ErrorCode getDownloadStatus(const std::string &modelName, std::string &error)
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *llm=getLLM(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider);
 
-    if(llm)
+    if(provider)
     {
-        auto status=llm->getDownloadStatus(modelName, error);
+        auto status=provider->getDownloadStatus(modelName, error);
         switch(status)
         {
         case DownloadStatus::NotStarted:
