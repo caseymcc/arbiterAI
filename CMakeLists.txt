@@ -11,12 +11,15 @@ find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(llama CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_path(PICOSHA2_INCLUDE_DIRS "picosha2.h")
 
 set(hermes_src
     ./src/hermesaxiom/hermesaxiom.h
     ./src/hermesaxiom/hermesaxiom.cpp
     ./src/hermesaxiom/modelManager.h
     ./src/hermesaxiom/modelManager.cpp
+    ./src/hermesaxiom/modelDownloader.h
+    ./src/hermesaxiom/modelDownloader.cpp
     ./src/hermesaxiom/providers/base_llm.h
     ./src/hermesaxiom/providers/base_llm.cpp
     ./src/hermesaxiom/providers/openai_llm.h
@@ -37,13 +40,15 @@ add_library(hermesaxiom
 target_include_directories(hermesaxiom
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+    PRIVATE
+       ${PICOSHA2_INCLUDE_DIRS}
 )
 
 target_link_libraries(hermesaxiom 
-#PUBLIC
-PRIVATE
-    cpr::cpr
-    nlohmann_json::nlohmann_json
-    llama
-    spdlog::spdlog
+#   PUBLIC
+    PRIVATE
+        cpr::cpr
+        nlohmann_json::nlohmann_json
+        llama
+        spdlog::spdlog
 )

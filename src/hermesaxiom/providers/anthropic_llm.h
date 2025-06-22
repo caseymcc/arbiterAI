@@ -10,7 +10,7 @@ namespace hermesaxiom
 class AnthropicLLM : public BaseLLM
 {
 public:
-    AnthropicLLM(const ModelInfo &modelInfo) : m_modelInfo(modelInfo) {};
+    AnthropicLLM();
 
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
@@ -21,7 +21,6 @@ public:
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 private:
-    ModelInfo m_modelInfo;
 };
 
 } // namespace hermesaxiom

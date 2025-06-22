@@ -3,11 +3,16 @@
 namespace hermesaxiom
 {
 
+AnthropicLLM::AnthropicLLM()
+    : BaseLLM("anthropic")
+{
+}
+
 ErrorCode AnthropicLLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
-    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    auto result=getApiKey(request.model, request.api_key, apiKey);
     if(result!=ErrorCode::Success)
     {
         return result;

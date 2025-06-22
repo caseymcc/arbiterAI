@@ -1,307 +1,132 @@
 #include "hermesaxiom/providers/llama_llm.h"
+
+#include "hermesaxiom/providers/llama_provider.h"
+
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <nlohmann/json.hpp>
+#include <fstream>
+#include <filesystem>
+#include <thread>
+#include <future>
 
 namespace hermesaxiom
 {
 
-LlamaLLM::LlamaLLM(const ModelInfo &modelInfo) :
-    m_modelInfo(modelInfo)
+LlamaLLM::LlamaLLM()
+    : BaseLLM("llama")
 {
-    loadModel();
 }
 
 LlamaLLM::~LlamaLLM()
 {
-    if(m_ctx)
-    {
-        llama_free(m_ctx);
-    }
-    if(m_model)
-    {
-        llama_model_free(m_model);
-    }
-}
-
-void LlamaLLM::loadModel()
-{
-    auto mparams=llama_model_default_params();
-    m_model=llama_model_load_from_file(m_modelInfo.model.c_str(), mparams);
-    if(!m_model)
-    {
-        spdlog::error("Failed to load model: {}", m_modelInfo.model);
-        return;
-    }
-
-    auto cparams=llama_context_default_params();
-    cparams.n_ctx=m_modelInfo.contextWindow;
-    cparams.n_threads=std::thread::hardware_concurrency();
-
-    m_ctx=llama_init_from_model(m_model, cparams);
-    if(!m_ctx)
-    {
-        spdlog::error("Failed to create context for model: {}", m_modelInfo.model);
-    }
 }
 
 ErrorCode LlamaLLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
-    if(!m_ctx)
+    LlamaProvider &llamaProvider=LlamaProvider::instance();
+
+    std::string error;
+    DownloadStatus status=getDownloadStatus(request.model, error);
+    if(status==DownloadStatus::InProgress)
     {
-        return ErrorCode::ModelNotLoaded;
+        return ErrorCode::ModelDownloading;
+    }
+    if(status==DownloadStatus::Failed)
+    {
+        return ErrorCode::DownloadFailed;
     }
 
-    std::string prompt_str;
+    if(!llamaProvider.isLoaded(request.model))
+    {
+        if(!llamaProvider.loadModel(request.model))
+            return ErrorCode::ModelNotLoaded;
+    }
+
+    std::string prompt;
     for(const auto &msg:request.messages)
     {
-        prompt_str+=msg.content;
-    }
-
-    // tokenize the prompt
-    std::vector<llama_token> tokens_list(prompt_str.size());
-    int n_tokens=llama_tokenize(llama_model_get_vocab(m_model), prompt_str.c_str(), prompt_str.length(), tokens_list.data(), tokens_list.size(), true, false);
-    if(n_tokens<0)
-    {
-        spdlog::error("Failed to tokenize prompt");
-        return ErrorCode::GenerationError;
-    }
-    tokens_list.resize(n_tokens);
-
-    llama_batch batch=llama_batch_init(512, 0, 1);
-
-    batch.n_tokens=n_tokens;
-    for(int32_t i=0; i<batch.n_tokens; i++)
-    {
-        batch.token[i]=tokens_list[i];
-        batch.pos[i]=i;
-        batch.n_seq_id[i]=1;
-        batch.seq_id[i][0]=0;
-        batch.logits[i]=0;
-    }
-    batch.logits[batch.n_tokens-1]=1;
-
-    if(llama_decode(m_ctx, batch)!=0)
-    {
-        spdlog::error("llama_decode failed");
-        llama_batch_free(batch);
-        return ErrorCode::GenerationError;
+        prompt+=msg.content;
     }
 
     std::string result_text;
-    int n_cur=n_tokens;
-    int n_len=m_modelInfo.maxOutputTokens;
-    auto n_vocab=llama_vocab_n_tokens(llama_model_get_vocab(m_model));
-    std::vector<llama_token_data> candidates;
-    candidates.reserve(n_vocab);
+    ErrorCode code=llamaProvider.completion(prompt, result_text);
 
-    for(int i=0; i<n_len; ++i)
+    if(code==ErrorCode::Success)
     {
-        auto *logits=llama_get_logits_ith(m_ctx, batch.n_tokens-1);
-
-        candidates.clear();
-        for(llama_token token_id=0; token_id<n_vocab; token_id++)
-        {
-            candidates.push_back({ token_id, logits[token_id], 0.0f });
-        }
-
-        auto max_it=std::max_element(candidates.begin(), candidates.end(),
-            [](const llama_token_data &a, const llama_token_data &b)
-            {
-                return a.logit<b.logit;
-            });
-        const llama_token next_token=max_it->id;
-
-        if(next_token==llama_token_eos(llama_model_get_vocab(m_model)))
-        {
-            break;
-        }
-
-        char piece[16];
-        int len=llama_token_to_piece(llama_model_get_vocab(m_model), next_token, piece, sizeof(piece), 0, false);
-        if(len>0)
-        {
-            result_text.append(piece, len);
-        }
-
-        batch.n_tokens=1;
-        batch.token[0]=next_token;
-        batch.pos[0]=n_cur;
-        batch.logits[0]=1;
-
-        n_cur++;
-
-        if(llama_decode(m_ctx, batch)!=0)
-        {
-            spdlog::error("llama_decode failed");
-            llama_batch_free(batch);
-            return ErrorCode::GenerationError;
-        }
+        response.text=result_text;
+        response.provider="llama";
+        response.model=request.model;
     }
 
-    llama_batch_free(batch);
-
-    response.text=result_text;
-    response.provider="llama";
-    response.model=m_modelInfo.model;
-
-    return ErrorCode::Success;
+    return code;
 }
 
 ErrorCode LlamaLLM::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    if(!m_ctx)
+    LlamaProvider &llamaProvider=LlamaProvider::instance();
+
+    std::string error;
+    DownloadStatus status=getDownloadStatus(request.model, error);
+    if(status==DownloadStatus::InProgress)
     {
-        return ErrorCode::ModelNotLoaded;
+        return ErrorCode::ModelDownloading;
+    }
+    if(status==DownloadStatus::Failed)
+    {
+        return ErrorCode::DownloadFailed;
     }
 
-    std::string prompt_str;
+    if(!llamaProvider.isLoaded(request.model))
+    {
+        if(!llamaProvider.loadModel(request.model))
+            return ErrorCode::ModelNotLoaded;
+    }
+
+    std::string prompt;
     for(const auto &msg:request.messages)
     {
-        prompt_str+=msg.content;
+        prompt+=msg.content;
     }
 
-    // tokenize the prompt
-    std::vector<llama_token> tokens_list(prompt_str.size());
-    int n_tokens=llama_tokenize(llama_model_get_vocab(m_model), prompt_str.c_str(), prompt_str.length(), tokens_list.data(), tokens_list.size(), true, false);
-    if(n_tokens<0)
-    {
-        spdlog::error("Failed to tokenize prompt");
-        return ErrorCode::GenerationError;
-    }
-    tokens_list.resize(n_tokens);
-
-    llama_batch batch=llama_batch_init(512, 0, 1);
-
-    batch.n_tokens=n_tokens;
-    for(int32_t i=0; i<batch.n_tokens; i++)
-    {
-        batch.token[i]=tokens_list[i];
-        batch.pos[i]=i;
-        batch.n_seq_id[i]=1;
-        batch.seq_id[i][0]=0;
-        batch.logits[i]=0;
-    }
-    batch.logits[batch.n_tokens-1]=1;
-
-    if(llama_decode(m_ctx, batch)!=0)
-    {
-        spdlog::error("llama_decode failed");
-        llama_batch_free(batch);
-        return ErrorCode::GenerationError;
-    }
-
-    int n_cur=n_tokens;
-    int n_len=m_modelInfo.maxOutputTokens;
-    auto n_vocab=llama_vocab_n_tokens(llama_model_get_vocab(m_model));
-    std::vector<llama_token_data> candidates;
-    candidates.reserve(n_vocab);
-
-    for(int i=0; i<n_len; ++i)
-    {
-        auto *logits=llama_get_logits_ith(m_ctx, batch.n_tokens-1);
-
-        candidates.clear();
-        for(llama_token token_id=0; token_id<n_vocab; token_id++)
-        {
-            candidates.push_back({ token_id, logits[token_id], 0.0f });
-        }
-
-        auto max_it=std::max_element(candidates.begin(), candidates.end(),
-            [](const llama_token_data &a, const llama_token_data &b)
-            {
-                return a.logit<b.logit;
-            });
-        const llama_token next_token=max_it->id;
-
-        if(next_token==llama_token_eos(llama_model_get_vocab(m_model)))
-        {
-            break;
-        }
-        char piece[16];
-        int len=llama_token_to_piece(llama_model_get_vocab(m_model), next_token, piece, sizeof(piece), 0, false);
-        if(len>0)
-        {
-            callback(std::string(piece, len));
-        }
-
-        batch.n_tokens=1;
-        batch.token[0]=next_token;
-        batch.pos[0]=n_cur;
-        batch.logits[0]=1;
-
-        n_cur++;
-
-        if(llama_decode(m_ctx, batch)!=0)
-        {
-            spdlog::error("llama_decode failed");
-            llama_batch_free(batch);
-            return ErrorCode::GenerationError;
-        }
-    }
-
-    llama_batch_free(batch);
-
-    return ErrorCode::Success;
+    return llamaProvider.streamingCompletion(prompt, callback);
 }
 
 ErrorCode LlamaLLM::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
-    if(!m_ctx)
+    LlamaProvider &llamaProvider=LlamaProvider::instance();
+
+    if(!llamaProvider.isLoaded(request.model))
     {
-        return ErrorCode::ModelNotLoaded;
+        if(!llamaProvider.loadModel(request.model))
+            return ErrorCode::ModelNotLoaded;
     }
 
-    // tokenize the prompt
-    std::vector<llama_token> tokens_list(request.input.size());
-    int n_tokens=llama_tokenize(llama_model_get_vocab(m_model), request.input.c_str(), request.input.length(), tokens_list.data(), tokens_list.size(), true, false);
-    if(n_tokens<0)
+    std::string error;
+    DownloadStatus status=getDownloadStatus(request.model, error);
+    if(status==DownloadStatus::InProgress)
     {
-        spdlog::error("Failed to tokenize prompt");
-        return ErrorCode::GenerationError;
+        return ErrorCode::ModelDownloading;
     }
-    tokens_list.resize(n_tokens);
-
-    llama_batch batch=llama_batch_init(n_tokens, 0, 1);
-
-    batch.n_tokens=n_tokens;
-    for(int32_t i=0; i<batch.n_tokens; i++)
+    if(status==DownloadStatus::Failed)
     {
-        batch.token[i]=tokens_list[i];
-        batch.pos[i]=i;
-        batch.n_seq_id[i]=1;
-        batch.seq_id[i][0]=0;
-        batch.logits[i]=0;
-    }
-    batch.logits[batch.n_tokens-1]=1;
-
-    if(llama_decode(m_ctx, batch)!=0)
-    {
-        spdlog::error("llama_decode failed");
-        llama_batch_free(batch);
-        return ErrorCode::GenerationError;
+        return ErrorCode::DownloadFailed;
     }
 
-    const float *embeddings=llama_get_embeddings(m_ctx);
-    if(!embeddings)
+    int tokens_used=0;
+    ErrorCode code=llamaProvider.getEmbeddings(request.input, response.embedding, tokens_used);
+
+    if(code==ErrorCode::Success)
     {
-        spdlog::error("llama_get_embeddings failed");
-        llama_batch_free(batch);
-        return ErrorCode::GenerationError;
+        response.provider="llama";
+        response.model=request.model;
+        response.tokens_used=tokens_used;
     }
 
-    int n_embed=llama_model_n_embd(m_model);
-    response.embedding.assign(embeddings, embeddings+n_embed);
-
-    llama_batch_free(batch);
-
-    response.provider="llama";
-    response.model=m_modelInfo.model;
-    response.tokens_used=n_tokens;
-
-    return ErrorCode::Success;
+    return code;
 }
 
 } // namespace hermesaxiom

@@ -23,7 +23,17 @@ enum class ErrorCode
     InvalidRequest,
     NotImplemented,
     ModelNotLoaded,
-    GenerationError
+    GenerationError,
+    ModelDownloading,
+    DownloadFailed
+};
+
+enum class DownloadStatus
+{
+    NotStarted,
+    InProgress,
+    Completed,
+    Failed
 };
 
 struct Message
@@ -72,6 +82,8 @@ ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths);
 // Check if a model requires an API key
 bool doesModelNeedApiKey(const std::string &model);
 
+bool supportModelDownload(const std::string &provider);
+
 // Main completion function (similar to litellm.completion)
 ErrorCode completion(const CompletionRequest &request, CompletionResponse &response);
 
@@ -81,6 +93,9 @@ ErrorCode streamingCompletion(const CompletionRequest &request,
 
 // Embedding function
 ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response);
+
+// Llama specific
+ErrorCode getDownloadStatus(const std::string& modelName, std::string& error);
 
 }//namespace hermesaxiom
 

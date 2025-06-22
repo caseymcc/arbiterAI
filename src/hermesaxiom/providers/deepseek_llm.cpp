@@ -3,11 +3,16 @@
 namespace hermesaxiom
 {
 
+DeepseekLLM::DeepseekLLM()
+    : BaseLLM("deepseek")
+{
+}
+
 ErrorCode DeepseekLLM::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
-    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    auto result=getApiKey(request.model, request.api_key, apiKey);
     if(result!=ErrorCode::Success)
     {
         return result;
@@ -125,7 +130,7 @@ ErrorCode DeepseekLLM::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
     std::string apiKey;
-    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    auto result=getApiKey(request.model, request.api_key, apiKey);
     if(result!=ErrorCode::Success)
     {
         // Handle error, maybe by calling callback with an error message
@@ -186,7 +191,7 @@ ErrorCode DeepseekLLM::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     std::string apiKey;
-    auto result=getApiKey(request.model, request.provider, request.api_key, apiKey);
+    auto result=getApiKey(request.model, request.api_key, apiKey);
     if(result!=ErrorCode::Success)
     {
         return result;

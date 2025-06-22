@@ -13,7 +13,7 @@ namespace hermesaxiom
 class OpenAILLM : public BaseLLM
 {
 public:
-    OpenAILLM(const ModelInfo &modelInfo);
+    OpenAILLM();
 
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
@@ -32,8 +32,6 @@ private:
 
     nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming=false);
     cpr::Header createHeaders(const std::string &apiKey);
-
-    ModelInfo m_modelInfo;
 
     std::string m_apiUrl="https://api.openai.com/v1";
     std::string m_apiKey="";

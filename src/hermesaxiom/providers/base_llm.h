@@ -10,6 +10,7 @@ namespace hermesaxiom
 class BaseLLM
 {
 public:
+    BaseLLM(const std::string provider);
     virtual ~BaseLLM()=default;
 
     virtual ErrorCode completion(const CompletionRequest &request,
@@ -21,10 +22,14 @@ public:
     virtual ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response)=0;
 
+    virtual DownloadStatus getDownloadStatus(const std::string &modelName, std::string &error);
+
 protected:
     ErrorCode getApiKey(const std::string &modelName,
-        const std::optional<std::string> &providerName,
         const std::optional<std::string> &requestApiKey, std::string &apiKey);
+
+protected:
+    std::string m_provider;
 };
 
 } // namespace hermesaxiom

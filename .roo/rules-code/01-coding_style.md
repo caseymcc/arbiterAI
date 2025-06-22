@@ -29,6 +29,10 @@ Rules for formatting C/C++:
 - Var Decls: top of scope/before ctrl flow; blank line after grp; ctrl flow ends grp.
 - Long Fn Sigs: wrap params to new lines, indent 1 lvl; ) after last param.
 - Header Guard: _PROJECT_FILENAME_EXT_, no pragma once
+- namespace:
+  - avoid using directive
+  - prefer explict qualification
+  - allow namespace aliases for brevity
 
 Rules for File names:
 - camelCase file name

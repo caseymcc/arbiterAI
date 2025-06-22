@@ -166,4 +166,15 @@ std::optional<ModelInfo> ModelManager::getModelInfo(const std::string& model) co
     return std::nullopt;
 }
 
+void ModelManager::addModel(const ModelInfo& modelInfo)
+{
+    auto it = std::find_if(m_models.begin(), m_models.end(),
+        [&](const ModelInfo& existing) { return existing.model == modelInfo.model; });
+
+    if (it == m_models.end()) {
+        m_models.push_back(modelInfo);
+        m_modelProviderMap[modelInfo.model] = modelInfo.provider;
+    }
+}
+
 } // namespace hermesaxiom

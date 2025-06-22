@@ -7,6 +7,11 @@
 namespace hermesaxiom
 {
 
+BaseLLM::BaseLLM(std::string provider)
+    : m_provider(provider)
+{
+}
+
 std::string to_upper(std::string s)
 {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -16,7 +21,6 @@ std::string to_upper(std::string s)
 }
 
 ErrorCode BaseLLM::getApiKey(const std::string &modelName,
-    const std::optional<std::string> &providerName,
     const std::optional<std::string> &requestApiKey, std::string &apiKey)
 {
     // 1. Check the request itself
@@ -35,19 +39,9 @@ ErrorCode BaseLLM::getApiKey(const std::string &modelName,
     }
 
     // 3. Fallback to environment variables
-    std::string provider;
-    if(providerName.has_value())
+    if(!m_provider.empty())
     {
-        provider=providerName.value();
-    }
-    else if(modelInfo)
-    {
-        provider=modelInfo->provider;
-    }
-
-    if(!provider.empty())
-    {
-        std::string envVarName=to_upper(provider)+"_API_KEY";
+        std::string envVarName=to_upper(m_provider)+"_API_KEY";
         if(const char *key=std::getenv(envVarName.c_str()))
         {
             apiKey=key;
@@ -62,6 +56,11 @@ ErrorCode BaseLLM::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     return ErrorCode::NotImplemented;
+}
+
+DownloadStatus BaseLLM::getDownloadStatus(const std::string& modelName, std::string& error)
+{
+    return DownloadStatus::Completed;
 }
 
 } // namespace hermesaxiom

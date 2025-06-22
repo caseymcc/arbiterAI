@@ -34,6 +34,7 @@ public:
     bool initialize(const std::vector<std::filesystem::path> &configPaths);
     std::optional<std::string> getProvider(const std::string &model) const;
     std::optional<ModelInfo> getModelInfo(const std::string &model) const;
+    void addModel(const ModelInfo& modelInfo);
     const std::map<std::string, std::string> &getModelProviderMap() const { return m_modelProviderMap; }
 
 private:

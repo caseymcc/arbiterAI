@@ -2,9 +2,7 @@
 #define _hermesaxiom_providers_llama_llm_h_
 
 #include "hermesaxiom/providers/base_llm.h"
-#include "hermesaxiom/modelManager.h"
-
-#include <llama.h>
+#include <vector>
 
 namespace hermesaxiom
 {
@@ -12,7 +10,7 @@ namespace hermesaxiom
 class LlamaLLM : public BaseLLM
 {
 public:
-    LlamaLLM(const ModelInfo &modelInfo);
+    LlamaLLM();
     ~LlamaLLM();
 
     ErrorCode completion(const CompletionRequest &request,
@@ -23,13 +21,6 @@ public:
 
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
-
-private:
-    void loadModel();
-
-    ModelInfo m_modelInfo;
-    llama_model *m_model=nullptr;
-    llama_context *m_ctx=nullptr;
 };
 
 } // namespace hermesaxiom
