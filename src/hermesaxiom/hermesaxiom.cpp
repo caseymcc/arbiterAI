@@ -1,24 +1,25 @@
 #include "hermesaxiom/hermesaxiom.h"
 #include "hermesaxiom/modelManager.h"
-#include "hermesaxiom/providers/openai_llm.h"
-#include "hermesaxiom/providers/anthropic_llm.h"
-#include "hermesaxiom/providers/deepseek_llm.h"
+#include "hermesaxiom/providers/openai.h"
+#include "hermesaxiom/providers/anthropic.h"
+#include "hermesaxiom/providers/deepseek.h"
+#include "hermesaxiom/providers/llama.h"
 
 #include <memory>
 
 namespace hermesaxiom
 {
 
-struct Hermes
+struct HermesAxiom
 {
-    static Hermes &instance()
+    static HermesAxiom &instance()
     {
-        static Hermes instance;
+        static HermesAxiom instance;
         return instance;
     }
 
     bool initialized=false;
-    std::map<std::string, std::unique_ptr<BaseLLM>> llms;
+    std::map<std::string, std::unique_ptr<BaseProvider>> providers;
 };
 
 ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths)
@@ -28,14 +29,14 @@ ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths)
         return ErrorCode::InvalidRequest;
     }
 
-    Hermes::instance().initialized=true;
+    HermesAxiom::instance().initialized=true;
     return ErrorCode::Success;
 }
 
 bool doesModelNeedApiKey(const std::string &model)
 {
     auto provider=ModelManager::instance().getProvider(model);
- 
+
     if(!provider)
     {
         return false;
@@ -44,35 +45,53 @@ bool doesModelNeedApiKey(const std::string &model)
     return *provider=="openai";
 }
 
-std::unique_ptr<BaseLLM> createLLM(const ModelInfo& modelInfo) {
-    if(modelInfo.provider=="openai")
+bool supportModelDownload(const std::string &provider)
+{
+    if(provider=="llama")
     {
-        return std::make_unique<OpenAILLM>(modelInfo);
+        return true;
     }
-    else if(modelInfo.provider=="anthropic")
+    return false;
+}
+
+std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
+{
+    if(provider=="openai")
     {
-        return std::make_unique<AnthropicLLM>(modelInfo);
+        return std::make_unique<OpenAI>();
     }
-    else if(modelInfo.provider=="deepseek")
+    else if(provider=="anthropic")
     {
-        return std::make_unique<DeepseekLLM>(modelInfo);
+        return std::make_unique<Anthropic>();
+    }
+    else if(provider=="deepseek")
+    {
+        return std::make_unique<Deepseek>();
+    }
+    else if(provider=="llama")
+    {
+        return std::make_unique<Llama>();
     }
     return nullptr;
 }
 
-BaseLLM* getLLM(const CompletionRequest &request, const ModelInfo &modelInfo)
+BaseProvider *getProvider(const std::string &providerName)
 {
-    auto& hermes = Hermes::instance();
-    
-    // Check if we already have an LLM instance for this model
-    auto it = hermes.llms.find(request.model);
-    if (it == hermes.llms.end()) {
-        // Create new LLM instance
-        auto llm = createLLM(modelInfo);
-        if (!llm) {
+    auto &hermes=HermesAxiom::instance();
+
+    // Check if we already have an Provider instance for this provider
+    auto it=hermes.providers.find(providerName);
+
+    if(it==hermes.providers.end())
+    {
+        // Create new Provider instance
+        auto provider=createProvider(providerName);
+
+        if(!provider)
+        {
             return nullptr;
         }
-        it = hermes.llms.emplace(request.model, std::move(llm)).first;
+        it=hermes.providers.emplace(providerName, std::move(provider)).first;
     }
 
     return it->second.get();
@@ -80,7 +99,7 @@ BaseLLM* getLLM(const CompletionRequest &request, const ModelInfo &modelInfo)
 
 ErrorCode completion(const CompletionRequest &request, CompletionResponse &response)
 {
-    if(!Hermes::instance().initialized)
+    if(!HermesAxiom::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -91,18 +110,20 @@ ErrorCode completion(const CompletionRequest &request, CompletionResponse &respo
         return ErrorCode::UnknownModel;
     }
 
-    BaseLLM *llm = getLLM(request, *modelInfo);
-    if (!llm) {
+    BaseProvider *provider=getProvider(modelInfo->provider);
+
+    if(!provider)
+    {
         return ErrorCode::UnsupportedProvider;
     }
 
-    return llm->completion(request, response);
+    return provider->completion(request, response);
 }
 
 ErrorCode streamingCompletion(const CompletionRequest &request,
-    std::function<void(const std::string&)> callback)
+    std::function<void(const std::string &)> callback)
 {
-    if(!Hermes::instance().initialized)
+    if(!HermesAxiom::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -113,12 +134,65 @@ ErrorCode streamingCompletion(const CompletionRequest &request,
         return ErrorCode::UnknownModel;
     }
 
-    BaseLLM *llm = getLLM(request, *modelInfo);
-    if (!llm) {
+    BaseProvider *provider=getProvider(modelInfo->provider);
+
+    if(!provider)
+    {
         return ErrorCode::UnsupportedProvider;
     }
 
-    return llm->streamingCompletion(request, callback);
+    return provider->streamingCompletion(request, callback);
+}
+
+ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
+{
+    if(!HermesAxiom::instance().initialized)
+    {
+        return ErrorCode::InvalidRequest;
+    }
+
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider);
+
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    return provider->getEmbeddings(request, response);
+}
+
+ErrorCode getDownloadStatus(const std::string &modelName, std::string &error)
+{
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(modelName);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider);
+
+    if(provider)
+    {
+        auto status=provider->getDownloadStatus(modelName, error);
+        switch(status)
+        {
+        case DownloadStatus::NotStarted:
+            return ErrorCode::Success;
+        case DownloadStatus::InProgress:
+            return ErrorCode::ModelDownloading;
+        case DownloadStatus::Completed:
+            return ErrorCode::Success;
+        case DownloadStatus::Failed:
+            return ErrorCode::DownloadFailed;
+        }
+    }
+    return ErrorCode::UnsupportedProvider;
 }
 
 } // namespace hermesaxiom

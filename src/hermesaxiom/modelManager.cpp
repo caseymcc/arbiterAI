@@ -57,12 +57,12 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
             ModelInfo info;
             
             // Required fields
-            if (!modelJson.contains("model") || !modelJson.contains("litellm_provider")) {
+            if (!modelJson.contains("model") || !modelJson.contains("provider")) {
                 continue;
             }
             
             info.model = modelJson["model"].get<std::string>();
-            info.provider = modelJson["litellm_provider"].get<std::string>();
+            info.provider = modelJson["provider"].get<std::string>();
             
             // Optional fields
             if (modelJson.contains("mode")) {
@@ -70,6 +70,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
             }
             if (modelJson.contains("api_base")) {
                 info.apiBase = modelJson["api_base"].get<std::string>();
+            }
+            if (modelJson.contains("api_key")) {
+               info.apiKey = modelJson["api_key"].get<std::string>();
             }
             if (modelJson.contains("examples_as_sys_msg")) {
                 info.examplesAsSysMsg = modelJson["examples_as_sys_msg"].get<bool>();
@@ -104,6 +107,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
                 }
                 if (modelJson.contains("api_base")) {
                     it->apiBase = info.apiBase;
+                }
+                if (modelJson.contains("api_key")) {
+                   it->apiKey = info.apiKey;
                 }
                 if (modelJson.contains("examples_as_sys_msg")) {
                     it->examplesAsSysMsg = info.examplesAsSysMsg;
@@ -158,6 +164,17 @@ std::optional<ModelInfo> ModelManager::getModelInfo(const std::string& model) co
         return *it;
     }
     return std::nullopt;
+}
+
+void ModelManager::addModel(const ModelInfo& modelInfo)
+{
+    auto it = std::find_if(m_models.begin(), m_models.end(),
+        [&](const ModelInfo& existing) { return existing.model == modelInfo.model; });
+
+    if (it == m_models.end()) {
+        m_models.push_back(modelInfo);
+        m_modelProviderMap[modelInfo.model] = modelInfo.provider;
+    }
 }
 
 } // namespace hermesaxiom

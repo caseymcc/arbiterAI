@@ -129,7 +129,7 @@ cmake ../.. \
     -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
     $ARCH_FLAGS \
     -DVCPKG_TARGET_TRIPLET=$VCPKG_TRIPLET \
-    -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake #\
-#    -DVCPKG_OVERLAY_PORTS=/app/vcpkg/custom_ports
+    -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake \
+    -DVCPKG_OVERLAY_PORTS=/app/vcpkg/custom_ports
 
 echo "CMake configuration complete in $BUILD_DIR"
