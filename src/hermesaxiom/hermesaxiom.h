@@ -8,6 +8,7 @@
 #include <optional>
 #include <filesystem>
 #include <functional>
+#include <variant>
 
 namespace hermesaxiom
 {
@@ -63,39 +64,44 @@ struct CompletionResponse
 struct EmbeddingRequest
 {
     std::string model;
-    std::string input;
-    std::optional<std::string> api_key;
-    std::optional<std::string> provider;
+    std::variant<std::string, std::vector<std::string>> input;
+};
+
+struct Embedding
+{
+    int index;
+    std::vector<float> embedding;
+};
+
+struct Usage
+{
+    int prompt_tokens;
+    int completion_tokens;
+    int total_tokens;
 };
 
 struct EmbeddingResponse
 {
-    std::vector<float> embedding;
     std::string model;
-    int tokens_used;
-    std::string provider;
+    std::vector<Embedding> data;
+    Usage usage;
 };
 
-// Library initialization
-ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths);
+class hermesaxiom
+{
+public:
+    hermesaxiom();
+    ~hermesaxiom();
 
-// Check if a model requires an API key
-bool doesModelNeedApiKey(const std::string &model);
-
-bool supportModelDownload(const std::string &provider);
-
-// Main completion function (similar to litellm.completion)
-ErrorCode completion(const CompletionRequest &request, CompletionResponse &response);
-
-// Streaming completion function
-ErrorCode streamingCompletion(const CompletionRequest &request,
-    std::function<void(const std::string &)> callback);
-
-// Embedding function
-ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response);
-
-// Llama specific
-ErrorCode getDownloadStatus(const std::string& modelName, std::string& error);
+    ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths);
+    bool doesModelNeedApiKey(const std::string &model);
+    bool supportModelDownload(const std::string &provider);
+    ErrorCode completion(const CompletionRequest &request, CompletionResponse &response);
+    ErrorCode streamingCompletion(const CompletionRequest &request,
+        std::function<void(const std::string &)> callback);
+    ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response);
+    ErrorCode getDownloadStatus(const std::string &modelName, std::string &error);
+};
 
 }//namespace hermesaxiom
 

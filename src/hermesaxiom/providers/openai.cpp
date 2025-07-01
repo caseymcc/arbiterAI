@@ -192,7 +192,7 @@ ErrorCode OpenAI::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     std::string apiKey;
-    auto result=getApiKey(request.model, request.api_key, apiKey);
+    auto result=getApiKey(request.model, std::nullopt, apiKey);
     if(result!=ErrorCode::Success)
     {
         return result;
@@ -202,7 +202,10 @@ ErrorCode OpenAI::getEmbeddings(const EmbeddingRequest &request,
 
     nlohmann::json body;
     body["model"]=request.model;
-    body["input"]=request.input;
+    std::visit([&body](auto &&arg)
+        {
+            body["input"]=arg;
+        }, request.input);
 
     std::string embeddingUrl=m_apiUrl+"/embeddings";
 
@@ -242,8 +245,13 @@ ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
         return ErrorCode::InvalidResponse;
     }
 
-    response.embedding=jsonResponse["data"][0]["embedding"].get<std::vector<float>>();
-    response.provider="openai";
+    for(const auto &data_item:jsonResponse["data"])
+    {
+        Embedding emb;
+        emb.index=data_item["index"];
+        emb.embedding=data_item["embedding"].get<std::vector<float>>();
+        response.data.push_back(emb);
+    }
 
     if(jsonResponse.contains("model"))
     {
@@ -253,10 +261,13 @@ ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
     if(jsonResponse.contains("usage")&&
         jsonResponse["usage"].contains("total_tokens"))
     {
-        response.tokens_used=jsonResponse["usage"]["total_tokens"];
+        response.usage.total_tokens=jsonResponse["usage"]["total_tokens"];
+        response.usage.prompt_tokens=jsonResponse["usage"]["prompt_tokens"];
+        response.usage.completion_tokens=0;
     }
 
     return ErrorCode::Success;
 }
+
 
 } // namespace hermesaxiom

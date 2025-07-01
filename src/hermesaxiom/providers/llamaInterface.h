@@ -37,6 +37,8 @@ public:
 
     ErrorCode getEmbeddings(const std::string &input,
         std::vector<float> &embedding, int &tokens_used);
+    ErrorCode getEmbeddings(const std::vector<std::string> &input,
+        std::vector<float> &embedding, int &tokens_used);
 
     bool isLoaded(const std::string &modelName) const;
     bool loadModel(const std::string &modelName);

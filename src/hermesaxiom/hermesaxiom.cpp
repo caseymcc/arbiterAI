@@ -1,5 +1,6 @@
 #include "hermesaxiom/hermesaxiom.h"
 #include "hermesaxiom/modelManager.h"
+#include "hermesaxiom/providers/baseProvider.h"
 #include "hermesaxiom/providers/openai.h"
 #include "hermesaxiom/providers/anthropic.h"
 #include "hermesaxiom/providers/deepseek.h"
@@ -10,30 +11,44 @@
 namespace hermesaxiom
 {
 
-struct HermesAxiom
+namespace
 {
-    static HermesAxiom &instance()
+class hermesaxiom_
+{
+public:
+    static hermesaxiom_ &instance()
     {
-        static HermesAxiom instance;
+        static hermesaxiom_ instance;
         return instance;
     }
+
+    hermesaxiom_()=default;
 
     bool initialized=false;
     std::map<std::string, std::unique_ptr<BaseProvider>> providers;
 };
+}
 
-ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths)
+hermesaxiom::hermesaxiom()
+{
+}
+
+hermesaxiom::~hermesaxiom()
+{
+}
+
+ErrorCode hermesaxiom::initialize(const std::vector<std::filesystem::path> &configPaths)
 {
     if(!ModelManager::instance().initialize(configPaths))
     {
         return ErrorCode::InvalidRequest;
     }
 
-    HermesAxiom::instance().initialized=true;
+    hermesaxiom_::instance().initialized=true;
     return ErrorCode::Success;
 }
 
-bool doesModelNeedApiKey(const std::string &model)
+bool hermesaxiom::doesModelNeedApiKey(const std::string &model)
 {
     auto provider=ModelManager::instance().getProvider(model);
 
@@ -45,7 +60,7 @@ bool doesModelNeedApiKey(const std::string &model)
     return *provider=="openai";
 }
 
-bool supportModelDownload(const std::string &provider)
+bool hermesaxiom::supportModelDownload(const std::string &provider)
 {
     if(provider=="llama")
     {
@@ -75,9 +90,11 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     return nullptr;
 }
 
+namespace
+{
 BaseProvider *getProvider(const std::string &providerName)
 {
-    auto &hermes=HermesAxiom::instance();
+    auto &hermes=hermesaxiom_::instance();
 
     // Check if we already have an Provider instance for this provider
     auto it=hermes.providers.find(providerName);
@@ -96,10 +113,11 @@ BaseProvider *getProvider(const std::string &providerName)
 
     return it->second.get();
 }
+}
 
-ErrorCode completion(const CompletionRequest &request, CompletionResponse &response)
+ErrorCode hermesaxiom::completion(const CompletionRequest &request, CompletionResponse &response)
 {
-    if(!HermesAxiom::instance().initialized)
+    if(!hermesaxiom_::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -120,10 +138,10 @@ ErrorCode completion(const CompletionRequest &request, CompletionResponse &respo
     return provider->completion(request, response);
 }
 
-ErrorCode streamingCompletion(const CompletionRequest &request,
+ErrorCode hermesaxiom::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    if(!HermesAxiom::instance().initialized)
+    if(!hermesaxiom_::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -144,9 +162,9 @@ ErrorCode streamingCompletion(const CompletionRequest &request,
     return provider->streamingCompletion(request, callback);
 }
 
-ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
+ErrorCode hermesaxiom::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
 {
-    if(!HermesAxiom::instance().initialized)
+    if(!hermesaxiom_::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -167,7 +185,7 @@ ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &resp
     return provider->getEmbeddings(request, response);
 }
 
-ErrorCode getDownloadStatus(const std::string &modelName, std::string &error)
+ErrorCode hermesaxiom::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(modelName);
     if(!modelInfo)
@@ -194,5 +212,6 @@ ErrorCode getDownloadStatus(const std::string &modelName, std::string &error)
     }
     return ErrorCode::UnsupportedProvider;
 }
+
 
 } // namespace hermesaxiom

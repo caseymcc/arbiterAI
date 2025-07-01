@@ -7,6 +7,9 @@
 namespace hermesaxiom
 {
 
+struct EmbeddingRequest;
+struct EmbeddingResponse;
+
 class BaseProvider
 {
 public:

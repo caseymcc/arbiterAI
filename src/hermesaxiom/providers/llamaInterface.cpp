@@ -290,6 +290,17 @@ ErrorCode LlamaInterface::getEmbeddings(const std::string &input,
     return ErrorCode::Success;
 }
 
+ErrorCode LlamaInterface::getEmbeddings(const std::vector<std::string> &input,
+    std::vector<float> &embedding, int &tokens_used)
+{
+    std::string combined_input;
+    for(const auto &s:input)
+    {
+        combined_input+=s;
+    }
+    return getEmbeddings(combined_input, embedding, tokens_used);
+}
+
 bool LlamaInterface::isModelDownloaded(const LlamaModelInfo &modelInfo) const
 {
     if(modelInfo.filePath)
@@ -385,7 +396,7 @@ bool LlamaInterface::loadModel(const std::string &modelName)
 
     auto mparams=llama_model_default_params();
     const char *modelPath=it->filePath?it->filePath->c_str():m_modelInfo->model.c_str();
-    m_model=llama_load_model_from_file(modelPath, mparams);
+    m_model=llama_model_load_from_file(modelPath, mparams);
     if(!m_model)
     {
         spdlog::error("Failed to load model: {}", modelPath);

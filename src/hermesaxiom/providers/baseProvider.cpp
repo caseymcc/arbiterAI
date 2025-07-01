@@ -52,13 +52,8 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
     return ErrorCode::ApiKeyNotFound;
 }
 
-ErrorCode BaseProvider::getEmbeddings(const EmbeddingRequest &request,
-    EmbeddingResponse &response)
-{
-    return ErrorCode::NotImplemented;
-}
 
-DownloadStatus BaseProvider::getDownloadStatus(const std::string& modelName, std::string& error)
+DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     return DownloadStatus::Completed;
 }

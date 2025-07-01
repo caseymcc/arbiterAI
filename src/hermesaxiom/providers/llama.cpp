@@ -117,13 +117,20 @@ ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
     }
 
     int tokens_used=0;
-    ErrorCode code=llamaInterface.getEmbeddings(request.input, response.embedding, tokens_used);
+    std::vector<float> embedding;
+    ErrorCode code=std::visit([&](auto &&arg)
+        {
+            return llamaInterface.getEmbeddings(arg, embedding, tokens_used);
+        }, request.input);
 
     if(code==ErrorCode::Success)
     {
-        response.provider="llama";
         response.model=request.model;
-        response.tokens_used=tokens_used;
+        response.usage.prompt_tokens=tokens_used;
+        response.usage.total_tokens=tokens_used;
+        Embedding emb;
+        emb.embedding=embedding;
+        response.data.push_back(emb);
     }
 
     return code;
