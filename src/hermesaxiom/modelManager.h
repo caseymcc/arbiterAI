@@ -16,7 +16,10 @@ struct ModelInfo
     std::string provider;
     std::string mode{ "chat" };
     std::optional<std::string> apiBase;
+    std::optional<std::string> filePath;
     std::optional<std::string> apiKey;
+    std::optional<std::string> downloadUrl;
+    std::optional<std::string> fileHash;
     bool examplesAsSysMsg{ false };
     int contextWindow{ 4096 };
     int maxTokens{ 2048 };
@@ -34,6 +37,7 @@ public:
     bool initialize(const std::vector<std::filesystem::path> &configPaths);
     std::optional<std::string> getProvider(const std::string &model) const;
     std::optional<ModelInfo> getModelInfo(const std::string &model) const;
+    std::vector<ModelInfo> getModels(const std::string& provider) const;
     void addModel(const ModelInfo& modelInfo);
     const std::map<std::string, std::string> &getModelProviderMap() const { return m_modelProviderMap; }
 

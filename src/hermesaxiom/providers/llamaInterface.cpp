@@ -17,6 +17,27 @@ LlamaInterface &LlamaInterface::instance()
     return instance;
 }
 
+void LlamaInterface::setModels(const std::vector<ModelInfo> &models)
+{
+    for (const auto& model : models) {
+        LlamaModelInfo llamaModel;
+        llamaModel.modelInfo = model;
+        if (model.downloadUrl) {
+            llamaModel.downloadUrl = model.downloadUrl;
+        }
+        if (model.filePath) {
+            llamaModel.filePath = model.filePath;
+        } else if (model.downloadUrl) {
+            // If no file path is provided, construct it from the model name
+            llamaModel.filePath = "/models/" + model.model;
+        }
+        if (model.fileHash) {
+            llamaModel.fileHash = model.fileHash;
+        }
+        m_llamaModels.push_back(llamaModel);
+    }
+}
+
 LlamaInterface::LlamaInterface()
 {
     initialize();
@@ -43,19 +64,6 @@ void LlamaInterface::initialize()
     if(!m_initialized)
     {
         llama_backend_init();
-        loadLlamaConfig();
-        for(auto &model:m_llamaModels)
-        {
-            if(isModelDownloaded(model))
-            {
-                ModelManager::instance().addModel(model.modelInfo);
-                model.downloadStatus=DownloadStatus::Completed;
-            }
-            else
-            {
-                downloadModel(model);
-            }
-        }
         m_initialized=true;
     }
 }
@@ -369,33 +377,42 @@ bool LlamaInterface::loadModel(const std::string &modelName)
         return true;
     }
 
-    auto it=std::find_if(m_llamaModels.begin(), m_llamaModels.end(),
-        [&](const LlamaModelInfo &info)
+    auto modelInfo = ModelManager::instance().getModelInfo(modelName);
+    if (!modelInfo) {
+        spdlog::error("Llama model not found in ModelManager: {}", modelName);
+        return false;
+    }
+
+    if (!modelInfo->filePath) {
+        auto it = std::find_if(m_llamaModels.begin(), m_llamaModels.end(),
+            [&](const LlamaModelInfo &info)
+            {
+                return info.modelInfo.model==modelName;
+            });
+
+        if(it==m_llamaModels.end())
         {
-            return info.modelInfo.model==modelName;
-        });
+            spdlog::error("Llama model not found in llama config: {}", modelName);
+            return false;
+        }
+        
+        if(it->downloadStatus==DownloadStatus::InProgress)
+        {
+            return false;
+        }
 
-    if(it==m_llamaModels.end())
-    {
-        spdlog::error("Llama model not found in llama config: {}", modelName);
-        return false;
+        if(!isModelDownloaded(*it))
+        {
+            downloadModel(*it);
+            return false;
+        }
+        modelInfo->filePath = it->filePath;
     }
 
-    if(it->downloadStatus==DownloadStatus::InProgress)
-    {
-        return false;
-    }
-
-    if(!isModelDownloaded(*it))
-    {
-        downloadModel(*it);
-        return false;
-    }
-
-    m_modelInfo=it->modelInfo;
+    m_modelInfo = modelInfo;
 
     auto mparams=llama_model_default_params();
-    const char *modelPath=it->filePath?it->filePath->c_str():m_modelInfo->model.c_str();
+    const char *modelPath=modelInfo->filePath->c_str();
     m_model=llama_model_load_from_file(modelPath, mparams);
     if(!m_model)
     {
@@ -417,63 +434,5 @@ bool LlamaInterface::loadModel(const std::string &modelName)
     return m_ctx!=nullptr;
 }
 
-void LlamaInterface::loadLlamaConfig()
-{
-    std::filesystem::path configPath="configs/defaults/models/llama.json";
-    if(!std::filesystem::exists(configPath))
-    {
-        return;
-    }
-
-    try
-    {
-        std::ifstream file(configPath);
-        nlohmann::json config=nlohmann::json::parse(file);
-
-        if(!config.contains("models")||!config["models"].is_array())
-        {
-            return;
-        }
-
-        for(const auto &modelJson:config["models"])
-        {
-            LlamaModelInfo info;
-
-            if(!modelJson.contains("model")||!modelJson.contains("provider"))
-            {
-                continue;
-            }
-
-            info.modelInfo.model=modelJson["model"].get<std::string>();
-            info.modelInfo.provider=modelJson["provider"].get<std::string>();
-
-            if(modelJson.contains("download_url"))
-            {
-                info.downloadUrl=modelJson["download_url"].get<std::string>();
-            }
-            if(modelJson.contains("file_path"))
-            {
-                info.filePath=modelJson["file_path"].get<std::string>();
-            }
-            if(modelJson.contains("file_hash"))
-            {
-                info.fileHash=modelJson["file_hash"].get<std::string>();
-            }
-            if(modelJson.contains("context_window"))
-            {
-                info.modelInfo.contextWindow=modelJson["context_window"].get<int>();
-            }
-            if(modelJson.contains("max_output_tokens"))
-            {
-                info.modelInfo.maxOutputTokens=modelJson["max_output_tokens"].get<int>();
-            }
-            m_llamaModels.push_back(info);
-        }
-    }
-    catch(const std::exception &e)
-    {
-        spdlog::error("Failed to load llama config: {}", e.what());
-    }
-}
 
 } // namespace hermesaxiom

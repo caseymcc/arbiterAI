@@ -108,6 +108,8 @@ BaseProvider *getProvider(const std::string &providerName)
         {
             return nullptr;
         }
+        auto models = ModelManager::instance().getModels(providerName);
+        provider->initialize(models);
         it=hermes.providers.emplace(providerName, std::move(provider)).first;
     }
 

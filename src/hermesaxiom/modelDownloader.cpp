@@ -5,6 +5,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iostream>
+#include <spdlog/spdlog.h>
 
 namespace hermesaxiom
 {
@@ -15,22 +16,36 @@ namespace hermesaxiom
         std::filesystem::path filePath(filePathStr);
         if (std::filesystem::exists(filePath)) {
             if (fileHash && verifyFile(filePath.string(), *fileHash)) {
+                spdlog::info("Model already exists and is verified: {}", filePath.string());
                 return true;
             }
         }
 
+        spdlog::info("Downloading model from {} to {}", downloadUrl, filePath.string());
         cpr::Response r = cpr::Get(cpr::Url{downloadUrl});
         if (r.status_code != 200) {
+            spdlog::error("Failed to download model. Status code: {}", r.status_code);
             return false;
         }
 
-        std::filesystem::create_directories(filePath.parent_path());
-        std::ofstream outFile(filePath, std::ios::binary);
-        outFile.write(r.text.c_str(), r.text.length());
-        outFile.close();
+        try {
+            std::filesystem::create_directories(filePath.parent_path());
+            std::ofstream outFile(filePath, std::ios::binary);
+            outFile.write(r.text.c_str(), r.text.length());
+            outFile.close();
+        } catch (const std::filesystem::filesystem_error& e) {
+            spdlog::error("Failed to write model to file: {}. Error: {}", filePath.string(), e.what());
+            return false;
+        }
 
         if (fileHash) {
-            return verifyFile(filePath.string(), *fileHash);
+            if (verifyFile(filePath.string(), *fileHash)) {
+                spdlog::info("Model downloaded and verified successfully: {}", filePath.string());
+                return true;
+            } else {
+                spdlog::error("Model verification failed for: {}", filePath.string());
+                return false;
+            }
         }
 
         return true;

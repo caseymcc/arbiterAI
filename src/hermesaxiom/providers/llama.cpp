@@ -22,6 +22,11 @@ Llama::~Llama()
 {
 }
 
+void Llama::initialize(const std::vector<ModelInfo>& models)
+{
+    LlamaInterface::instance().setModels(models);
+}
+
 ErrorCode Llama::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {

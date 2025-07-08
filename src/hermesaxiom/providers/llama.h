@@ -13,6 +13,8 @@ public:
 Llama();
     ~Llama();
 
+    void initialize(const std::vector<ModelInfo>& models) override;
+
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
 

@@ -97,22 +97,29 @@ graph TD
 
 *Goal: Make the library more powerful and flexible, incorporating advanced configuration and efficiency features.
 
-  - [ ] **Embeddings API:** Introduce a `hermesaxiom::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
-  - [ ] **Full Streaming Support:** Fully implement and test the `streamingCompletion` function across all providers, ensuring robust and efficient asynchronous response handling.
-  - [ ] **Advanced Completion Options:** Extend `CompletionRequest` to include a comprehensive set of parameters (e.g., `top_p`, `stop sequences`, `temperature`, `presence_penalty`, `frequency_penalty`) and map them accurately to provider-specific APIs.
+  - [x] **Embeddings API:** Introduce a `hermesaxiom::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
+  - [x] **Full Streaming Support:** Fully implement and test the `streamingCompletion` function across all providers, ensuring robust and efficient asynchronous response handling.
   - [ ] **Dynamic Configuration Management:**
-      - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from a central GitHub repository, enabling dynamic updates and centralized management.
-      - [ ] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
-      - [ ] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
+    - [ ] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
+    - [ ] **Provide ranking/prefered models:** Include in the model configuration a way of ranking the models and provide a way for the library to select preferred models if suggestions are not provided.
+    - [ ] **Default model and embedding models** Provide a set of default model configurations.
+    - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from a central GitHub repository, enabling dynamic updates and centralized management.
+    - [ ] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
+  - [ ] **Testing** Create tests for the above tasks and make sure eveything is functioning.
+
+### Phase 3: Improve performance
+
+*Goal: Improve fucntionality and performance.*
+
+  - [ ] **Advanced Completion Options:** Extend `CompletionRequest` to include a comprehensive set of parameters (e.g., `top_p`, `stop sequences`, `temperature`, `presence_penalty`, `frequency_penalty`) and map them accurately to provider-specific APIs.
   - [ ] **Completion Efficiency & Management:**
       - [ ] **Batch Completions:** Implement an API for sending multiple completion requests in a single batch to supported providers, optimizing throughput and reducing overhead for scenarios with many small updates or independent queries.
       - [ ] **Advanced Caching:** Implement a configurable, persistent local caching mechanism for LLM responses, significantly reducing latency and API costs for repeated identical queries. This cache should be tunable (e.g., TTL, size limits).
       - [ ] **Cost Tracking, Estimation & Limits:** Enhance `CompletionResponse` to include detailed token usage (`prompt_tokens`, `completion_tokens`) and estimated cost per request. Implement an internal mechanism to track cumulative costs across providers, provide real-time cost estimation, and enforce configurable usage limits or trigger alerts when thresholds are approached.
 
-### Phase 3: Tooling, Deployment, and Extensibility
+### Phase 4: Tooling, Deployment, and Extensibility
 
 *Goal: Improve usability, demonstrate capabilities, and add advanced features.*
-
   - [ ] **Implement OpenRouter Provider:** Add support for the OpenRouter API aggregator, expanding the range of accessible models and providers.
   - [ ] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `hermesaxiom` library, demonstrating various completion and embedding functionalities.
   - [ ] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `hermesaxiom` can power a backend service and enabling easy migration for existing OpenAI API users.

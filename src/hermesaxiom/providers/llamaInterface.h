@@ -30,6 +30,8 @@ public:
 
     ~LlamaInterface();
 
+    void setModels(const std::vector<ModelInfo> &models);
+
     ErrorCode completion(const std::string &prompt, std::string &result);
 
     ErrorCode streamingCompletion(const std::string &prompt,
@@ -46,9 +48,7 @@ public:
 private:
     LlamaInterface();
 
-
     void initialize();
-    void loadLlamaConfig();
     bool isModelDownloaded(const LlamaModelInfo &modelInfo) const;
     void downloadModel(LlamaModelInfo &modelInfo);
     DownloadStatus getDownloadStatus(const std::string &modelName, std::string &error);

@@ -1,6 +1,7 @@
 #include "hermesaxiom/modelManager.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <iostream>
 
 namespace hermesaxiom
 {
@@ -18,11 +19,19 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path>& configPa
     m_modelProviderMap.clear();
 
     bool anyLoaded = false;
+
+    // Load default models first
+    std::vector<std::string> default_models = {"anthropic.json", "deepseek.json", "llama.json", "openai.json"};
+    for (const auto& model_file : default_models) {
+        std::filesystem::path defaultConfigPath = "/app/src/hermesaxiom/configs/defaults/models";
+        if (loadModelFile(defaultConfigPath / model_file)) {
+            anyLoaded = true;
+        }
+    }
     
     // Process directories in order, allowing later ones to override earlier ones
     for (const auto& configPath : configPaths) {
         auto modelsPath = configPath / "models";
-        
         if (!std::filesystem::exists(modelsPath)) {
             continue;
         }
@@ -38,7 +47,6 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path>& configPa
             }
         }
     }
-
     m_initialized = anyLoaded;
     return anyLoaded;
 }
@@ -70,6 +78,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
             }
             if (modelJson.contains("api_base")) {
                 info.apiBase = modelJson["api_base"].get<std::string>();
+            }
+            if (modelJson.contains("file_path")) {
+                info.filePath = modelJson["file_path"].get<std::string>();
             }
             if (modelJson.contains("api_key")) {
                info.apiKey = modelJson["api_key"].get<std::string>();
@@ -107,6 +118,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
                 }
                 if (modelJson.contains("api_base")) {
                     it->apiBase = info.apiBase;
+                }
+                if (modelJson.contains("file_path")) {
+                    it->filePath = info.filePath;
                 }
                 if (modelJson.contains("api_key")) {
                    it->apiKey = info.apiKey;
@@ -164,6 +178,17 @@ std::optional<ModelInfo> ModelManager::getModelInfo(const std::string& model) co
         return *it;
     }
     return std::nullopt;
+}
+
+std::vector<ModelInfo> ModelManager::getModels(const std::string& provider) const
+{
+    std::vector<ModelInfo> result;
+    for (const auto& model : m_models) {
+        if (model.provider == provider) {
+            result.push_back(model);
+        }
+    }
+    return result;
 }
 
 void ModelManager::addModel(const ModelInfo& modelInfo)

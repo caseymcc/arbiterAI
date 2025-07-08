@@ -1,6 +1,7 @@
 #ifndef _hermesaxiom_providers_baseProvider_h_
 #define _hermesaxiom_providers_baseProvider_h_
 
+#include "hermesaxiom/modelManager.h"
 #include "hermesaxiom/hermesaxiom.h"
 #include <functional>
 
@@ -15,6 +16,8 @@ class BaseProvider
 public:
     BaseProvider(const std::string provider);
     virtual ~BaseProvider()=default;
+
+    virtual void initialize(const std::vector<ModelInfo>& models) {}
 
     virtual ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response)=0;
