@@ -90,8 +90,8 @@ graph TD
 
   - [x] **Refine ModelManager:** Enhance configuration loading to support multiple config files and environment variables for API keys.
   - [x] **Implement llama.cpp Provider:** Add support for local models by interacting with a llama.cpp server instance.
-  - [ ] **Unit Testing:** Integrate a testing framework (e.g., GoogleTest) and write initial tests for the ModelManager and providers.
-  - [ ] **Documentation:** Add Doxygen-style comments to all public headers to enable automated documentation generation.
+  - [x] **Unit Testing:** Integrate a testing framework (e.g., GoogleTest) and write initial tests for the ModelManager and providers.
+  - [x] **Documentation:** Add Doxygen-style comments to all public headers to enable automated documentation generation.
 
 ### Phase 2: API and Feature Expansion
 

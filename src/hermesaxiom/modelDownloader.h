@@ -13,12 +13,12 @@ namespace hermesaxiom
 class ModelDownloader
 {
 public:
-    ModelDownloader() = default;
+    ModelDownloader()=default;
 
-    std::future<bool> downloadModel(const std::string& downloadUrl, const std::string& filePath, const std::optional<std::string>& fileHash);
+    std::future<bool> downloadModel(const std::string &downloadUrl, const std::string &filePath, const std::optional<std::string> &fileHash, const std::optional<std::string> &minClientVersion=std::nullopt, const std::optional<std::string> &maxClientVersion=std::nullopt);
 
 private:
-    bool verifyFile(const std::string& filePath, const std::string& expectedHash);
+    bool verifyFile(const std::string &filePath, const std::string &expectedHash);
 };
 
 } // namespace hermesaxiom

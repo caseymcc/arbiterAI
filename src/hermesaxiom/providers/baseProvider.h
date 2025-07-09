@@ -11,6 +11,16 @@ namespace hermesaxiom
 struct EmbeddingRequest;
 struct EmbeddingResponse;
 
+/**
+ * @class BaseProvider
+ * @brief Abstract base class for model providers
+ *
+ * Provides common interface for:
+ * - Text completion
+ * - Embedding generation
+ * - Configuration management
+ * - Error handling
+ */
 class BaseProvider
 {
 public:

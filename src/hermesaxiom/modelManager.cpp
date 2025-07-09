@@ -2,203 +2,300 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
+#include <cpr/cpr.h>
+#include <spdlog/spdlog.h>
 
 namespace hermesaxiom
 {
 
-ModelManager& ModelManager::instance()
+ModelManager &ModelManager::instance()
 {
     static ModelManager instance;
     return instance;
 }
 
-bool ModelManager::initialize(const std::vector<std::filesystem::path>& configPaths)
+bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPaths, const std::vector<std::string> &remoteUrls)
 {
     // Clear existing data
     m_models.clear();
     m_modelProviderMap.clear();
 
-    bool anyLoaded = false;
+    bool anyLoaded=false;
 
     // Load default models first
-    std::vector<std::string> default_models = {"anthropic.json", "deepseek.json", "llama.json", "openai.json"};
-    for (const auto& model_file : default_models) {
-        std::filesystem::path defaultConfigPath = "/app/src/hermesaxiom/configs/defaults/models";
-        if (loadModelFile(defaultConfigPath / model_file)) {
-            anyLoaded = true;
+    std::vector<std::string> default_models={ "anthropic.json", "deepseek.json", "llama.json", "openai.json" };
+    for(const auto &model_file:default_models)
+    {
+        std::filesystem::path defaultConfigPath="/app/src/hermesaxiom/configs/defaults/models";
+        if(loadModelFile(defaultConfigPath/model_file))
+        {
+            anyLoaded=true;
         }
     }
-    
+
+    // Load from remote URLs
+    for(const auto &url:remoteUrls)
+    {
+        try
+        {
+            cpr::Response r=cpr::Get(cpr::Url{ url });
+            if(r.status_code==200)
+            {
+                nlohmann::json remoteConfig=nlohmann::json::parse(r.text);
+                if(remoteConfig.contains("models")&&remoteConfig["models"].is_array())
+                {
+                    for(const auto &modelJson:remoteConfig["models"])
+                    {
+                        ModelInfo info;
+                        if(parseModelInfo(modelJson, info))
+                        {
+                            m_models.push_back(info);
+                            m_modelProviderMap[info.model]=info.provider;
+                            anyLoaded=true;
+                        }
+                    }
+                }
+            }
+        }
+        catch(const std::exception &e)
+        {
+            spdlog::error("Failed to load remote config from {}: {}", url, e.what());
+        }
+    }
+
     // Process directories in order, allowing later ones to override earlier ones
-    for (const auto& configPath : configPaths) {
-        auto modelsPath = configPath / "models";
-        if (!std::filesystem::exists(modelsPath)) {
+    for(const auto &configPath:configPaths)
+    {
+        auto modelsPath=configPath/"models";
+        if(!std::filesystem::exists(modelsPath))
+        {
             continue;
         }
 
         // Iterate through all JSON files in the models directory
-        for (const auto& entry : std::filesystem::directory_iterator(modelsPath)) {
-            if (entry.path().extension() != ".json") {
+        for(const auto &entry:std::filesystem::directory_iterator(modelsPath))
+        {
+            if(entry.path().extension()!=".json")
+            {
                 continue;
             }
 
-            if (loadModelFile(entry.path())) {
-                anyLoaded = true;
+            if(loadModelFile(entry.path()))
+            {
+                anyLoaded=true;
             }
         }
     }
-    m_initialized = anyLoaded;
+    m_initialized=anyLoaded;
     return anyLoaded;
 }
 
-bool ModelManager::loadModelFile(const std::filesystem::path& filePath)
+bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &info) const
 {
-    try {
-        std::ifstream file(filePath);
-        nlohmann::json config = nlohmann::json::parse(file);
+    // Required fields
+    if(!modelJson.contains("model")||!modelJson.contains("provider"))
+    {
+        return false;
+    }
 
-        if (!config.contains("models") || !config["models"].is_array()) {
+    info.model=modelJson["model"].get<std::string>();
+    info.provider=modelJson["provider"].get<std::string>();
+
+    // Check version compatibility
+    if(modelJson.contains("compatibility"))
+    {
+        auto &compat=modelJson["compatibility"];
+        if(compat.contains("min_client_version"))
+        {
+            info.minClientVersion=compat["min_client_version"].get<std::string>();
+        }
+        if(compat.contains("max_client_version"))
+        {
+            info.maxClientVersion=compat["max_client_version"].get<std::string>();
+        }
+    }
+
+    return true;
+}
+
+bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
+{
+    try
+    {
+        std::ifstream file(filePath);
+        nlohmann::json config=nlohmann::json::parse(file);
+
+        if(!config.contains("models")||!config["models"].is_array())
+        {
             return false;
         }
 
-        for (const auto& modelJson : config["models"]) {
+        for(const auto &modelJson:config["models"])
+        {
             ModelInfo info;
-            
-            // Required fields
-            if (!modelJson.contains("model") || !modelJson.contains("provider")) {
+            if(!parseModelInfo(modelJson, info))
+            {
                 continue;
             }
-            
-            info.model = modelJson["model"].get<std::string>();
-            info.provider = modelJson["provider"].get<std::string>();
-            
+
             // Optional fields
-            if (modelJson.contains("mode")) {
-                info.mode = modelJson["mode"].get<std::string>();
+            if(modelJson.contains("mode"))
+            {
+                info.mode=modelJson["mode"].get<std::string>();
             }
-            if (modelJson.contains("api_base")) {
-                info.apiBase = modelJson["api_base"].get<std::string>();
+            if(modelJson.contains("api_base"))
+            {
+                info.apiBase=modelJson["api_base"].get<std::string>();
             }
-            if (modelJson.contains("file_path")) {
-                info.filePath = modelJson["file_path"].get<std::string>();
+            if(modelJson.contains("file_path"))
+            {
+                info.filePath=modelJson["file_path"].get<std::string>();
             }
-            if (modelJson.contains("api_key")) {
-               info.apiKey = modelJson["api_key"].get<std::string>();
+            if(modelJson.contains("api_key"))
+            {
+                info.apiKey=modelJson["api_key"].get<std::string>();
             }
-            if (modelJson.contains("examples_as_sys_msg")) {
-                info.examplesAsSysMsg = modelJson["examples_as_sys_msg"].get<bool>();
+            if(modelJson.contains("examples_as_sys_msg"))
+            {
+                info.examplesAsSysMsg=modelJson["examples_as_sys_msg"].get<bool>();
             }
-            if (modelJson.contains("context_window")) {
-                info.contextWindow = modelJson["context_window"].get<int>();
+            if(modelJson.contains("context_window"))
+            {
+                info.contextWindow=modelJson["context_window"].get<int>();
             }
-            if (modelJson.contains("max_tokens")) {
-                info.maxTokens = modelJson["max_tokens"].get<int>();
+            if(modelJson.contains("max_tokens"))
+            {
+                info.maxTokens=modelJson["max_tokens"].get<int>();
             }
-            if (modelJson.contains("max_input_tokens")) {
-                info.maxInputTokens = modelJson["max_input_tokens"].get<int>();
+            if(modelJson.contains("max_input_tokens"))
+            {
+                info.maxInputTokens=modelJson["max_input_tokens"].get<int>();
             }
-            if (modelJson.contains("max_output_tokens")) {
-                info.maxOutputTokens = modelJson["max_output_tokens"].get<int>();
+            if(modelJson.contains("max_output_tokens"))
+            {
+                info.maxOutputTokens=modelJson["max_output_tokens"].get<int>();
             }
-            if (modelJson.contains("input_cost_per_token")) {
-                info.inputCostPerToken = modelJson["input_cost_per_token"].get<double>();
+            if(modelJson.contains("input_cost_per_token"))
+            {
+                info.inputCostPerToken=modelJson["input_cost_per_token"].get<double>();
             }
-            if (modelJson.contains("output_cost_per_token")) {
-                info.outputCostPerToken = modelJson["output_cost_per_token"].get<double>();
+            if(modelJson.contains("output_cost_per_token"))
+            {
+                info.outputCostPerToken=modelJson["output_cost_per_token"].get<double>();
             }
 
             // Find existing model to update
-            auto it = std::find_if(m_models.begin(), m_models.end(),
-                [&info](const ModelInfo& existing) { return existing.model == info.model; });
-            
-            if (it != m_models.end()) {
+            auto it=std::find_if(m_models.begin(), m_models.end(),
+                [&info](const ModelInfo &existing) { return existing.model==info.model; });
+
+            if(it!=m_models.end())
+            {
                 // Update existing model settings
-                if (modelJson.contains("mode")) {
-                    it->mode = info.mode;
+                if(modelJson.contains("mode"))
+                {
+                    it->mode=info.mode;
                 }
-                if (modelJson.contains("api_base")) {
-                    it->apiBase = info.apiBase;
+                if(modelJson.contains("api_base"))
+                {
+                    it->apiBase=info.apiBase;
                 }
-                if (modelJson.contains("file_path")) {
-                    it->filePath = info.filePath;
+                if(modelJson.contains("file_path"))
+                {
+                    it->filePath=info.filePath;
                 }
-                if (modelJson.contains("api_key")) {
-                   it->apiKey = info.apiKey;
+                if(modelJson.contains("api_key"))
+                {
+                    it->apiKey=info.apiKey;
                 }
-                if (modelJson.contains("examples_as_sys_msg")) {
-                    it->examplesAsSysMsg = info.examplesAsSysMsg;
+                if(modelJson.contains("examples_as_sys_msg"))
+                {
+                    it->examplesAsSysMsg=info.examplesAsSysMsg;
                 }
-                if (modelJson.contains("context_window")) {
-                    it->contextWindow = info.contextWindow;
+                if(modelJson.contains("context_window"))
+                {
+                    it->contextWindow=info.contextWindow;
                 }
-                if (modelJson.contains("max_tokens")) {
-                    it->maxTokens = info.maxTokens;
+                if(modelJson.contains("max_tokens"))
+                {
+                    it->maxTokens=info.maxTokens;
                 }
-                if (modelJson.contains("max_input_tokens")) {
-                    it->maxInputTokens = info.maxInputTokens;
+                if(modelJson.contains("max_input_tokens"))
+                {
+                    it->maxInputTokens=info.maxInputTokens;
                 }
-                if (modelJson.contains("max_output_tokens")) {
-                    it->maxOutputTokens = info.maxOutputTokens;
+                if(modelJson.contains("max_output_tokens"))
+                {
+                    it->maxOutputTokens=info.maxOutputTokens;
                 }
-                if (modelJson.contains("input_cost_per_token")) {
-                    it->inputCostPerToken = info.inputCostPerToken;
+                if(modelJson.contains("input_cost_per_token"))
+                {
+                    it->inputCostPerToken=info.inputCostPerToken;
                 }
-                if (modelJson.contains("output_cost_per_token")) {
-                    it->outputCostPerToken = info.outputCostPerToken;
+                if(modelJson.contains("output_cost_per_token"))
+                {
+                    it->outputCostPerToken=info.outputCostPerToken;
                 }
-            } else {
+            }
+            else
+            {
                 // Add new model
                 m_models.push_back(info);
             }
-            m_modelProviderMap[info.model] = info.provider;
+            m_modelProviderMap[info.model]=info.provider;
         }
 
         return true;
     }
-    catch (const std::exception&) {
+    catch(const std::exception &)
+    {
         return false;
     }
 }
 
-std::optional<std::string> ModelManager::getProvider(const std::string& model) const
+std::optional<std::string> ModelManager::getProvider(const std::string &model) const
 {
-    auto it = m_modelProviderMap.find(model);
-    if (it != m_modelProviderMap.end()) {
+    auto it=m_modelProviderMap.find(model);
+    if(it!=m_modelProviderMap.end())
+    {
         return it->second;
     }
     return std::nullopt;
 }
 
-std::optional<ModelInfo> ModelManager::getModelInfo(const std::string& model) const
+std::optional<ModelInfo> ModelManager::getModelInfo(const std::string &model) const
 {
-    auto it = std::find_if(m_models.begin(), m_models.end(),
-        [&model](const ModelInfo& info) { return info.model == model; });
-    
-    if (it != m_models.end()) {
+    auto it=std::find_if(m_models.begin(), m_models.end(),
+        [&model](const ModelInfo &info) { return info.model==model; });
+
+    if(it!=m_models.end())
+    {
         return *it;
     }
     return std::nullopt;
 }
 
-std::vector<ModelInfo> ModelManager::getModels(const std::string& provider) const
+std::vector<ModelInfo> ModelManager::getModels(const std::string &provider) const
 {
     std::vector<ModelInfo> result;
-    for (const auto& model : m_models) {
-        if (model.provider == provider) {
+    for(const auto &model:m_models)
+    {
+        if(model.provider==provider)
+        {
             result.push_back(model);
         }
     }
     return result;
 }
 
-void ModelManager::addModel(const ModelInfo& modelInfo)
+void ModelManager::addModel(const ModelInfo &modelInfo)
 {
-    auto it = std::find_if(m_models.begin(), m_models.end(),
-        [&](const ModelInfo& existing) { return existing.model == modelInfo.model; });
+    auto it=std::find_if(m_models.begin(), m_models.end(),
+        [&](const ModelInfo &existing) { return existing.model==modelInfo.model; });
 
-    if (it == m_models.end()) {
+    if(it==m_models.end())
+    {
         m_models.push_back(modelInfo);
-        m_modelProviderMap[modelInfo.model] = modelInfo.provider;
+        m_modelProviderMap[modelInfo.model]=modelInfo.provider;
     }
 }
 

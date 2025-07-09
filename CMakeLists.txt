@@ -10,6 +10,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fdiagnostics-color=always")
 find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(llama CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_path(PICOSHA2_INCLUDE_DIRS "picosha2.h")
 
@@ -53,4 +54,5 @@ target_link_libraries(hermesaxiom
         nlohmann_json::nlohmann_json
         llama
         spdlog::spdlog
+        Threads::Threads
 )

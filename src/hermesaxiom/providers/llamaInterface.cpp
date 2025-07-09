@@ -19,20 +19,26 @@ LlamaInterface &LlamaInterface::instance()
 
 void LlamaInterface::setModels(const std::vector<ModelInfo> &models)
 {
-    for (const auto& model : models) {
+    for(const ModelInfo &model:models)
+    {
         LlamaModelInfo llamaModel;
-        llamaModel.modelInfo = model;
-        if (model.downloadUrl) {
-            llamaModel.downloadUrl = model.downloadUrl;
+        llamaModel.modelInfo=model;
+        if(model.downloadUrl)
+        {
+            llamaModel.downloadUrl=model.downloadUrl;
         }
-        if (model.filePath) {
-            llamaModel.filePath = model.filePath;
-        } else if (model.downloadUrl) {
+        if(model.filePath)
+        {
+            llamaModel.filePath=model.filePath;
+        }
+        else if(model.downloadUrl)
+        {
             // If no file path is provided, construct it from the model name
-            llamaModel.filePath = "/models/" + model.model;
+            llamaModel.filePath="/models/"+model.model;
         }
-        if (model.fileHash) {
-            llamaModel.fileHash = model.fileHash;
+        if(model.fileHash)
+        {
+            llamaModel.fileHash=model.fileHash;
         }
         m_llamaModels.push_back(llamaModel);
     }
@@ -123,7 +129,7 @@ ErrorCode LlamaInterface::completion(const std::string &prompt, std::string &res
             });
         const llama_token next_token=max_it->id;
 
-        if(next_token==llama_token_eos(llama_model_get_vocab(m_model)))
+        if(next_token==llama_vocab_eos(llama_model_get_vocab(m_model)))
         {
             break;
         }
@@ -211,7 +217,7 @@ ErrorCode LlamaInterface::streamingCompletion(const std::string &prompt,
             });
         const llama_token next_token=max_it->id;
 
-        if(next_token==llama_token_eos(llama_model_get_vocab(m_model)))
+        if(next_token==llama_vocab_eos(llama_model_get_vocab(m_model)))
         {
             break;
         }
@@ -377,14 +383,16 @@ bool LlamaInterface::loadModel(const std::string &modelName)
         return true;
     }
 
-    auto modelInfo = ModelManager::instance().getModelInfo(modelName);
-    if (!modelInfo) {
+    auto modelInfo=ModelManager::instance().getModelInfo(modelName);
+    if(!modelInfo)
+    {
         spdlog::error("Llama model not found in ModelManager: {}", modelName);
         return false;
     }
 
-    if (!modelInfo->filePath) {
-        auto it = std::find_if(m_llamaModels.begin(), m_llamaModels.end(),
+    if(!modelInfo->filePath)
+    {
+        auto it=std::find_if(m_llamaModels.begin(), m_llamaModels.end(),
             [&](const LlamaModelInfo &info)
             {
                 return info.modelInfo.model==modelName;
@@ -395,7 +403,7 @@ bool LlamaInterface::loadModel(const std::string &modelName)
             spdlog::error("Llama model not found in llama config: {}", modelName);
             return false;
         }
-        
+
         if(it->downloadStatus==DownloadStatus::InProgress)
         {
             return false;
@@ -406,10 +414,10 @@ bool LlamaInterface::loadModel(const std::string &modelName)
             downloadModel(*it);
             return false;
         }
-        modelInfo->filePath = it->filePath;
+        modelInfo->filePath=it->filePath;
     }
 
-    m_modelInfo = modelInfo;
+    m_modelInfo=modelInfo;
 
     auto mparams=llama_model_default_params();
     const char *modelPath=modelInfo->filePath->c_str();

@@ -13,20 +13,36 @@
 namespace hermesaxiom
 {
 
+/**
+ * @brief Construct a new Llama provider
+ */
 Llama::Llama() :
     BaseProvider("llama")
 {
 }
 
+/**
+ * @brief Destroy the Llama provider
+ */
 Llama::~Llama()
 {
 }
 
+/**
+ * @brief Initialize Llama provider with models
+ * @param models Vector of ModelInfo containing model configurations
+ */
 void Llama::initialize(const std::vector<ModelInfo>& models)
 {
     LlamaInterface::instance().setModels(models);
 }
 
+/**
+ * @brief Perform text completion using Llama model
+ * @param request Completion parameters
+ * @param[out] response Completion results
+ * @return ErrorCode indicating success or failure
+ */
 ErrorCode Llama::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
@@ -68,6 +84,12 @@ ErrorCode Llama::completion(const CompletionRequest &request,
     return code;
 }
 
+/**
+ * @brief Perform streaming text completion
+ * @param request Completion parameters
+ * @param callback Function to receive streaming chunks
+ * @return ErrorCode indicating success or failure
+ */
 ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
@@ -99,6 +121,12 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     return llamaInterface.streamingCompletion(prompt, callback);
 }
 
+/**
+ * @brief Generate embeddings using Llama model
+ * @param request Embedding generation parameters
+ * @param[out] response Generated embeddings
+ * @return ErrorCode indicating success or failure
+ */
 ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
