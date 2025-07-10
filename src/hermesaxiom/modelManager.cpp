@@ -1,17 +1,34 @@
 #include "hermesaxiom/modelManager.h"
 #include <nlohmann/json.hpp>
+#include <nlohmann/json-schema.hpp>
 #include <fstream>
 #include <iostream>
 #include <cpr/cpr.h>
 #include <spdlog/spdlog.h>
+#include <algorithm>
+#include <sstream>
 
 namespace hermesaxiom
 {
+
+bool ModelInfo::isSchemaCompatible(const std::string &schemaVersion) const
+{
+    if(minSchemaVersion.empty()||schemaVersion.empty())
+    {
+        return true;
+    }
+    return ModelManager::compareVersions(schemaVersion, minSchemaVersion)>=0;
+}
 
 ModelManager &ModelManager::instance()
 {
     static ModelManager instance;
     return instance;
+}
+
+void ModelManager::reset()
+{
+    instance()=ModelManager();
 }
 
 bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPaths, const std::vector<std::string> &remoteUrls)
@@ -49,7 +66,13 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
                         ModelInfo info;
                         if(parseModelInfo(modelJson, info))
                         {
-                            m_models.push_back(info);
+                            // Sort by ranking (highest first)
+                            auto it=std::lower_bound(m_models.begin(), m_models.end(), info,
+                                [](const ModelInfo &a, const ModelInfo &b)
+                                {
+                                    return a.ranking>b.ranking;
+                                });
+                            m_models.insert(it, info);
                             m_modelProviderMap[info.model]=info.provider;
                             anyLoaded=true;
                         }
@@ -90,6 +113,47 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
     return anyLoaded;
 }
 
+bool ModelManager::validateSchema(const nlohmann::json &config) const
+{
+    static nlohmann::json schema;
+    static bool schemaLoaded=false;
+
+    // Load schema once
+    if(!schemaLoaded)
+    {
+        try
+        {
+            std::ifstream schemaFile("schemas/model_config.schema.json");
+            if(!schemaFile.is_open())
+            {
+                spdlog::error("Failed to open schema file");
+                return false;
+            }
+            schema=nlohmann::json::parse(schemaFile);
+            schemaLoaded=true;
+        }
+        catch(const std::exception &e)
+        {
+            spdlog::error("Failed to load schema: {}", e.what());
+            return false;
+        }
+    }
+
+    // Validate against schema
+    try
+    {
+        nlohmann::json_schema::json_validator validator;
+        validator.set_root_schema(schema);
+        validator.validate(config);
+        return true;
+    }
+    catch(const std::exception &e)
+    {
+        spdlog::warn("Schema validation failed: {}", e.what());
+        return false;
+    }
+}
+
 bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &info) const
 {
     // Required fields
@@ -101,7 +165,39 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
     info.model=modelJson["model"].get<std::string>();
     info.provider=modelJson["provider"].get<std::string>();
 
-    // Check version compatibility
+    // Schema version
+    if(modelJson.contains("version"))
+    {
+        info.configVersion=modelJson["version"].get<std::string>();
+    }
+
+    // Model ranking
+    if(modelJson.contains("ranking"))
+    {
+        info.ranking=modelJson["ranking"].get<int>();
+    }
+
+    // Download metadata
+    if(modelJson.contains("download"))
+    {
+        DownloadMetadata dl;
+        auto &download=modelJson["download"];
+        if(download.contains("url"))
+        {
+            dl.url=download["url"].get<std::string>();
+        }
+        if(download.contains("sha256"))
+        {
+            dl.sha256=download["sha256"].get<std::string>();
+        }
+        if(download.contains("cachePath"))
+        {
+            dl.cachePath=download["cachePath"].get<std::string>();
+        }
+        info.download=dl;
+    }
+
+    // Version compatibility
     if(modelJson.contains("compatibility"))
     {
         auto &compat=modelJson["compatibility"];
@@ -116,6 +212,49 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
     }
 
     return true;
+}
+
+int ModelManager::compareVersions(const std::string &v1, const std::string &v2)
+{
+    std::vector<int> v1Parts, v2Parts;
+    std::stringstream ss1(v1), ss2(v2);
+    std::string part;
+
+    while(std::getline(ss1, part, '.')) v1Parts.push_back(std::stoi(part));
+    while(std::getline(ss2, part, '.')) v2Parts.push_back(std::stoi(part));
+
+    for(size_t i=0; i<std::min(v1Parts.size(), v2Parts.size()); ++i)
+    {
+        if(v1Parts[i]<v2Parts[i]) return -1;
+        if(v1Parts[i]>v2Parts[i]) return 1;
+    }
+
+    if(v1Parts.size()<v2Parts.size()) return -1;
+    if(v1Parts.size()>v2Parts.size()) return 1;
+    return 0;
+}
+
+std::vector<ModelInfo> ModelManager::getModelsByRanking() const
+{
+    auto models=m_models;
+    std::sort(models.begin(), models.end(),
+        [](const ModelInfo &a, const ModelInfo &b)
+        {
+            // First sort by ranking (higher first)
+            if(a.ranking!=b.ranking)
+            {
+                return a.ranking>b.ranking;
+            }
+            // Then by name (case-insensitive alphabetical)
+            return std::lexicographical_compare(
+                a.model.begin(), a.model.end(),
+                b.model.begin(), b.model.end(),
+                [](char c1, char c2)
+                {
+                    return std::tolower(c1)<std::tolower(c2);
+                });
+        });
+    return models;
 }
 
 bool ModelManager::loadModelFile(const std::filesystem::path &filePath)

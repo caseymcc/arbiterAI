@@ -1,6 +1,7 @@
 #include "hermesaxiom/providers/llama.h"
 
 #include "hermesaxiom/providers/llamaInterface.h"
+#include "hermesaxiom/modelManager.h"
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -9,9 +10,17 @@
 #include <filesystem>
 #include <thread>
 #include <future>
+#include <openssl/sha.h>
+#include <cpr/cpr.h>
+#include <mutex>
+#include <unordered_map>
+#include <condition_variable>
+#include <atomic>
 
 namespace hermesaxiom
 {
+
+using json=nlohmann::json;
 
 /**
  * @brief Construct a new Llama provider
@@ -19,6 +28,18 @@ namespace hermesaxiom
 Llama::Llama() :
     BaseProvider("llama")
 {
+}
+
+DownloadStatus Llama::getDownloadStatus(const std::string &modelName, std::string &error)
+{
+    std::lock_guard<std::mutex> lock(m_downloadMutex);
+    auto it=m_downloadStatus.find(modelName);
+    if(it!=m_downloadStatus.end())
+    {
+        error=it->second.error;
+        return it->second.status;
+    }
+    return DownloadStatus::Completed;
 }
 
 /**
@@ -32,7 +53,7 @@ Llama::~Llama()
  * @brief Initialize Llama provider with models
  * @param models Vector of ModelInfo containing model configurations
  */
-void Llama::initialize(const std::vector<ModelInfo>& models)
+void Llama::initialize(const std::vector<ModelInfo> &models)
 {
     LlamaInterface::instance().setModels(models);
 }
@@ -48,21 +69,12 @@ ErrorCode Llama::completion(const CompletionRequest &request,
 {
     LlamaInterface &llamaInterface=LlamaInterface::instance();
 
-    std::string error;
-    DownloadStatus status=getDownloadStatus(request.model, error);
-    if(status==DownloadStatus::InProgress)
-    {
-        return ErrorCode::ModelDownloading;
-    }
-    if(status==DownloadStatus::Failed)
-    {
-        return ErrorCode::DownloadFailed;
-    }
-
     if(!llamaInterface.isLoaded(request.model))
     {
-        if(!llamaInterface.loadModel(request.model))
-            return ErrorCode::ModelNotLoaded;
+        ErrorCode errorCode=llamaInterface.loadModel(request.model);
+
+        if(errorCode!=ErrorCode::Success)
+            return errorCode;
     }
 
     std::string prompt;
@@ -95,24 +107,16 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
 {
     LlamaInterface &llamaInterface=LlamaInterface::instance();
 
-    std::string error;
-    DownloadStatus status=getDownloadStatus(request.model, error);
-    if(status==DownloadStatus::InProgress)
-    {
-        return ErrorCode::ModelDownloading;
-    }
-    if(status==DownloadStatus::Failed)
-    {
-        return ErrorCode::DownloadFailed;
-    }
-
     if(!llamaInterface.isLoaded(request.model))
     {
-        if(!llamaInterface.loadModel(request.model))
-            return ErrorCode::ModelNotLoaded;
+        ErrorCode errorCode=llamaInterface.loadModel(request.model);
+
+        if(errorCode!=ErrorCode::Success)
+            return errorCode;
     }
 
     std::string prompt;
+
     for(const auto &msg:request.messages)
     {
         prompt+=msg.content;
@@ -134,19 +138,10 @@ ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
 
     if(!llamaInterface.isLoaded(request.model))
     {
-        if(!llamaInterface.loadModel(request.model))
-            return ErrorCode::ModelNotLoaded;
-    }
+        ErrorCode errorCode=llamaInterface.loadModel(request.model);
 
-    std::string error;
-    DownloadStatus status=getDownloadStatus(request.model, error);
-    if(status==DownloadStatus::InProgress)
-    {
-        return ErrorCode::ModelDownloading;
-    }
-    if(status==DownloadStatus::Failed)
-    {
-        return ErrorCode::DownloadFailed;
+        if(errorCode!=ErrorCode::Success)
+            return errorCode;
     }
 
     int tokens_used=0;

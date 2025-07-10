@@ -1,4 +1,21 @@
-# Dynamic Configuration Management Architecture
+# Dynamic Configuration Management Architecture (v2)
+
+## Overview
+The Dynamic Configuration Management system provides a flexible way to manage model configurations, including:
+- Model download URLs and verification checksums
+- Local cache paths and management
+- Version compatibility rules
+- Remote configuration repositories
+- Model ranking and preference system
+- Schema validation
+
+## Version 2.0 Changes
+- Added formal JSON schema validation
+- Introduced model ranking system
+- Standardized download metadata format
+- Added explicit schema versioning
+- Improved version compatibility checking
+
 
 ## Overview
 The Dynamic Configuration Management system provides a flexible way to manage model configurations, including:
@@ -9,7 +26,40 @@ The Dynamic Configuration Management system provides a flexible way to manage mo
 
 ## Configuration Schema
 
-### Model Configuration
+### Model Configuration (v2 Format)
+```json
+{
+  "schema_version": "2.0",
+  "models": [
+    {
+      "model": "string",
+      "provider": "string",
+      "version": "semver",
+      "ranking": 0,
+      "download": {
+        "url": "string",
+        "sha256": "string",
+        "cachePath": "string"
+      },
+      "compatibility": {
+        "min_client_version": "semver",
+        "max_client_version": "semver",
+        "supported_platforms": ["string"]
+      }
+    }
+  ]
+}
+```
+
+### Backward Compatibility
+Version 1.x configurations are automatically converted to v2 format:
+- `name` → `model`
+- `download_url` → `download.url`
+- `file_hash` → `download.sha256`
+- `cache_path` → `download.cachePath`
+- Default `ranking` of 0 applied
+- Default `schema_version` of "2.0" applied
+
 ```json
 {
   "name": "string",
@@ -71,7 +121,18 @@ The `index.json` contains version compatibility information:
 }
 ```
 
+## Schema Validation
+All configurations must validate against `schemas/model_config.schema.json`.
+
+Validation checks:
+1. Required fields present
+2. Field types correct
+3. Version format valid
+4. Download URLs properly formatted
+5. SHA256 checksums valid
+
 ## Versioning Strategy
+
 
 ### Semantic Versioning
 - **MAJOR**: Breaking changes, requires client updates

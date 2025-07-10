@@ -11,9 +11,20 @@
 
 #include "hermesaxiom/providers/baseProvider.h"
 #include <vector>
+#include <mutex>
+#include <unordered_map>
+#include <thread>
+#include <condition_variable>
+#include <future>
+#include <atomic>
 
 namespace hermesaxiom
 {
+struct DownloadState
+{
+    DownloadStatus status;
+    std::string error;
+};
 
 /**
  * @class Llama
@@ -38,7 +49,11 @@ public:
      * @brief Initialize Llama provider with models
      * @param models Vector of ModelInfo containing model configurations
      */
-    void initialize(const std::vector<ModelInfo>& models) override;
+     /**
+      * @brief Initialize Llama provider with models
+      * @param models Vector of ModelInfo containing model configurations
+      */
+    void initialize(const std::vector<ModelInfo> &models) override;
 
     /**
      * @brief Perform text completion using Llama model
@@ -66,6 +81,13 @@ public:
      */
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
+
+    DownloadStatus getDownloadStatus(const std::string &modelName,
+        std::string &error) override;
+
+private:
+    std::mutex m_downloadMutex;
+    std::unordered_map<std::string, DownloadState> m_downloadStatus;
 };
 
 } // namespace hermesaxiom

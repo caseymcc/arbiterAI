@@ -23,23 +23,23 @@ void LlamaInterface::setModels(const std::vector<ModelInfo> &models)
     {
         LlamaModelInfo llamaModel;
         llamaModel.modelInfo=model;
-        if(model.downloadUrl)
+
+        if(model.download)
         {
-            llamaModel.downloadUrl=model.downloadUrl;
+            llamaModel.downloadUrl=model.download->url;
+            llamaModel.fileHash=model.download->sha256;
         }
+
         if(model.filePath)
         {
             llamaModel.filePath=model.filePath;
         }
-        else if(model.downloadUrl)
+        else if(model.download)
         {
             // If no file path is provided, construct it from the model name
             llamaModel.filePath="/models/"+model.model;
         }
-        if(model.fileHash)
-        {
-            llamaModel.fileHash=model.fileHash;
-        }
+
         m_llamaModels.push_back(llamaModel);
     }
 }
@@ -376,18 +376,19 @@ bool LlamaInterface::isLoaded(const std::string &modelName) const
     return m_model!=nullptr&&m_ctx!=nullptr;
 }
 
-bool LlamaInterface::loadModel(const std::string &modelName)
+ErrorCode LlamaInterface::loadModel(const std::string &modelName)
 {
     if(m_modelInfo&&m_modelInfo->model==modelName)
     {
-        return true;
+        return ErrorCode::Success;
     }
 
     auto modelInfo=ModelManager::instance().getModelInfo(modelName);
+
     if(!modelInfo)
     {
         spdlog::error("Llama model not found in ModelManager: {}", modelName);
-        return false;
+        return ErrorCode::ModelNotFound;
     }
 
     if(!modelInfo->filePath)
@@ -401,20 +402,27 @@ bool LlamaInterface::loadModel(const std::string &modelName)
         if(it==m_llamaModels.end())
         {
             spdlog::error("Llama model not found in llama config: {}", modelName);
-            return false;
+            return ErrorCode::ModelNotFound;
         }
 
-        if(it->downloadStatus==DownloadStatus::InProgress)
+        LlamaModelInfo &llamaModelInfo=*it;
+
+        if(llamaModelInfo.downloadStatus==DownloadStatus::InProgress)
         {
-            return false;
+            return ErrorCode::ModelDownloading;
+        }
+        if(llamaModelInfo.downloadStatus==DownloadStatus::Failed)
+        {
+            spdlog::error("Llama model download failed: {}", llamaModelInfo.downloadError);
+            return ErrorCode::ModelDownloadFailed;
         }
 
-        if(!isModelDownloaded(*it))
+        if(!isModelDownloaded(llamaModelInfo))
         {
-            downloadModel(*it);
-            return false;
+            downloadModel(llamaModelInfo);
+            return ErrorCode::ModelDownloading;
         }
-        modelInfo->filePath=it->filePath;
+        modelInfo->filePath=llamaModelInfo.filePath;
     }
 
     m_modelInfo=modelInfo;
@@ -422,13 +430,15 @@ bool LlamaInterface::loadModel(const std::string &modelName)
     auto mparams=llama_model_default_params();
     const char *modelPath=modelInfo->filePath->c_str();
     m_model=llama_model_load_from_file(modelPath, mparams);
+
     if(!m_model)
     {
         spdlog::error("Failed to load model: {}", modelPath);
-        return false;
+        return ErrorCode::ModelLoadError;
     }
 
     auto cparams=llama_context_default_params();
+
     cparams.n_ctx=m_modelInfo->contextWindow;
     cparams.n_threads=std::thread::hardware_concurrency();
     cparams.n_threads_batch=std::thread::hardware_concurrency();
@@ -438,8 +448,9 @@ bool LlamaInterface::loadModel(const std::string &modelName)
     if(!m_ctx)
     {
         spdlog::error("Failed to create context for model: {}", m_modelInfo->model);
+        return ErrorCode::ModelLoadError;
     }
-    return m_ctx!=nullptr;
+    return ErrorCode::Success;
 }
 
 

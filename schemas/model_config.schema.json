@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hermesaxiom/schemas/model-config/v1.0.0",
+  "title": "HermesAxiom Model Configuration",
+  "description": "Schema for model configuration files",
+  "type": "object",
+  "required": ["schema_version", "models"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Version of this configuration schema",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "examples": ["1.0.0"]
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["model", "provider"],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Unique model identifier"
+          },
+          "version": {
+            "type": "string",
+            "description": "Model version",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Model provider/service",
+            "enum": ["anthropic", "llama", "openai", "deepseek"]
+          },
+          "ranking": {
+            "type": "integer",
+            "description": "Preference order (lower is better)",
+            "minimum": 0,
+            "default": 0
+          },
+          "download": {
+            "type": "object",
+            "description": "Download metadata",
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "Download URL"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "SHA256 checksum"
+              },
+              "cachePath": {
+                "type": "string",
+                "description": "Relative cache path"
+              }
+            },
+            "required": ["url", "sha256"]
+          },
+          "compatibility": {
+            "type": "object",
+            "properties": {
+              "minSchemaVersion": {
+                "type": "string",
+                "pattern": "^\\d+\\.\\d+\\.\\d+$"
+              },
+              "maxSchemaVersion": {
+                "type": "string",
+                "pattern": "^\\d+\\.\\d+\\.\\d+$"
+              },
+              "minClientVersion": {
+                "type": "string",
+                "pattern": "^\\d+\\.\\d+\\.\\d+$"
+              },
+              "maxClientVersion": {
+                "type": "string",
+                "pattern": "^\\d+\\.\\d+\\.\\d+$"
+              }
+            }
+          },
+          "contextWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inputCostPerToken": {
+            "type": "number",
+            "minimum": 0
+          },
+          "outputCostPerToken": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

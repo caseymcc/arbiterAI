@@ -108,7 +108,7 @@ BaseProvider *getProvider(const std::string &providerName)
         {
             return nullptr;
         }
-        auto models = ModelManager::instance().getModels(providerName);
+        auto models=ModelManager::instance().getModels(providerName);
         provider->initialize(models);
         it=hermes.providers.emplace(providerName, std::move(provider)).first;
     }
@@ -209,7 +209,7 @@ ErrorCode hermesaxiom::getDownloadStatus(const std::string &modelName, std::stri
         case DownloadStatus::Completed:
             return ErrorCode::Success;
         case DownloadStatus::Failed:
-            return ErrorCode::DownloadFailed;
+            return ErrorCode::ModelDownloadFailed;
         }
     }
     return ErrorCode::UnsupportedProvider;

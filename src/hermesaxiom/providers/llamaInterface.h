@@ -43,7 +43,7 @@ public:
         std::vector<float> &embedding, int &tokens_used);
 
     bool isLoaded(const std::string &modelName) const;
-    bool loadModel(const std::string &modelName);
+    ErrorCode loadModel(const std::string &modelName);
 
 private:
     LlamaInterface();

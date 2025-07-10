@@ -38,10 +38,12 @@ enum class ErrorCode
     InvalidResponse,
     InvalidRequest,
     NotImplemented,
-    ModelNotLoaded,
     GenerationError,
+    ModelNotFound,
+    ModelNotLoaded,
+    ModelLoadError,
     ModelDownloading,
-    DownloadFailed
+    ModelDownloadFailed
 };
 
 /**
