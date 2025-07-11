@@ -1,6 +1,6 @@
-#include "hermesaxiom/providers/llamaInterface.h"
+#include "arbiterAI/providers/llamaInterface.h"
 
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/modelManager.h"
 
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -8,13 +8,40 @@
 #include <filesystem>
 #include <thread>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 LlamaInterface &LlamaInterface::instance()
 {
     static LlamaInterface instance;
     return instance;
+}
+
+void LlamaInterface::setModels(const std::vector<ModelInfo> &models)
+{
+    for(const ModelInfo &model:models)
+    {
+        LlamaModelInfo llamaModel;
+        llamaModel.modelInfo=model;
+
+        if(model.download)
+        {
+            llamaModel.downloadUrl=model.download->url;
+            llamaModel.fileHash=model.download->sha256;
+        }
+
+        if(model.filePath)
+        {
+            llamaModel.filePath=model.filePath;
+        }
+        else if(model.download)
+        {
+            // If no file path is provided, construct it from the model name
+            llamaModel.filePath="/models/"+model.model;
+        }
+
+        m_llamaModels.push_back(llamaModel);
+    }
 }
 
 LlamaInterface::LlamaInterface()
@@ -43,19 +70,6 @@ void LlamaInterface::initialize()
     if(!m_initialized)
     {
         llama_backend_init();
-        loadLlamaConfig();
-        for(auto &model:m_llamaModels)
-        {
-            if(isModelDownloaded(model))
-            {
-                ModelManager::instance().addModel(model.modelInfo);
-                model.downloadStatus=DownloadStatus::Completed;
-            }
-            else
-            {
-                downloadModel(model);
-            }
-        }
         m_initialized=true;
     }
 }
@@ -115,7 +129,7 @@ ErrorCode LlamaInterface::completion(const std::string &prompt, std::string &res
             });
         const llama_token next_token=max_it->id;
 
-        if(next_token==llama_token_eos(llama_model_get_vocab(m_model)))
+        if(next_token==llama_vocab_eos(llama_model_get_vocab(m_model)))
         {
             break;
         }
@@ -203,7 +217,7 @@ ErrorCode LlamaInterface::streamingCompletion(const std::string &prompt,
             });
         const llama_token next_token=max_it->id;
 
-        if(next_token==llama_token_eos(llama_model_get_vocab(m_model)))
+        if(next_token==llama_vocab_eos(llama_model_get_vocab(m_model)))
         {
             break;
         }
@@ -290,6 +304,17 @@ ErrorCode LlamaInterface::getEmbeddings(const std::string &input,
     return ErrorCode::Success;
 }
 
+ErrorCode LlamaInterface::getEmbeddings(const std::vector<std::string> &input,
+    std::vector<float> &embedding, int &tokens_used)
+{
+    std::string combined_input;
+    for(const auto &s:input)
+    {
+        combined_input+=s;
+    }
+    return getEmbeddings(combined_input, embedding, tokens_used);
+}
+
 bool LlamaInterface::isModelDownloaded(const LlamaModelInfo &modelInfo) const
 {
     if(modelInfo.filePath)
@@ -351,48 +376,69 @@ bool LlamaInterface::isLoaded(const std::string &modelName) const
     return m_model!=nullptr&&m_ctx!=nullptr;
 }
 
-bool LlamaInterface::loadModel(const std::string &modelName)
+ErrorCode LlamaInterface::loadModel(const std::string &modelName)
 {
     if(m_modelInfo&&m_modelInfo->model==modelName)
     {
-        return true;
+        return ErrorCode::Success;
     }
 
-    auto it=std::find_if(m_llamaModels.begin(), m_llamaModels.end(),
-        [&](const LlamaModelInfo &info)
+    auto modelInfo=ModelManager::instance().getModelInfo(modelName);
+
+    if(!modelInfo)
+    {
+        spdlog::error("Llama model not found in ModelManager: {}", modelName);
+        return ErrorCode::ModelNotFound;
+    }
+
+    if(!modelInfo->filePath)
+    {
+        auto it=std::find_if(m_llamaModels.begin(), m_llamaModels.end(),
+            [&](const LlamaModelInfo &info)
+            {
+                return info.modelInfo.model==modelName;
+            });
+
+        if(it==m_llamaModels.end())
         {
-            return info.modelInfo.model==modelName;
-        });
+            spdlog::error("Llama model not found in llama config: {}", modelName);
+            return ErrorCode::ModelNotFound;
+        }
 
-    if(it==m_llamaModels.end())
-    {
-        spdlog::error("Llama model not found in llama config: {}", modelName);
-        return false;
+        LlamaModelInfo &llamaModelInfo=*it;
+
+        if(llamaModelInfo.downloadStatus==DownloadStatus::InProgress)
+        {
+            return ErrorCode::ModelDownloading;
+        }
+        if(llamaModelInfo.downloadStatus==DownloadStatus::Failed)
+        {
+            spdlog::error("Llama model download failed: {}", llamaModelInfo.downloadError);
+            return ErrorCode::ModelDownloadFailed;
+        }
+
+        if(!isModelDownloaded(llamaModelInfo))
+        {
+            downloadModel(llamaModelInfo);
+            return ErrorCode::ModelDownloading;
+        }
+        modelInfo->filePath=llamaModelInfo.filePath;
     }
 
-    if(it->downloadStatus==DownloadStatus::InProgress)
-    {
-        return false;
-    }
-
-    if(!isModelDownloaded(*it))
-    {
-        downloadModel(*it);
-        return false;
-    }
-
-    m_modelInfo=it->modelInfo;
+    m_modelInfo=modelInfo;
 
     auto mparams=llama_model_default_params();
-    const char *modelPath=it->filePath?it->filePath->c_str():m_modelInfo->model.c_str();
-    m_model=llama_load_model_from_file(modelPath, mparams);
+    const char *modelPath=modelInfo->filePath->c_str();
+    m_model=llama_model_load_from_file(modelPath, mparams);
+
     if(!m_model)
     {
         spdlog::error("Failed to load model: {}", modelPath);
-        return false;
+        return ErrorCode::ModelLoadError;
     }
 
     auto cparams=llama_context_default_params();
+
     cparams.n_ctx=m_modelInfo->contextWindow;
     cparams.n_threads=std::thread::hardware_concurrency();
     cparams.n_threads_batch=std::thread::hardware_concurrency();
@@ -402,67 +448,10 @@ bool LlamaInterface::loadModel(const std::string &modelName)
     if(!m_ctx)
     {
         spdlog::error("Failed to create context for model: {}", m_modelInfo->model);
+        return ErrorCode::ModelLoadError;
     }
-    return m_ctx!=nullptr;
+    return ErrorCode::Success;
 }
 
-void LlamaInterface::loadLlamaConfig()
-{
-    std::filesystem::path configPath="configs/defaults/models/llama.json";
-    if(!std::filesystem::exists(configPath))
-    {
-        return;
-    }
 
-    try
-    {
-        std::ifstream file(configPath);
-        nlohmann::json config=nlohmann::json::parse(file);
-
-        if(!config.contains("models")||!config["models"].is_array())
-        {
-            return;
-        }
-
-        for(const auto &modelJson:config["models"])
-        {
-            LlamaModelInfo info;
-
-            if(!modelJson.contains("model")||!modelJson.contains("provider"))
-            {
-                continue;
-            }
-
-            info.modelInfo.model=modelJson["model"].get<std::string>();
-            info.modelInfo.provider=modelJson["provider"].get<std::string>();
-
-            if(modelJson.contains("download_url"))
-            {
-                info.downloadUrl=modelJson["download_url"].get<std::string>();
-            }
-            if(modelJson.contains("file_path"))
-            {
-                info.filePath=modelJson["file_path"].get<std::string>();
-            }
-            if(modelJson.contains("file_hash"))
-            {
-                info.fileHash=modelJson["file_hash"].get<std::string>();
-            }
-            if(modelJson.contains("context_window"))
-            {
-                info.modelInfo.contextWindow=modelJson["context_window"].get<int>();
-            }
-            if(modelJson.contains("max_output_tokens"))
-            {
-                info.modelInfo.maxOutputTokens=modelJson["max_output_tokens"].get<int>();
-            }
-            m_llamaModels.push_back(info);
-        }
-    }
-    catch(const std::exception &e)
-    {
-        spdlog::error("Failed to load llama config: {}", e.what());
-    }
-}
-
-} // namespace hermesaxiom
+} // namespace arbiterAI

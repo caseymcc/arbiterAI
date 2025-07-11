@@ -1,17 +1,33 @@
-#ifndef _hermesaxiom_providers_baseProvider_h_
-#define _hermesaxiom_providers_baseProvider_h_
+#ifndef _arbiterAI_providers_baseProvider_h_
+#define _arbiterAI_providers_baseProvider_h_
 
-#include "hermesaxiom/hermesaxiom.h"
+#include "arbiterAI/modelManager.h"
+#include "arbiterAI/arbiterAI.h"
 #include <functional>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
+struct EmbeddingRequest;
+struct EmbeddingResponse;
+
+/**
+ * @class BaseProvider
+ * @brief Abstract base class for model providers
+ *
+ * Provides common interface for:
+ * - Text completion
+ * - Embedding generation
+ * - Configuration management
+ * - Error handling
+ */
 class BaseProvider
 {
 public:
     BaseProvider(const std::string provider);
     virtual ~BaseProvider()=default;
+
+    virtual void initialize(const std::vector<ModelInfo>& models) {}
 
     virtual ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response)=0;
@@ -32,6 +48,6 @@ protected:
     std::string m_provider;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_baseProvider_h_
+#endif//_arbiterAI_providers_baseProvider_h_

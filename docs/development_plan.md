@@ -1,8 +1,8 @@
-# Project Plan: hermesaxiom
+# Project Plan: arbiterAI
 
 ## 1\. Project Overview
 
-  * **Project Name:** hermesaxiom
+  * **Project Name:** arbiterAI
 
   * **Description:** A modern, high-performance C++17 library designed to provide a unified, embeddable interface for interacting with various Large Language Model (LLM) providers. It aims to simplify the process of integrating LLM capabilities into C++ applications by offering a single, consistent API. This library is envisioned as a foundational component for C++ developers building AI-powered applications that require robust, efficient, and flexible LLM integration without being tied to a single provider. The library will include robust configuration management that can retrieve model definitions directly from a GitHub repository, incorporating schema versioning to ensure backward compatibility. For local models like Llama, configurations will specify model download URLs and cryptographic hashes for verification. Furthermore, it will support efficient batch completions for scenarios involving numerous file updates, provide detailed cost tracking, estimation, and allow for setting usage limits, and incorporate intelligent caching for frequently requested completions to optimize performance and reduce API expenses.
 
@@ -16,7 +16,7 @@
 
   * **Unified API:** A single, intuitive API for both standard (synchronous) and streaming (asynchronous) responses, offering a consistent interaction model regardless of the underlying LLM provider.
 
-  * **Provider Abstraction:** Implemented through a clean provider pattern using the hermesaxiom::providers::BaseLLM interface, enabling easy integration of new LLM services with minimal changes to core logic. This design ensures loose coupling and maintainability.
+  * **Provider Abstraction:** Implemented through a clean provider pattern using the arbiterAI::providers::BaseLLM interface, enabling easy integration of new LLM services with minimal changes to core logic. This design ensures loose coupling and maintainability.
 
   * **Initial Supported Providers:**
 
@@ -34,7 +34,7 @@
 
 ## 3\. Proposed Architecture
 
-The library's architecture is designed to be modular and extensible. The client application interacts with the main hermesaxiom API, which uses the ModelManager to determine the correct provider for a given model. A factory will then create the appropriate provider instance to handle the request.
+The library's architecture is designed to be modular and extensible. The client application interacts with the main arbiterAI API, which uses the ModelManager to determine the correct provider for a given model. A factory will then create the appropriate provider instance to handle the request.
 
 ```mermaid
 graph TD
@@ -42,8 +42,8 @@ graph TD
         A[Client Code]
     end
 
-    subgraph hermesaxiom Library
-        B[hermesaxiom API<br>(completion, streamingCompletion)]
+    subgraph arbiterAI Library
+        B[arbiterAI API<br>(completion, streamingCompletion)]
         C[ModelManager]
         D{Provider Factory}
         subgraph LLM Providers
@@ -90,33 +90,51 @@ graph TD
 
   - [x] **Refine ModelManager:** Enhance configuration loading to support multiple config files and environment variables for API keys.
   - [x] **Implement llama.cpp Provider:** Add support for local models by interacting with a llama.cpp server instance.
-  - [ ] **Unit Testing:** Integrate a testing framework (e.g., GoogleTest) and write initial tests for the ModelManager and providers.
-  - [ ] **Documentation:** Add Doxygen-style comments to all public headers to enable automated documentation generation.
+  - [x] **Unit Testing:** Integrate a testing framework (e.g., GoogleTest) and write initial tests for the ModelManager and providers.
+  - [x] **Documentation:** Add Doxygen-style comments to all public headers to enable automated documentation generation.
 
 ### Phase 2: API and Feature Expansion
 
-*Goal: Make the library more powerful and flexible, incorporating advanced configuration and efficiency features.
+*Goal: Make the library more powerful and flexible, incorporating advanced configuration and efficiency features.*
 
-  - [ ] **Embeddings API:** Introduce a `hermesaxiom::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
-  - [ ] **Full Streaming Support:** Fully implement and test the `streamingCompletion` function across all providers, ensuring robust and efficient asynchronous response handling.
+  - [x] **Embeddings API:** Introduce a `arbiterAI::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
+  - [x] **Full Streaming Support:** Fully implement and test the `streamingCompletion` function across all providers, ensuring robust and efficient asynchronous response handling.
+  - [x] **Dynamic Configuration Management:**
+    - [x] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
+    - [x] **Provide ranking/prefered models:** Include in the model configuration a way of ranking the models and provide a way for the library to select preferred models if suggestions are not provided.
+    - [x] **Default model and embedding models** Provide a set of default model configurations.
+    - [x] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
+  - [X] **Testing** Create tests for the above tasks and make sure everything is functioning.
+  - [x] **Project Renaming:** The project was renamed from `hermesaxiom` to `arbiterAI` to better reflect its purpose as a neutral arbiter between different LLM providers.
+
+### Phase 3: Remote Configuration
+
+*Goal: Provide remote configurations that can be updated outside of the library updates.*
+
+  - [ ] **Configuration Location:** Move the configurations (configs directory) to its own repo https://github.com/caseymcc/arbiterAI_config.git (repo is created on github but not initialized)
+  - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from the central GitHub repository, enabling dynamic updates and centralized management.
+  - [ ] **Check For Updates:** When the library opens query the GitHub repo for any updates.
+  - [ ] **Configuration Versioning within Repository:** Beyond schema versioning, implement a system for versioning the configuration files themselves within the arbiterAI_config repository (e.g., using Git tags or a dedicated versioning scheme). This allows the library to request specific configuration versions and roll back if a new configuration introduces issues.
+  - [ ] **User Notification/Logging for Updates:** Implement logging to inform the user or application developer when configurations are updated (or fail to update) from the remote repository. This provides transparency and aids in debugging.
+  - [ ] **Environment-Specific Overrides:** Consider allowing users to provide local configuration files that can override specific settings from the remotely loaded configurations. This provides flexibility for environment-specific adjustments (e.g., different API keys for development vs. production) without modifying the central remote configurations.
+
+### Phase 4: Improve performance
+
+*Goal: Improve fucntionality and performance.*
+
   - [ ] **Advanced Completion Options:** Extend `CompletionRequest` to include a comprehensive set of parameters (e.g., `top_p`, `stop sequences`, `temperature`, `presence_penalty`, `frequency_penalty`) and map them accurately to provider-specific APIs.
-  - [ ] **Dynamic Configuration Management:**
-      - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from a central GitHub repository, enabling dynamic updates and centralized management.
-      - [ ] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
-      - [ ] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
   - [ ] **Completion Efficiency & Management:**
       - [ ] **Batch Completions:** Implement an API for sending multiple completion requests in a single batch to supported providers, optimizing throughput and reducing overhead for scenarios with many small updates or independent queries.
       - [ ] **Advanced Caching:** Implement a configurable, persistent local caching mechanism for LLM responses, significantly reducing latency and API costs for repeated identical queries. This cache should be tunable (e.g., TTL, size limits).
       - [ ] **Cost Tracking, Estimation & Limits:** Enhance `CompletionResponse` to include detailed token usage (`prompt_tokens`, `completion_tokens`) and estimated cost per request. Implement an internal mechanism to track cumulative costs across providers, provide real-time cost estimation, and enforce configurable usage limits or trigger alerts when thresholds are approached.
 
-### Phase 3: Tooling, Deployment, and Extensibility
+### Phase 5: Tooling, Deployment, and Extensibility
 
 *Goal: Improve usability, demonstrate capabilities, and add advanced features.*
-
   - [ ] **Implement OpenRouter Provider:** Add support for the OpenRouter API aggregator, expanding the range of accessible models and providers.
-  - [ ] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `hermesaxiom` library, demonstrating various completion and embedding functionalities.
-  - [ ] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `hermesaxiom` can power a backend service and enabling easy migration for existing OpenAI API users.
-  - [ ] **Packaging:** Configure CMake to generate package files, allowing other CMake projects to easily find and use `hermesaxiom` via `find_package`.
+  - [ ] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `arbiterAI` library, demonstrating various completion and embedding functionalities.
+  - [ ] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `arbiterAI` can power a backend service and enabling easy migration for existing OpenAI API users.
+  - [ ] **Packaging:** Configure CMake to generate package files, allowing other CMake projects to easily find and use `arbiterAI` via `find_package`.
   - [ ] **Continuous Integration:** Set up a GitHub Actions workflow to automatically build the project, run all unit tests, and potentially run integration tests on pull requests and commits, ensuring code quality and stability.
 
 ## 5\. Suggestions for Future Development

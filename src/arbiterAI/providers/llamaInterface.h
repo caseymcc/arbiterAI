@@ -1,7 +1,7 @@
-#ifndef _hermesaxiom_providers_llamaInterface_h_
-#define _hermesaxiom_providers_llamaInterface_h_
+#ifndef _arbiterAI_providers_llamaInterface_h_
+#define _arbiterAI_providers_llamaInterface_h_
 
-#include "hermesaxiom/modelDownloader.h"
+#include "arbiterAI/modelDownloader.h"
 
 #include <future>
 #include <map>
@@ -10,7 +10,7 @@
 
 #include <llama.h>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 struct LlamaModelInfo
@@ -30,6 +30,8 @@ public:
 
     ~LlamaInterface();
 
+    void setModels(const std::vector<ModelInfo> &models);
+
     ErrorCode completion(const std::string &prompt, std::string &result);
 
     ErrorCode streamingCompletion(const std::string &prompt,
@@ -37,16 +39,16 @@ public:
 
     ErrorCode getEmbeddings(const std::string &input,
         std::vector<float> &embedding, int &tokens_used);
+    ErrorCode getEmbeddings(const std::vector<std::string> &input,
+        std::vector<float> &embedding, int &tokens_used);
 
     bool isLoaded(const std::string &modelName) const;
-    bool loadModel(const std::string &modelName);
+    ErrorCode loadModel(const std::string &modelName);
 
 private:
     LlamaInterface();
 
-
     void initialize();
-    void loadLlamaConfig();
     bool isModelDownloaded(const LlamaModelInfo &modelInfo) const;
     void downloadModel(LlamaModelInfo &modelInfo);
     DownloadStatus getDownloadStatus(const std::string &modelName, std::string &error);
@@ -60,6 +62,6 @@ private:
     std::map<std::string, std::future<void>> m_downloadFutures;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_llamaInterface_h_
+#endif//_arbiterAI_providers_llamaInterface_h_

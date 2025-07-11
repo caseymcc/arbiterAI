@@ -1,6 +1,6 @@
-#include "hermesaxiom/providers/deepseek.h"
+#include "arbiterAI/providers/deepseek.h"
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 Deepseek::Deepseek()
@@ -191,7 +191,7 @@ ErrorCode Deepseek::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     std::string apiKey;
-    auto result=getApiKey(request.model, request.api_key, apiKey);
+    auto result=getApiKey(request.model, std::nullopt, apiKey);
     if(result!=ErrorCode::Success)
     {
         return result;
@@ -201,7 +201,10 @@ ErrorCode Deepseek::getEmbeddings(const EmbeddingRequest &request,
 
     nlohmann::json body;
     body["model"]=request.model;
-    body["input"]=request.input;
+    std::visit([&body](auto &&arg)
+        {
+            body["input"]=arg;
+        }, request.input);
 
     std::string embeddingUrl="https://api.deepseek.com/embeddings";
 
@@ -241,8 +244,13 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
         return ErrorCode::InvalidResponse;
     }
 
-    response.embedding=jsonResponse["data"][0]["embedding"].get<std::vector<float>>();
-    response.provider="deepseek";
+    for(const auto &data_item:jsonResponse["data"])
+    {
+        Embedding emb;
+        emb.index=data_item["index"];
+        emb.embedding=data_item["embedding"].get<std::vector<float>>();
+        response.data.push_back(emb);
+    }
 
     if(jsonResponse.contains("model"))
     {
@@ -252,10 +260,12 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     if(jsonResponse.contains("usage")&&
         jsonResponse["usage"].contains("total_tokens"))
     {
-        response.tokens_used=jsonResponse["usage"]["total_tokens"];
+        response.usage.total_tokens=jsonResponse["usage"]["total_tokens"];
+        response.usage.prompt_tokens=jsonResponse["usage"]["prompt_tokens"];
+        response.usage.completion_tokens=0;
     }
 
     return ErrorCode::Success;
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

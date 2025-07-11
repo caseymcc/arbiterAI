@@ -1,10 +1,10 @@
-#include "hermesaxiom/providers/baseProvider.h"
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/modelManager.h"
 #include <cstdlib>
 #include <algorithm>
 #include <string>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 BaseProvider::BaseProvider(std::string provider)
@@ -52,15 +52,10 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
     return ErrorCode::ApiKeyNotFound;
 }
 
-ErrorCode BaseProvider::getEmbeddings(const EmbeddingRequest &request,
-    EmbeddingResponse &response)
-{
-    return ErrorCode::NotImplemented;
-}
 
-DownloadStatus BaseProvider::getDownloadStatus(const std::string& modelName, std::string& error)
+DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     return DownloadStatus::Completed;
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

@@ -1,10 +1,10 @@
-#ifndef _hermesaxiom_providers_anthropic_h_
-#define _hermesaxiom_providers_anthropic_h_
+#ifndef _arbiterAI_providers_anthropic_h_
+#define _arbiterAI_providers_anthropic_h_
 
-#include "hermesaxiom/providers/baseProvider.h"
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/modelManager.h"
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 class Anthropic : public BaseProvider
@@ -23,6 +23,6 @@ public:
 private:
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_anthropic_h_
+#endif//_arbiterAI_providers_anthropic_h_

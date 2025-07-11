@@ -1,9 +1,11 @@
 {
-    "name": "hermesaxiom",
+    "name": "arbiterai",
     "version": "0.1.0",
     "dependencies": [
         "cpr",
+        "gtest",
         "nlohmann-json",
+        "json-schema-validator",
         "yaml-cpp",
         "cpp-httplib",
         "llama-cpp",

@@ -1,5 +1,5 @@
 # Project Overview
-- **Project Name**: hermesaxiom
+- **Project Name**: arbiterAI
 
 - **Description**: A modern, high-performance C++17 library designed to provide a unified, embeddable interface for interacting with various Large Language Model (LLM) providers. It aims to simplify the process of integrating LLM capabilities into C++ applications by offering a single, consistent API. This library is envisioned as a foundational component for C++ developers building AI-powered applications that require robust, efficient, and flexible LLM integration without being tied to a single provider.
 
@@ -22,7 +22,7 @@
 # Core Features
 - Unified API: A single, intuitive API for both standard (synchronous) and streaming (asynchronous) responses, offering a consistent interaction model regardless of the underlying LLM provider.
 
-- Provider Abstraction: Implemented through a clean provider pattern using the hermesaxiom::providers::BaseLLM interface, enabling easy integration of new LLM services with minimal changes to core logic. This design ensures loose coupling and maintainability.
+- Provider Abstraction: Implemented through a clean provider pattern using the arbiterAI::providers::BaseLLM interface, enabling easy integration of new LLM services with minimal changes to core logic. This design ensures loose coupling and maintainability.
 
 - Initial Supported Providers:
 
@@ -38,7 +38,7 @@
 
 
 
-Configuration Management: A robust hermesaxiom::ModelManager to dynamically load model configurations, provider endpoints, and API keys from multiple sources:
+Configuration Management: A robust arbiterAI::ModelManager to dynamically load model configurations, provider endpoints, and API keys from multiple sources:
 
 File-based: Support for YAML/JSON configuration files (e.g., models.yaml, config.json).
 
@@ -46,7 +46,7 @@ Environment Variables: Secure fallback and override capabilities using environme
 
 Prioritization: Clear rules for configuration precedence (e.g., environment variables override file configs).
 
-Clear Error Handling: A well-defined ErrorCode enum, combined with custom exception types (e.g., hermesaxiom::LLMError, hermesaxiom::ConfigError), for predictable, robust, and granular error reporting, allowing client applications to handle specific failure modes effectively.
+Clear Error Handling: A well-defined ErrorCode enum, combined with custom exception types (e.g., arbiterAI::LLMError, arbiterAI::ConfigError), for predictable, robust, and granular error reporting, allowing client applications to handle specific failure modes effectively.
 
 Modern C++ Design: Utilizes C++17 features (e.g., std::optional, std::variant, structured bindings) and established, high-quality third-party libraries (cpr for asynchronous HTTP requests, nlohmann_json for efficient JSON parsing and generation, spdlog for logging) for reliability, performance, and maintainability.
 
