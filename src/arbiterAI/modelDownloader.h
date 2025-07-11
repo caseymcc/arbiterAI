@@ -22,7 +22,7 @@ public:
     std::future<bool> downloadModel(const std::string &downloadUrl, const std::string &filePath, const std::optional<std::string> &fileHash, const std::optional<std::string> &minClientVersion=std::nullopt, const std::optional<std::string> &maxClientVersion=std::nullopt);
 
     // GitHub API functions
-    std::future<nlohmann::json> downloadConfigFromRepo(const std::string &repoOwner, const std::string &repoName, const std::string &configPath, const std::optional<std::string> &ref=std::nullopt);
+    std::future<std::optional<nlohmann::json>> downloadConfigFromRepo(const std::string &repoOwner, const std::string &repoName, const std::string &configPath, const std::optional<std::string> &ref=std::nullopt);
     std::optional<nlohmann::json> parseConfigFromJSON(const std::string &jsonContent);
 
 private:

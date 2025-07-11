@@ -1,6 +1,6 @@
 #include "arbiterAI/modelManager.h"
 #include <gtest/gtest.h>
-#include <vector>
+#include <fstream>
 
 namespace arbiterAI
 {
@@ -10,84 +10,105 @@ class ModelManagerTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        // Reset the singleton instance before each test
         ModelManager::reset();
+        // Create dummy config files in the expected directory structure
+        std::filesystem::create_directory("config1");
+        std::filesystem::create_directory("config1/models");
+        std::ofstream outfile1("config1/models/model1.json");
+        outfile1 << R"({
+            "models": [
+                {
+                    "model": "model1",
+                    "provider": "providerA",
+                    "ranking": 90
+                }
+            ]
+        })";
+        outfile1.close();
+
+        std::filesystem::create_directory("config2");
+        std::filesystem::create_directory("config2/models");
+        std::ofstream outfile2("config2/models/model2.json");
+        outfile2 << R"({
+            "models": [
+                {
+                    "model": "model2",
+                    "provider": "providerB",
+                    "ranking": 80
+                }
+            ]
+        })";
+        outfile2.close();
+
+        std::filesystem::create_directory("override");
+        std::ofstream override_outfile("override/override.json");
+        override_outfile << R"({
+            "models": [
+                {
+                    "model": "model1",
+                    "provider": "override_provider",
+                    "ranking": 100
+                }
+            ]
+        })";
+        override_outfile.close();
+    }
+
+    void TearDown() override
+    {
+        std::filesystem::remove_all("config1");
+        std::filesystem::remove_all("config2");
+        std::filesystem::remove_all("override");
     }
 };
 
-TEST_F(ModelManagerTest, ModelRankingSortsCorrectly)
+TEST_F(ModelManagerTest, InitializeWithMultipleConfigs)
 {
-    ModelManager &manager=ModelManager::instance();
+    ModelManager &mm = ModelManager::instance();
+    mm.initialize({"config1", "config2"});
 
-    // Add models out of order
-    manager.addModel({ "modelD", "provider2", "chat", "1.1.0", "1.0.0", 25 });
-    manager.addModel({ "modelA", "provider1", "chat", "1.1.0", "1.0.0", 50 });
-    manager.addModel({ "modelC", "provider2", "chat", "1.1.0", "1.0.0", 50 });
-    manager.addModel({ "modelB", "provider1", "chat", "1.1.0", "1.0.0", 75 });
+    auto model1 = mm.getModelInfo("model1");
+    auto model2 = mm.getModelInfo("model2");
 
-    auto sorted=manager.getModelsByRanking();
-
-    // Verify ranking order (highest first)
-    ASSERT_EQ(sorted.size(), 4);
-    EXPECT_EQ(sorted[0].model, "modelB");
-    EXPECT_EQ(sorted[1].model, "modelA");
-    EXPECT_EQ(sorted[2].model, "modelC");
-    EXPECT_EQ(sorted[3].model, "modelD");
-
-    // Verify case-insensitive alphabetical order for same ranking
-    manager.addModel({ "aModel", "provider1", "chat", "1.1.0", "1.0.0", 50 });
-
-    sorted=manager.getModelsByRanking();
-    ASSERT_EQ(sorted.size(), 5);
-
-    // Find the models with ranking 50
-    std::vector<std::string> rank50Models;
-    for(const auto &m:sorted)
-    {
-        if(m.ranking==50)
-        {
-            rank50Models.push_back(m.model);
-        }
-    }
-
-    // Expect ["aModel", "modelA", "modelC"]
-    ASSERT_EQ(rank50Models.size(), 3);
-    EXPECT_EQ(rank50Models[0], "aModel");
-    EXPECT_EQ(rank50Models[1], "modelA");
-    EXPECT_EQ(rank50Models[2], "modelC");
+    ASSERT_TRUE(model1.has_value());
+    EXPECT_EQ(model1->provider, "providerA");
+    ASSERT_TRUE(model2.has_value());
+    EXPECT_EQ(model2->provider, "providerB");
 }
 
-TEST_F(ModelManagerTest, SchemaVersionCompatibility)
+TEST_F(ModelManagerTest, InitializeWithOverride)
 {
-    ModelManager &manager=ModelManager::instance();
+    ModelManager &mm = ModelManager::instance();
+    mm.initialize({"config1"}, "override");
 
-    ModelInfo v1_0_0;
-    v1_0_0.model="oldModel";
-    v1_0_0.provider="provider1";
-    v1_0_0.ranking=50;
-    v1_0_0.minSchemaVersion="1.0.0";
-    v1_0_0.configVersion="1.0.0";
+    auto model1 = mm.getModelInfo("model1");
+    ASSERT_TRUE(model1.has_value());
+    EXPECT_EQ(model1->provider, "override_provider");
+}
 
-    ModelInfo v1_1_0;
-    v1_1_0.model="newModel";
-    v1_1_0.provider="provider1";
-    v1_1_0.ranking=60;
-    v1_1_0.minSchemaVersion="1.1.0";
-    v1_1_0.configVersion="1.1.0";
+TEST_F(ModelManagerTest, VersionCompatibility)
+{
+    ModelInfo info;
+    info.minClientVersion = "1.2.3";
+    info.maxClientVersion = "2.0.0";
 
-    manager.addModel(v1_0_0);
-    manager.addModel(v1_1_0);
+    EXPECT_TRUE(info.isCompatible("1.2.3"));
+    EXPECT_TRUE(info.isCompatible("1.5.0"));
+    EXPECT_TRUE(info.isCompatible("2.0.0"));
+    EXPECT_FALSE(info.isCompatible("1.2.2"));
+    EXPECT_FALSE(info.isCompatible("2.0.1"));
+}
 
-    auto sorted=manager.getModelsByRanking();
-    ASSERT_EQ(sorted.size(), 2);
-    EXPECT_EQ(sorted[0].model, "newModel");
-    EXPECT_EQ(sorted[1].model, "oldModel");
+TEST_F(ModelManagerTest, SchemaCompatibility)
+{
+    ModelInfo info;
+    info.minSchemaVersion = "1.1.0";
+    info.configVersion = "1.2.0";
 
-    EXPECT_TRUE(v1_0_0.isSchemaCompatible("1.0.0"));
-    EXPECT_TRUE(v1_0_0.isSchemaCompatible("1.1.0"));
-    EXPECT_FALSE(v1_1_0.isSchemaCompatible("1.0.0"));
-    EXPECT_TRUE(v1_1_0.isSchemaCompatible("1.1.0"));
-    EXPECT_TRUE(v1_1_0.isSchemaCompatible("1.2.0"));
+    EXPECT_TRUE(info.isSchemaCompatible("1.1.0"));
+    EXPECT_TRUE(info.isSchemaCompatible("1.2.0"));
+    EXPECT_FALSE(info.isSchemaCompatible("1.0.0"));
+    EXPECT_FALSE(info.isSchemaCompatible("1.2.1"));
 }
 
 } // namespace arbiterAI

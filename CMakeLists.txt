@@ -77,7 +77,8 @@ add_library(arbiterai
 
 target_include_directories(arbiterai
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<INSTALL_INTERFACE:include>
         ${LLAMA_INCLUDE_DIRS}
     PRIVATE
         ${PICOSHA2_INCLUDE_DIRS}
@@ -104,6 +105,8 @@ target_link_libraries(arbiterai
         tests/main.cpp
         tests/modelManagerTests.cpp
         tests/modelDownloaderTests.cpp
+        tests/configDownloaderTests.cpp
+        tests/arbiterAITests.cpp
     )
     
     target_link_libraries(arbiterai_tests
@@ -135,7 +138,7 @@ target_link_libraries(arbiterAI-proxy
 )
 
 install(
-    TARGETS arbiterAI
+    TARGETS arbiterai
     EXPORT arbiterAITargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

@@ -87,8 +87,6 @@ public:
         std::string &error) override;
 
 private:
-    std::mutex m_downloadMutex;
-    std::unordered_map<std::string, DownloadState> m_downloadStatus;
 };
 
 } // namespace arbiterAI

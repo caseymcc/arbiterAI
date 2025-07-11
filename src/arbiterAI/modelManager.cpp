@@ -11,13 +11,28 @@
 namespace arbiterAI
 {
 
+bool ModelInfo::isCompatible(const std::string &clientVersion) const
+{
+    if (minClientVersion.has_value() && ModelManager::compareVersions(clientVersion, minClientVersion.value()) < 0)
+    {
+        return false;
+    }
+    if (maxClientVersion.has_value() && ModelManager::compareVersions(clientVersion, maxClientVersion.value()) > 0)
+    {
+        return false;
+    }
+    return true;
+}
+
 bool ModelInfo::isSchemaCompatible(const std::string &schemaVersion) const
 {
-    if(minSchemaVersion.empty()||schemaVersion.empty())
+    if (minSchemaVersion.empty() || schemaVersion.empty())
     {
         return true;
     }
-    return ModelManager::compareVersions(schemaVersion, minSchemaVersion)>=0;
+    // Check if schemaVersion is >= minSchemaVersion and <= configVersion
+    return ModelManager::compareVersions(schemaVersion, minSchemaVersion) >= 0 &&
+           ModelManager::compareVersions(schemaVersion, configVersion) <= 0;
 }
 
 ModelManager &ModelManager::instance()
@@ -311,6 +326,8 @@ bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
             if(it!=m_models.end())
             {
                 // Update existing model settings
+                it->provider = info.provider;
+                it->ranking = info.ranking;
                 if(modelJson.contains("mode"))
                 {
                     it->mode=info.mode;

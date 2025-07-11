@@ -32,14 +32,9 @@ Llama::Llama() :
 
 DownloadStatus Llama::getDownloadStatus(const std::string &modelName, std::string &error)
 {
-    std::lock_guard<std::mutex> lock(m_downloadMutex);
-    auto it=m_downloadStatus.find(modelName);
-    if(it!=m_downloadStatus.end())
-    {
-        error=it->second.error;
-        return it->second.status;
-    }
-    return DownloadStatus::Completed;
+    LlamaInterface &llamaInterface=LlamaInterface::instance();
+
+    return llamaInterface.getDownloadStatus(modelName, error);
 }
 
 /**
