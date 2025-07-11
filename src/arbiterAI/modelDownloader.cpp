@@ -1,5 +1,5 @@
-#include "hermesaxiom/modelDownloader.h"
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/modelDownloader.h"
+#include "arbiterAI/modelManager.h"
 #include <picosha2.h>
 #include <cpr/cpr.h>
 #include <fstream>
@@ -8,12 +8,12 @@
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 ModelDownloader::ModelDownloader(std::shared_ptr<IFileVerifier> fileVerifier) : m_fileVerifier(fileVerifier)
 {
-    m_cacheDir=std::filesystem::temp_directory_path()/"hermesaxiom_cache";
+    m_cacheDir=std::filesystem::temp_directory_path()/"arbiterAI_cache";
     std::filesystem::create_directories(m_cacheDir);
     spdlog::debug("Initialized cache directory at: {}", m_cacheDir.string());
 }
@@ -178,4 +178,4 @@ void ModelDownloader::saveToCache(const std::string &key, const nlohmann::json &
     }
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

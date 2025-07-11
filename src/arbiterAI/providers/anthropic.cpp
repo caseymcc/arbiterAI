@@ -1,6 +1,6 @@
-#include "hermesaxiom/providers/anthropic.h"
+#include "arbiterAI/providers/anthropic.h"
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 Anthropic::Anthropic()
@@ -38,4 +38,4 @@ ErrorCode Anthropic::getEmbeddings(const EmbeddingRequest &request,
     return ErrorCode::NotImplemented;
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

@@ -1,5 +1,5 @@
 ### **Build Environment:**
-All `HermesAxiom` build, execution, debugging, and testing occurs within a Docker container located at `docker/Dockerfile`.
+All `ArbiterAI` build, execution, debugging, and testing occurs within a Docker container located at `docker/Dockerfile`.
 
   * ### Managing the Docker Container
     The runDocker.sh script, located in the project root, manages the Docker container lifecycle.

@@ -1,54 +1,54 @@
-#include "hermesaxiom/hermesaxiom.h"
-#include "hermesaxiom/modelManager.h"
-#include "hermesaxiom/providers/baseProvider.h"
-#include "hermesaxiom/providers/openai.h"
-#include "hermesaxiom/providers/anthropic.h"
-#include "hermesaxiom/providers/deepseek.h"
-#include "hermesaxiom/providers/llama.h"
+#include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/modelManager.h"
+#include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/providers/openai.h"
+#include "arbiterAI/providers/anthropic.h"
+#include "arbiterAI/providers/deepseek.h"
+#include "arbiterAI/providers/llama.h"
 
 #include <memory>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 namespace
 {
-class hermesaxiom_
+class arbiterAI_
 {
 public:
-    static hermesaxiom_ &instance()
+    static arbiterAI_ &instance()
     {
-        static hermesaxiom_ instance;
+        static arbiterAI_ instance;
         return instance;
     }
 
-    hermesaxiom_()=default;
+    arbiterAI_()=default;
 
     bool initialized=false;
     std::map<std::string, std::unique_ptr<BaseProvider>> providers;
 };
 }
 
-hermesaxiom::hermesaxiom()
+arbiterAI::arbiterAI()
 {
 }
 
-hermesaxiom::~hermesaxiom()
+arbiterAI::~arbiterAI()
 {
 }
 
-ErrorCode hermesaxiom::initialize(const std::vector<std::filesystem::path> &configPaths)
+ErrorCode arbiterAI::initialize(const std::vector<std::filesystem::path> &configPaths)
 {
     if(!ModelManager::instance().initialize(configPaths))
     {
         return ErrorCode::InvalidRequest;
     }
 
-    hermesaxiom_::instance().initialized=true;
+    arbiterAI_::instance().initialized=true;
     return ErrorCode::Success;
 }
 
-bool hermesaxiom::doesModelNeedApiKey(const std::string &model)
+bool arbiterAI::doesModelNeedApiKey(const std::string &model)
 {
     auto provider=ModelManager::instance().getProvider(model);
 
@@ -60,7 +60,7 @@ bool hermesaxiom::doesModelNeedApiKey(const std::string &model)
     return *provider=="openai";
 }
 
-bool hermesaxiom::supportModelDownload(const std::string &provider)
+bool arbiterAI::supportModelDownload(const std::string &provider)
 {
     if(provider=="llama")
     {
@@ -94,7 +94,7 @@ namespace
 {
 BaseProvider *getProvider(const std::string &providerName)
 {
-    auto &hermes=hermesaxiom_::instance();
+    auto &hermes=arbiterAI_::instance();
 
     // Check if we already have an Provider instance for this provider
     auto it=hermes.providers.find(providerName);
@@ -117,9 +117,9 @@ BaseProvider *getProvider(const std::string &providerName)
 }
 }
 
-ErrorCode hermesaxiom::completion(const CompletionRequest &request, CompletionResponse &response)
+ErrorCode arbiterAI::completion(const CompletionRequest &request, CompletionResponse &response)
 {
-    if(!hermesaxiom_::instance().initialized)
+    if(!arbiterAI_::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -140,10 +140,10 @@ ErrorCode hermesaxiom::completion(const CompletionRequest &request, CompletionRe
     return provider->completion(request, response);
 }
 
-ErrorCode hermesaxiom::streamingCompletion(const CompletionRequest &request,
+ErrorCode arbiterAI::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    if(!hermesaxiom_::instance().initialized)
+    if(!arbiterAI_::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -164,9 +164,9 @@ ErrorCode hermesaxiom::streamingCompletion(const CompletionRequest &request,
     return provider->streamingCompletion(request, callback);
 }
 
-ErrorCode hermesaxiom::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
+ErrorCode arbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
 {
-    if(!hermesaxiom_::instance().initialized)
+    if(!arbiterAI_::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -187,7 +187,7 @@ ErrorCode hermesaxiom::getEmbeddings(const EmbeddingRequest &request, EmbeddingR
     return provider->getEmbeddings(request, response);
 }
 
-ErrorCode hermesaxiom::getDownloadStatus(const std::string &modelName, std::string &error)
+ErrorCode arbiterAI::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(modelName);
     if(!modelInfo)
@@ -216,4 +216,4 @@ ErrorCode hermesaxiom::getDownloadStatus(const std::string &modelName, std::stri
 }
 
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

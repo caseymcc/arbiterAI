@@ -1,7 +1,7 @@
 #!/bin/bash
 
-IMAGE_NAME="hermesaxiom-dev"
-CONTAINER_NAME="hermesaxiom-dev-container"
+IMAGE_NAME="arbiterai-dev"
+CONTAINER_NAME="arbiterai-dev-container"
 
 REBUILD=false
 STOP=false

@@ -1,6 +1,6 @@
-#include "hermesaxiom/providers/llamaInterface.h"
+#include "arbiterAI/providers/llamaInterface.h"
 
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/modelManager.h"
 
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <thread>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 LlamaInterface &LlamaInterface::instance()
@@ -454,4 +454,4 @@ ErrorCode LlamaInterface::loadModel(const std::string &modelName)
 }
 
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

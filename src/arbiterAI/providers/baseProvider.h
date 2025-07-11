@@ -1,11 +1,11 @@
-#ifndef _hermesaxiom_providers_baseProvider_h_
-#define _hermesaxiom_providers_baseProvider_h_
+#ifndef _arbiterAI_providers_baseProvider_h_
+#define _arbiterAI_providers_baseProvider_h_
 
-#include "hermesaxiom/modelManager.h"
-#include "hermesaxiom/hermesaxiom.h"
+#include "arbiterAI/modelManager.h"
+#include "arbiterAI/arbiterAI.h"
 #include <functional>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 struct EmbeddingRequest;
@@ -48,6 +48,6 @@ protected:
     std::string m_provider;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_baseProvider_h_
+#endif//_arbiterAI_providers_baseProvider_h_

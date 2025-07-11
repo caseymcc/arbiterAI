@@ -1,7 +1,7 @@
-#include "hermesaxiom/providers/llama.h"
+#include "arbiterAI/providers/llama.h"
 
-#include "hermesaxiom/providers/llamaInterface.h"
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/providers/llamaInterface.h"
+#include "arbiterAI/modelManager.h"
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -17,7 +17,7 @@
 #include <condition_variable>
 #include <atomic>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 using json=nlohmann::json;
@@ -164,4 +164,4 @@ ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
     return code;
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

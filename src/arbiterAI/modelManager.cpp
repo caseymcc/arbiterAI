@@ -1,4 +1,4 @@
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/modelManager.h"
 #include <nlohmann/json.hpp>
 #include <nlohmann/json-schema.hpp>
 #include <fstream>
@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <sstream>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 bool ModelInfo::isSchemaCompatible(const std::string &schemaVersion) const
@@ -43,7 +43,7 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
     std::vector<std::string> default_models={ "anthropic.json", "deepseek.json", "llama.json", "openai.json" };
     for(const auto &model_file:default_models)
     {
-        std::filesystem::path defaultConfigPath="/app/src/hermesaxiom/configs/defaults/models";
+        std::filesystem::path defaultConfigPath="/app/src/arbiterAI/configs/defaults/models";
         if(loadModelFile(defaultConfigPath/model_file))
         {
             anyLoaded=true;
@@ -438,4 +438,4 @@ void ModelManager::addModel(const ModelInfo &modelInfo)
     }
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

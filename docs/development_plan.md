@@ -1,8 +1,8 @@
-# Project Plan: hermesaxiom
+# Project Plan: arbiterAI
 
 ## 1\. Project Overview
 
-  * **Project Name:** hermesaxiom
+  * **Project Name:** arbiterAI
 
   * **Description:** A modern, high-performance C++17 library designed to provide a unified, embeddable interface for interacting with various Large Language Model (LLM) providers. It aims to simplify the process of integrating LLM capabilities into C++ applications by offering a single, consistent API. This library is envisioned as a foundational component for C++ developers building AI-powered applications that require robust, efficient, and flexible LLM integration without being tied to a single provider. The library will include robust configuration management that can retrieve model definitions directly from a GitHub repository, incorporating schema versioning to ensure backward compatibility. For local models like Llama, configurations will specify model download URLs and cryptographic hashes for verification. Furthermore, it will support efficient batch completions for scenarios involving numerous file updates, provide detailed cost tracking, estimation, and allow for setting usage limits, and incorporate intelligent caching for frequently requested completions to optimize performance and reduce API expenses.
 
@@ -16,7 +16,7 @@
 
   * **Unified API:** A single, intuitive API for both standard (synchronous) and streaming (asynchronous) responses, offering a consistent interaction model regardless of the underlying LLM provider.
 
-  * **Provider Abstraction:** Implemented through a clean provider pattern using the hermesaxiom::providers::BaseLLM interface, enabling easy integration of new LLM services with minimal changes to core logic. This design ensures loose coupling and maintainability.
+  * **Provider Abstraction:** Implemented through a clean provider pattern using the arbiterAI::providers::BaseLLM interface, enabling easy integration of new LLM services with minimal changes to core logic. This design ensures loose coupling and maintainability.
 
   * **Initial Supported Providers:**
 
@@ -34,7 +34,7 @@
 
 ## 3\. Proposed Architecture
 
-The library's architecture is designed to be modular and extensible. The client application interacts with the main hermesaxiom API, which uses the ModelManager to determine the correct provider for a given model. A factory will then create the appropriate provider instance to handle the request.
+The library's architecture is designed to be modular and extensible. The client application interacts with the main arbiterAI API, which uses the ModelManager to determine the correct provider for a given model. A factory will then create the appropriate provider instance to handle the request.
 
 ```mermaid
 graph TD
@@ -42,8 +42,8 @@ graph TD
         A[Client Code]
     end
 
-    subgraph hermesaxiom Library
-        B[hermesaxiom API<br>(completion, streamingCompletion)]
+    subgraph arbiterAI Library
+        B[arbiterAI API<br>(completion, streamingCompletion)]
         C[ModelManager]
         D{Provider Factory}
         subgraph LLM Providers
@@ -97,7 +97,7 @@ graph TD
 
 *Goal: Make the library more powerful and flexible, incorporating advanced configuration and efficiency features.
 
-  - [x] **Embeddings API:** Introduce a `hermesaxiom::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
+  - [x] **Embeddings API:** Introduce a `arbiterAI::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
   - [x] **Full Streaming Support:** Fully implement and test the `streamingCompletion` function across all providers, ensuring robust and efficient asynchronous response handling.
   - [ ] **Dynamic Configuration Management:**
     - [ ] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
@@ -121,9 +121,9 @@ graph TD
 
 *Goal: Improve usability, demonstrate capabilities, and add advanced features.*
   - [ ] **Implement OpenRouter Provider:** Add support for the OpenRouter API aggregator, expanding the range of accessible models and providers.
-  - [ ] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `hermesaxiom` library, demonstrating various completion and embedding functionalities.
-  - [ ] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `hermesaxiom` can power a backend service and enabling easy migration for existing OpenAI API users.
-  - [ ] **Packaging:** Configure CMake to generate package files, allowing other CMake projects to easily find and use `hermesaxiom` via `find_package`.
+  - [ ] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `arbiterAI` library, demonstrating various completion and embedding functionalities.
+  - [ ] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `arbiterAI` can power a backend service and enabling easy migration for existing OpenAI API users.
+  - [ ] **Packaging:** Configure CMake to generate package files, allowing other CMake projects to easily find and use `arbiterAI` via `find_package`.
   - [ ] **Continuous Integration:** Set up a GitHub Actions workflow to automatically build the project, run all unit tests, and potentially run integration tests on pull requests and commits, ensuring code quality and stability.
 
 ## 5\. Suggestions for Future Development

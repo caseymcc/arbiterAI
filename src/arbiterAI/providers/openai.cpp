@@ -1,14 +1,13 @@
-#include "hermesaxiom/providers/deepseek.h"
+#include "arbiterAI/providers/openai.h"
 
-namespace hermesaxiom
+namespace arbiterAI
 {
-
-Deepseek::Deepseek()
-    : BaseProvider("deepseek")
+OpenAI::OpenAI()
+    : BaseProvider("openai")
 {
 }
 
-ErrorCode Deepseek::completion(const CompletionRequest &request,
+ErrorCode OpenAI::completion(const CompletionRequest &request,
     CompletionResponse &response)
 {
     std::string apiKey;
@@ -18,13 +17,15 @@ ErrorCode Deepseek::completion(const CompletionRequest &request,
         return result;
     }
 
-    // Create request body and headers
-    auto body=createRequestBody(request, false);
+    // Create request headers and body
     auto headers=createHeaders(apiKey);
+    auto body=createRequestBody(request, false);
+
+    std::string completionUrl=m_apiUrl+"/chat/completions";
 
     // Make the API request
     auto raw_response=cpr::Post(
-        cpr::Url{ m_apiUrl },
+        cpr::Url{ completionUrl },
         headers,
         cpr::Body{ body.dump() },
         cpr::VerifySsl{ true }
@@ -40,13 +41,13 @@ ErrorCode Deepseek::completion(const CompletionRequest &request,
     return parseResponse(raw_response, response);
 }
 
-nlohmann::json Deepseek::createRequestBody(const CompletionRequest &request, bool streaming)
+nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool streaming)
 {
     nlohmann::json body;
-    body["model"]="deepseek-chat";  // Currently only supporting main chat model
+    body["model"]=request.model;
     body["stream"]=streaming;
 
-    // Convert messages to Deepseek format
+    // Convert messages to OpenAI format
     nlohmann::json messages=nlohmann::json::array();
     for(const auto &msg:request.messages)
     {
@@ -67,26 +68,25 @@ nlohmann::json Deepseek::createRequestBody(const CompletionRequest &request, boo
         body["max_tokens"]=request.max_tokens.value();
     }
 
-    // Add default values for required fields
-    body["frequency_penalty"]=0;
-    body["presence_penalty"]=0;
-    body["response_format"]={ {"type", "text"} };
-    body["stream"]=false;
-    body["top_p"]=1;
-
     return body;
 }
 
-cpr::Header Deepseek::createHeaders(const std::string &apiKey)
+cpr::Header OpenAI::createHeaders(const std::string &apiKey)
 {
+    if(apiKey.empty())
+    {
+        return cpr::Header{
+            {"Content-Type", "application/json"}
+        };
+    }
+
     return cpr::Header{
         {"Content-Type", "application/json"},
-        {"Accept", "application/json"},
         {"Authorization", "Bearer "+apiKey}
     };
 }
 
-ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
+ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
     CompletionResponse &response)
 {
     nlohmann::json jsonResponse;
@@ -109,7 +109,7 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     }
 
     response.text=jsonResponse["choices"][0]["message"]["content"];
-    response.provider="deepseek";
+    response.provider="openai";
 
     if(jsonResponse.contains("model"))
     {
@@ -126,7 +126,7 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     return ErrorCode::Success;
 }
 
-ErrorCode Deepseek::streamingCompletion(const CompletionRequest &request,
+ErrorCode OpenAI::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
     std::string apiKey;
@@ -139,10 +139,11 @@ ErrorCode Deepseek::streamingCompletion(const CompletionRequest &request,
 
     auto headers=createHeaders(apiKey);
     auto body=createRequestBody(request, true);
+    std::string completionUrl=m_apiUrl+"/chat/completions";
 
     // Setup streaming request
     auto session=cpr::Session();
-    session.SetUrl(cpr::Url{ m_apiUrl });
+    session.SetUrl(cpr::Url{ completionUrl });
     session.SetHeader(headers);
     session.SetBody(body.dump());
     session.SetVerifySsl(true);
@@ -177,7 +178,7 @@ ErrorCode Deepseek::streamingCompletion(const CompletionRequest &request,
             return true;
         }));
 
-    auto response=session.Get();
+    auto response=session.Post();
 
     if(response.status_code!=200)
     {
@@ -187,7 +188,7 @@ ErrorCode Deepseek::streamingCompletion(const CompletionRequest &request,
     return ErrorCode::Success;
 }
 
-ErrorCode Deepseek::getEmbeddings(const EmbeddingRequest &request,
+ErrorCode OpenAI::getEmbeddings(const EmbeddingRequest &request,
     EmbeddingResponse &response)
 {
     std::string apiKey;
@@ -206,7 +207,7 @@ ErrorCode Deepseek::getEmbeddings(const EmbeddingRequest &request,
             body["input"]=arg;
         }, request.input);
 
-    std::string embeddingUrl="https://api.deepseek.com/embeddings";
+    std::string embeddingUrl=m_apiUrl+"/embeddings";
 
     auto raw_response=cpr::Post(
         cpr::Url{ embeddingUrl },
@@ -223,7 +224,7 @@ ErrorCode Deepseek::getEmbeddings(const EmbeddingRequest &request,
     return parseResponse(raw_response, response);
 }
 
-ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
+ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
     EmbeddingResponse &response)
 {
     nlohmann::json jsonResponse;
@@ -268,4 +269,5 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     return ErrorCode::Success;
 }
 
-} // namespace hermesaxiom
+
+} // namespace arbiterAI

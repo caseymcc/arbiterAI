@@ -1,10 +1,10 @@
-#include "hermesaxiom/providers/baseProvider.h"
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/modelManager.h"
 #include <cstdlib>
 #include <algorithm>
 #include <string>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 BaseProvider::BaseProvider(std::string provider)
@@ -58,4 +58,4 @@ DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std
     return DownloadStatus::Completed;
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

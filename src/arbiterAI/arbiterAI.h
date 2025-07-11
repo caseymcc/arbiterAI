@@ -1,6 +1,6 @@
 /**
- * @file hermesaxiom.h
- * @brief Core API for HermesAxiom LLM integration library
+ * @file arbiterAI.h
+ * @brief Core API for ArbiterAI LLM integration library
  *
  * Provides interfaces for:
  * - Model management and initialization
@@ -9,8 +9,8 @@
  * - Model download status tracking
  */
 
-#ifndef _hermesaxiom_hermes_h_
-#define _hermesaxiom_hermes_h_
+#ifndef _arbiterAI_arbiterAI_h_
+#define _arbiterAI_arbiterAI_h_
 
 #include <string>
 #include <memory>
@@ -21,12 +21,12 @@
 #include <functional>
 #include <variant>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 /**
  * @enum ErrorCode
- * @brief Error codes returned by HermesAxiom operations
+ * @brief Error codes returned by ArbiterAI operations
  */
 enum class ErrorCode
 {
@@ -137,8 +137,8 @@ struct EmbeddingResponse
 };
 
 /**
- * @class hermesaxiom
- * @brief Main interface for HermesAxiom LLM operations
+ * @class arbiterAI
+ * @brief Main interface for ArbiterAI LLM operations
  *
  * Provides methods for:
  * - Initializing the library
@@ -146,14 +146,14 @@ struct EmbeddingResponse
  * - Embedding generation
  * - Model download status tracking
  */
-class hermesaxiom
+class arbiterAI
 {
 public:
-    hermesaxiom();
-    ~hermesaxiom();
+    arbiterAI();
+    ~arbiterAI();
 
     /**
-     * @brief Initialize the HermesAxiom library
+     * @brief Initialize the ArbiterAI library
      * @param configPaths List of paths to configuration files
      * @return ErrorCode indicating success or failure
      */
@@ -195,6 +195,6 @@ public:
     ErrorCode getDownloadStatus(const std::string &modelName, std::string &error);
 };
 
-}//namespace hermesaxiom
+}//namespace arbiterAI
 
-#endif//_hermesaxiom_hermes_h
+#endif//_arbiterAI_hermes_h

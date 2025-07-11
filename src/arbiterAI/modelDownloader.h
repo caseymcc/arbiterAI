@@ -1,9 +1,9 @@
-#ifndef _hermesaxiom_modelDownloader_h_
-#define _hermesaxiom_modelDownloader_h_
+#ifndef _arbiterAI_modelDownloader_h_
+#define _arbiterAI_modelDownloader_h_
 
-#include "hermesaxiom/modelManager.h"
-#include "hermesaxiom/hermesaxiom.h"
-#include "hermesaxiom/fileVerifier.h"
+#include "arbiterAI/modelManager.h"
+#include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/fileVerifier.h"
 
 #include <string>
 #include <future>
@@ -11,7 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <memory>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 class ModelDownloader
@@ -34,6 +34,6 @@ private:
     std::shared_ptr<IFileVerifier> m_fileVerifier;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif // _hermesaxiom_modelDownloader_h_
+#endif // _arbiterAI_modelDownloader_h_

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://hermesaxiom/schemas/model-config/v1.0.0",
-  "title": "HermesAxiom Model Configuration",
+  "$id": "https://arbiterAI/schemas/model-config/v1.0.0",
+  "title": "ArbiterAI Model Configuration",
   "description": "Schema for model configuration files",
   "type": "object",
   "required": ["schema_version", "models"],

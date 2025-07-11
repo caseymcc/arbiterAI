@@ -1,8 +1,8 @@
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/modelManager.h"
 #include <gtest/gtest.h>
 #include <vector>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 class ModelManagerTest : public ::testing::Test
@@ -90,4 +90,4 @@ TEST_F(ModelManagerTest, SchemaVersionCompatibility)
     EXPECT_TRUE(v1_1_0.isSchemaCompatible("1.2.0"));
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

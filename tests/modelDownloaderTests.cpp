@@ -1,13 +1,13 @@
-#include "hermesaxiom/modelDownloader.h"
+#include "arbiterAI/modelDownloader.h"
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <fstream>
 #include <memory>
-#include "hermesaxiom/fileVerifier.h"
+#include "arbiterAI/fileVerifier.h"
 #include <httplib.h>
 #include <thread>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 class MockFileVerifier : public IFileVerifier {
@@ -66,4 +66,4 @@ TEST_F(ModelDownloaderTest, DownloadModelWithCorrectHash)
     std::remove(filePath.c_str());
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

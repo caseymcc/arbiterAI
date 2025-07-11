@@ -1,7 +1,7 @@
-#ifndef _hermesaxiom_providers_llamaInterface_h_
-#define _hermesaxiom_providers_llamaInterface_h_
+#ifndef _arbiterAI_providers_llamaInterface_h_
+#define _arbiterAI_providers_llamaInterface_h_
 
-#include "hermesaxiom/modelDownloader.h"
+#include "arbiterAI/modelDownloader.h"
 
 #include <future>
 #include <map>
@@ -10,7 +10,7 @@
 
 #include <llama.h>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 struct LlamaModelInfo
@@ -62,6 +62,6 @@ private:
     std::map<std::string, std::future<void>> m_downloadFutures;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_llamaInterface_h_
+#endif//_arbiterAI_providers_llamaInterface_h_

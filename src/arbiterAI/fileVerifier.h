@@ -1,9 +1,9 @@
-#ifndef _hermesaxiom_fileVerifier_h_
-#define _hermesaxiom_fileVerifier_h_
+#ifndef _arbiterAI_fileVerifier_h_
+#define _arbiterAI_fileVerifier_h_
 
 #include <string>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 class IFileVerifier
@@ -19,6 +19,6 @@ public:
     bool verifyFile(const std::string &filePath, const std::string &expectedHash) override;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif // _hermesaxiom_fileVerifier_h_
+#endif // _arbiterAI_fileVerifier_h_

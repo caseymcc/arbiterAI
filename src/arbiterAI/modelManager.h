@@ -1,5 +1,5 @@
-#ifndef _hermesaxiom_modelManager_h_
-#define _hermesaxiom_modelManager_h_
+#ifndef _arbiterAI_modelManager_h_
+#define _arbiterAI_modelManager_h_
 
 #include <string>
 #include <vector>
@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <nlohmann/json-schema.hpp>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 class ModelManager; // Forward declaration
@@ -75,6 +75,6 @@ private:
     bool m_initialized{ false };
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_modelManager_h_
+#endif//_arbiterAI_modelManager_h_

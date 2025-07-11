@@ -1,9 +1,9 @@
-#include "hermesaxiom/fileVerifier.h"
+#include "arbiterAI/fileVerifier.h"
 #include <picosha2.h>
 #include <fstream>
 #include <vector>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 bool FileVerifier::verifyFile(const std::string &filePath, const std::string &expectedHash)
@@ -21,4 +21,4 @@ bool FileVerifier::verifyFile(const std::string &filePath, const std::string &ex
     return hash_hex_str == expectedHash;
 }
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

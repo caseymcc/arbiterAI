@@ -6,10 +6,10 @@
  * supporting both local and remote Llama model instances.
  */
 
-#ifndef _hermesaxiom_providers_llama_h_
-#define _hermesaxiom_providers_llama_h_
+#ifndef _arbiterAI_providers_llama_h_
+#define _arbiterAI_providers_llama_h_
 
-#include "hermesaxiom/providers/baseProvider.h"
+#include "arbiterAI/providers/baseProvider.h"
 #include <vector>
 #include <mutex>
 #include <unordered_map>
@@ -18,7 +18,7 @@
 #include <future>
 #include <atomic>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 struct DownloadState
 {
@@ -90,6 +90,6 @@ private:
     std::unordered_map<std::string, DownloadState> m_downloadStatus;
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_llama_h_
+#endif//_arbiterAI_providers_llama_h_

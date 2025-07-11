@@ -3,12 +3,12 @@
 #include <string>
 #include <vector>
 #include <stdexcept>
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/modelManager.h"
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
 // Other utility functions can remain here
 // compareVersions() has been moved to ModelManager class
 
-} // namespace hermesaxiom
+} // namespace arbiterAI

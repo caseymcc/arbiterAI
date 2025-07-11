@@ -1,19 +1,19 @@
-#ifndef _hermesaxiom_providers_deepseek_h_
-#define _hermesaxiom_providers_deepseek_h_
+#ifndef _arbiterAI_providers_openai_h_
+#define _arbiterAI_providers_openai_h_
 
-#include "hermesaxiom/providers/baseProvider.h"
-#include "hermesaxiom/modelManager.h"
+#include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/modelManager.h"
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
-namespace hermesaxiom
+namespace arbiterAI
 {
 
-class Deepseek : public BaseProvider
+class OpenAI : public BaseProvider
 {
 public:
-Deepseek();
+    OpenAI();
 
     ErrorCode completion(const CompletionRequest &request,
         CompletionResponse &response) override;
@@ -33,10 +33,10 @@ private:
     nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming=false);
     cpr::Header createHeaders(const std::string &apiKey);
 
-    std::string m_apiUrl="https://api.deepseek.com/chat/completions";
+    std::string m_apiUrl="https://api.openai.com/v1";
     std::string m_apiKey="";
 };
 
-} // namespace hermesaxiom
+} // namespace arbiterAI
 
-#endif//_hermesaxiom_providers_deepseek_h_
+#endif//_arbiterAI_providers_openai_h_

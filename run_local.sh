@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CONTAINER_NAME="hermesaxiom_dev"
+CONTAINER_NAME="arbiterAI_dev"
 DEFAULT_CACHE_DIR="$HOME/.cache/vcpkg"
 VCPKG_CACHE_DIR="${VCPKG_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
 HOST_API_PORT=8080  # Default port for the host API
@@ -34,9 +34,9 @@ if [ $STOP -eq 1 ]; then
 fi
 
 # Check if image exists or rebuild is requested
-if [ $REBUILD -eq 1 ] || ! docker image inspect hermesaxiom >/dev/null 2>&1; then
+if [ $REBUILD -eq 1 ] || ! docker image inspect arbiterAI >/dev/null 2>&1; then
     echo "Building Docker image..."
-    docker build -t hermesaxiom -f docker/Dockerfile .
+    docker build -t arbiterAI -f docker/Dockerfile .
 fi
 
 # Set up network options for container
@@ -50,4 +50,4 @@ docker run -it --rm \
     -v $(pwd):/app \
     -v "$VCPKG_CACHE_DIR":/vcpkg_cache \
     $NETWORK_OPTS \
-    hermesaxiom
+    arbiterAI
