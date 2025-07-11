@@ -104,7 +104,8 @@ graph TD
     - [x] **Provide ranking/prefered models:** Include in the model configuration a way of ranking the models and provide a way for the library to select preferred models if suggestions are not provided.
     - [x] **Default model and embedding models** Provide a set of default model configurations.
     - [x] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
-  - [X] **Testing** Create tests for the above tasks and make sure eveything is functioning.
+  - [X] **Testing** Create tests for the above tasks and make sure everything is functioning.
+  - [x] **Project Renaming:** The project was renamed from `hermesaxiom` to `arbiterAI` to better reflect its purpose as a neutral arbiter between different LLM providers.
 
 ### Phase 3: Remote Configuration
 

@@ -1,6 +1,6 @@
 
 
-Rules for Project Structur:
+Rules for Project Structure:
 - Filenames
   - camelCase file name
   - c/c++: .h/.cpp and .inl

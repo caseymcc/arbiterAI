@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CONTAINER_NAME="arbiterAI_dev"
+CONTAINER_NAME="arbiterai_dev"
 DEFAULT_CACHE_DIR="$HOME/.cache/vcpkg"
 VCPKG_CACHE_DIR="${VCPKG_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
 HOST_API_PORT=8080  # Default port for the host API
