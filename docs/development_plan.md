@@ -95,19 +95,29 @@ graph TD
 
 ### Phase 2: API and Feature Expansion
 
-*Goal: Make the library more powerful and flexible, incorporating advanced configuration and efficiency features.
+*Goal: Make the library more powerful and flexible, incorporating advanced configuration and efficiency features.*
 
   - [x] **Embeddings API:** Introduce a `arbiterAI::embedding()` function for generating vector embeddings from text, supporting various embedding models and providers.
   - [x] **Full Streaming Support:** Fully implement and test the `streamingCompletion` function across all providers, ensuring robust and efficient asynchronous response handling.
-  - [ ] **Dynamic Configuration Management:**
-    - [ ] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
-    - [ ] **Provide ranking/prefered models:** Include in the model configuration a way of ranking the models and provide a way for the library to select preferred models if suggestions are not provided.
-    - [ ] **Default model and embedding models** Provide a set of default model configurations.
-    - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from a central GitHub repository, enabling dynamic updates and centralized management.
-    - [ ] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
-  - [ ] **Testing** Create tests for the above tasks and make sure eveything is functioning.
+  - [x] **Dynamic Configuration Management:**
+    - [x] **Llama Model Download & Verification:** For `llama.cpp` configurations, extend the schema to include fields for model download URLs and corresponding SHA256 hashes, enabling automated, secure download and integrity verification of local models.
+    - [x] **Provide ranking/prefered models:** Include in the model configuration a way of ranking the models and provide a way for the library to select preferred models if suggestions are not provided.
+    - [x] **Default model and embedding models** Provide a set of default model configurations.
+    - [x] **Configuration Schema Versioning:** Introduce a `schema_version` field to all configuration files and implement robust logic within the ModelManager to handle different schema versions gracefully, ensuring backward compatibility and preventing older software versions from attempting to load incompatible new schemas.
+  - [X] **Testing** Create tests for the above tasks and make sure eveything is functioning.
 
-### Phase 3: Improve performance
+### Phase 3: Remote Configuration
+
+*Goal: Provide remote configurations that can be updated outside of the library updates.*
+
+  - [ ] **Configuration Location:** Move the configurations (configs directory) to its own repo https://github.com/caseymcc/arbiterAI_config.git (repo is created on github but not initialized)
+  - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from the central GitHub repository, enabling dynamic updates and centralized management.
+  - [ ] **Check For Updates:** When the library opens query the GitHub repo for any updates.
+  - [ ] **Configuration Versioning within Repository:** Beyond schema versioning, implement a system for versioning the configuration files themselves within the arbiterAI_config repository (e.g., using Git tags or a dedicated versioning scheme). This allows the library to request specific configuration versions and roll back if a new configuration introduces issues.
+  - [ ] **User Notification/Logging for Updates:** Implement logging to inform the user or application developer when configurations are updated (or fail to update) from the remote repository. This provides transparency and aids in debugging.
+  - [ ] **Environment-Specific Overrides:** Consider allowing users to provide local configuration files that can override specific settings from the remotely loaded configurations. This provides flexibility for environment-specific adjustments (e.g., different API keys for development vs. production) without modifying the central remote configurations.
+
+### Phase 4: Improve performance
 
 *Goal: Improve fucntionality and performance.*
 
@@ -117,7 +127,7 @@ graph TD
       - [ ] **Advanced Caching:** Implement a configurable, persistent local caching mechanism for LLM responses, significantly reducing latency and API costs for repeated identical queries. This cache should be tunable (e.g., TTL, size limits).
       - [ ] **Cost Tracking, Estimation & Limits:** Enhance `CompletionResponse` to include detailed token usage (`prompt_tokens`, `completion_tokens`) and estimated cost per request. Implement an internal mechanism to track cumulative costs across providers, provide real-time cost estimation, and enforce configurable usage limits or trigger alerts when thresholds are approached.
 
-### Phase 4: Tooling, Deployment, and Extensibility
+### Phase 5: Tooling, Deployment, and Extensibility
 
 *Goal: Improve usability, demonstrate capabilities, and add advanced features.*
   - [ ] **Implement OpenRouter Provider:** Add support for the OpenRouter API aggregator, expanding the range of accessible models and providers.
