@@ -2,6 +2,7 @@
 #define _arbiterAI_providers_llamaInterface_h_
 
 #include "arbiterAI/modelDownloader.h"
+#include "arbiterAI/arbiterAI.h"
 
 #include <future>
 #include <map>
@@ -32,9 +33,9 @@ public:
 
     void setModels(const std::vector<ModelInfo> &models);
 
-    ErrorCode completion(const std::string &prompt, std::string &result);
+    ErrorCode completion(const CompletionRequest &request, std::string &result);
 
-    ErrorCode streamingCompletion(const std::string &prompt,
+    ErrorCode streamingCompletion(const CompletionRequest &request,
         std::function<void(const std::string &)> callback);
 
     ErrorCode getEmbeddings(const std::string &input,

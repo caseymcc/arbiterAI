@@ -111,31 +111,31 @@ graph TD
 
 *Goal: Provide remote configurations that can be updated outside of the library updates.*
 
-  - [ ] **Configuration Location:** Move the configurations (configs directory) to its own repo https://github.com/caseymcc/arbiterAI_config.git (repo is created on github but not initialized)
-  - [ ] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from the central GitHub repository, enabling dynamic updates and centralized management.
-  - [ ] **Check For Updates:** When the library opens query the GitHub repo for any updates.
-  - [ ] **Configuration Versioning within Repository:** Beyond schema versioning, implement a system for versioning the configuration files themselves within the arbiterAI_config repository (e.g., using Git tags or a dedicated versioning scheme). This allows the library to request specific configuration versions and roll back if a new configuration introduces issues.
-  - [ ] **User Notification/Logging for Updates:** Implement logging to inform the user or application developer when configurations are updated (or fail to update) from the remote repository. This provides transparency and aids in debugging.
-  - [ ] **Environment-Specific Overrides:** Consider allowing users to provide local configuration files that can override specific settings from the remotely loaded configurations. This provides flexibility for environment-specific adjustments (e.g., different API keys for development vs. production) without modifying the central remote configurations.
+  - [x] **Configuration Location:** Move the configurations (configs directory) to its own repo https://github.com/caseymcc/arbiterAI_config.git (repo is created on github but not initialized)
+  - [x] **Remote Configuration Loading:** Implement functionality to download and cache default model configurations from the central GitHub repository, enabling dynamic updates and centralized management.
+  - [x] **Check For Updates:** When the library opens query the GitHub repo for any updates.
+  - [x] **Configuration Versioning within Repository:** Beyond schema versioning, implement a system for versioning the configuration files themselves within the arbiterAI_config repository (e.g., using Git tags or a dedicated versioning scheme). This allows the library to request specific configuration versions and roll back if a new configuration introduces issues.
+  - [x] **User Notification/Logging for Updates:** Implement logging to inform the user or application developer when configurations are updated (or fail to update) from the remote repository. This provides transparency and aids in debugging.
+  - [x] **Environment-Specific Overrides:** Consider allowing users to provide local configuration files that can override specific settings from the remotely loaded configurations. This provides flexibility for environment-specific adjustments (e.g., different API keys for development vs. production) without modifying the central remote configurations.
 
 ### Phase 4: Improve performance
 
 *Goal: Improve fucntionality and performance.*
 
-  - [ ] **Advanced Completion Options:** Extend `CompletionRequest` to include a comprehensive set of parameters (e.g., `top_p`, `stop sequences`, `temperature`, `presence_penalty`, `frequency_penalty`) and map them accurately to provider-specific APIs.
-  - [ ] **Completion Efficiency & Management:**
-      - [ ] **Batch Completions:** Implement an API for sending multiple completion requests in a single batch to supported providers, optimizing throughput and reducing overhead for scenarios with many small updates or independent queries.
-      - [ ] **Advanced Caching:** Implement a configurable, persistent local caching mechanism for LLM responses, significantly reducing latency and API costs for repeated identical queries. This cache should be tunable (e.g., TTL, size limits).
-      - [ ] **Cost Tracking, Estimation & Limits:** Enhance `CompletionResponse` to include detailed token usage (`prompt_tokens`, `completion_tokens`) and estimated cost per request. Implement an internal mechanism to track cumulative costs across providers, provide real-time cost estimation, and enforce configurable usage limits or trigger alerts when thresholds are approached.
+  - [x] **Advanced Completion Options:** Extend `CompletionRequest` to include a comprehensive set of parameters (e.g., `top_p`, `stop sequences`, `temperature`, `presence_penalty`, `frequency_penalty`) and map them accurately to provider-specific APIs.
+  - [x] **Completion Efficiency & Management:**
+      - [x] **Batch Completions:** Implement an API for sending multiple completion requests in a single batch to supported providers, optimizing throughput and reducing overhead for scenarios with many small updates or independent queries.
+      - [x] **Advanced Caching:** Implement a configurable, persistent local caching mechanism for LLM responses, significantly reducing latency and API costs for repeated identical queries. This cache should be tunable (e.g., TTL, size limits).
+      - [x] **Cost Tracking, Estimation & Limits:** Enhance `CompletionResponse` to include detailed token usage (`prompt_tokens`, `completion_tokens`) and estimated cost per request. Implement an internal mechanism to track cumulative costs across providers, provide real-time cost estimation, and enforce configurable usage limits or trigger alerts when thresholds are approached.
 
 ### Phase 5: Tooling, Deployment, and Extensibility
 
 *Goal: Improve usability, demonstrate capabilities, and add advanced features.*
-  - [ ] **Implement OpenRouter Provider:** Add support for the OpenRouter API aggregator, expanding the range of accessible models and providers.
-  - [ ] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `arbiterAI` library, demonstrating various completion and embedding functionalities.
-  - [ ] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `arbiterAI` can power a backend service and enabling easy migration for existing OpenAI API users.
-  - [ ] **Packaging:** Configure CMake to generate package files, allowing other CMake projects to easily find and use `arbiterAI` via `find_package`.
-  - [ ] **Continuous Integration:** Set up a GitHub Actions workflow to automatically build the project, run all unit tests, and potentially run integration tests on pull requests and commits, ensuring code quality and stability.
+  - [x] **Implement OpenRouter Provider:** Add support for the OpenRouter API aggregator, expanding the range of accessible models and providers.
+  - [x] **Example CLI Tool:** Create a command-line application to serve as a practical usage example of the `arbiterAI` library, demonstrating various completion and embedding functionalities.
+  - [x] **Example HTTP Proxy Server:** Build a separate executable for an OpenAI-compatible HTTP proxy server using a C++ HTTP server library (e.g., httplib), showcasing how `arbiterAI` can power a backend service and enabling easy migration for existing OpenAI API users.
+  - [x] **Packaging:** Configure CMake to generate package files, allowing other CMake projects to easily find and use `arbiterAI` via `find_package`.
+  - [x] **Continuous Integration:** Set up a GitHub Actions workflow to automatically build the project, run all unit tests, and potentially run integration tests on pull requests and commits, ensuring code quality and stability.
 
 ## 5\. Suggestions for Future Development
 

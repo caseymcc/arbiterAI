@@ -3,6 +3,8 @@
 
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/modelManager.h"
+#include <nlohmann/json.hpp>
+#include <cpr/cpr.h>
 
 namespace arbiterAI
 {
@@ -13,6 +15,7 @@ public:
     Anthropic();
 
     ErrorCode completion(const CompletionRequest &request,
+        const ModelInfo &model,
         CompletionResponse &response) override;
 
     ErrorCode streamingCompletion(const CompletionRequest &request,
@@ -21,6 +24,11 @@ public:
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 private:
+    nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming);
+    cpr::Header createHeaders(const std::string &apiKey);
+    ErrorCode parseResponse(const cpr::Response &rawResponse, CompletionResponse &response);
+
+    std::string m_apiUrl;
 };
 
 } // namespace arbiterAI

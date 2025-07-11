@@ -16,6 +16,7 @@ public:
     OpenAI();
 
     ErrorCode completion(const CompletionRequest &request,
+        const ModelInfo &model,
         CompletionResponse &response) override;
 
     ErrorCode streamingCompletion(const CompletionRequest &request,

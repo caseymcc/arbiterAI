@@ -62,6 +62,7 @@ public:
      * @return ErrorCode indicating success or failure
      */
     ErrorCode completion(const CompletionRequest &request,
+        const ModelInfo &model,
         CompletionResponse &response) override;
 
     /**

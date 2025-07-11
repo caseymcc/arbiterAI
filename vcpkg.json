@@ -10,6 +10,8 @@
         "cpp-httplib",
         "llama-cpp",
         "spdlog",
-        "picosha2"
+        "picosha2",
+        "libgit2",
+        "cxxopts"
     ]
 }

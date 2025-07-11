@@ -4,6 +4,7 @@
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/arbiterAI.h"
 #include <functional>
+#include <vector>
 
 namespace arbiterAI
 {
@@ -27,13 +28,16 @@ public:
     BaseProvider(const std::string provider);
     virtual ~BaseProvider()=default;
 
-    virtual void initialize(const std::vector<ModelInfo>& models) {}
+    virtual void initialize(const std::vector<ModelInfo> &models) {}
 
     virtual ErrorCode completion(const CompletionRequest &request,
+        const ModelInfo &model,
         CompletionResponse &response)=0;
 
     virtual ErrorCode streamingCompletion(const CompletionRequest &request,
         std::function<void(const std::string &)> callback)=0;
+
+    virtual std::vector<CompletionResponse> batchCompletion(const std::vector<CompletionRequest> &requests);
 
     virtual ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response)=0;

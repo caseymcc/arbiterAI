@@ -9,6 +9,7 @@ Deepseek::Deepseek()
 }
 
 ErrorCode Deepseek::completion(const CompletionRequest &request,
+    const ModelInfo &model,
     CompletionResponse &response)
 {
     std::string apiKey;
@@ -43,7 +44,7 @@ ErrorCode Deepseek::completion(const CompletionRequest &request,
 nlohmann::json Deepseek::createRequestBody(const CompletionRequest &request, bool streaming)
 {
     nlohmann::json body;
-    body["model"]="deepseek-chat";  // Currently only supporting main chat model
+    body["model"]=request.model;
     body["stream"]=streaming;
 
     // Convert messages to Deepseek format
@@ -66,13 +67,22 @@ nlohmann::json Deepseek::createRequestBody(const CompletionRequest &request, boo
     {
         body["max_tokens"]=request.max_tokens.value();
     }
-
-    // Add default values for required fields
-    body["frequency_penalty"]=0;
-    body["presence_penalty"]=0;
-    body["response_format"]={ {"type", "text"} };
-    body["stream"]=false;
-    body["top_p"]=1;
+    if(request.top_p.has_value())
+    {
+        body["top_p"]=request.top_p.value();
+    }
+    if(request.presence_penalty.has_value())
+    {
+        body["presence_penalty"]=request.presence_penalty.value();
+    }
+    if(request.frequency_penalty.has_value())
+    {
+        body["frequency_penalty"]=request.frequency_penalty.value();
+    }
+    if(request.stop.has_value()&&!request.stop->empty())
+    {
+        body["stop"]=request.stop.value();
+    }
 
     return body;
 }
@@ -120,7 +130,9 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     if(jsonResponse.contains("usage")&&
         jsonResponse["usage"].contains("total_tokens"))
     {
-        response.tokens_used=jsonResponse["usage"]["total_tokens"];
+        response.usage.total_tokens=jsonResponse["usage"]["total_tokens"];
+        response.usage.prompt_tokens=jsonResponse["usage"]["prompt_tokens"];
+        response.usage.completion_tokens=jsonResponse["usage"]["completion_tokens"];
     }
 
     return ErrorCode::Success;

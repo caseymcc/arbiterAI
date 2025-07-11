@@ -1,0 +1,20 @@
+name: C++ CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Docker image
+      run: docker build -t arbiterai-builder -f docker/Dockerfile .
+
+    - name: Run build script
+      run: docker run --rm arbiterai-builder ./build.sh
