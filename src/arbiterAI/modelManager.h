@@ -9,6 +9,8 @@
 #include <nlohmann/json.hpp>
 #include <nlohmann/json-schema.hpp>
 
+#include "configDownloader.h"
+
 namespace arbiterAI
 {
 
@@ -20,6 +22,26 @@ struct DownloadMetadata
     std::string sha256;
     std::string cachePath;
 };
+
+struct Pricing
+{
+    double prompt_token_cost=0.0;
+    double completion_token_cost=0.0;
+};
+
+inline void to_json(nlohmann::json &j, const Pricing &p)
+{
+    j=nlohmann::json{
+        {"prompt_token_cost", p.prompt_token_cost},
+        {"completion_token_cost", p.completion_token_cost}
+    };
+}
+
+inline void from_json(const nlohmann::json &j, Pricing &p)
+{
+    j.at("prompt_token_cost").get_to(p.prompt_token_cost);
+    j.at("completion_token_cost").get_to(p.completion_token_cost);
+}
 
 struct ModelInfo
 {
@@ -40,8 +62,7 @@ struct ModelInfo
     int maxTokens{ 2048 };
     int maxInputTokens{ 3072 };
     int maxOutputTokens{ 1024 };
-    double inputCostPerToken{ 0.0 };
-    double outputCostPerToken{ 0.0 };
+    Pricing pricing;
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;
@@ -53,7 +74,7 @@ public:
     static ModelManager &instance();
     static void reset(); // For testing
 
-    bool initialize(const std::vector<std::filesystem::path> &configPaths, const std::vector<std::string> &remoteUrls={});
+    bool initialize(const std::vector<std::filesystem::path> &configPaths={}, const std::filesystem::path &localOverridePath="");
     std::optional<std::string> getProvider(const std::string &model) const;
     std::optional<ModelInfo> getModelInfo(const std::string &model) const;
     std::vector<ModelInfo> getModels(const std::string &provider) const;
@@ -72,6 +93,7 @@ private:
 
     std::vector<ModelInfo> m_models;
     std::map<std::string, std::string> m_modelProviderMap;
+    ConfigDownloader m_configDownloader;
     bool m_initialized{ false };
 };
 

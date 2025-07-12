@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <algorithm>
 #include <string>
+#include <future>
+#include <vector>
 
 namespace arbiterAI
 {
@@ -56,6 +58,36 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
 DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     return DownloadStatus::Completed;
+}
+
+std::vector<CompletionResponse> BaseProvider::batchCompletion(const std::vector<CompletionRequest> &requests)
+{
+    std::vector<std::future<CompletionResponse>> futures;
+    futures.reserve(requests.size());
+
+    for(const auto &req:requests)
+    {
+        futures.emplace_back(std::async(std::launch::async, [this, req]()
+            {
+                CompletionResponse resp;
+                auto modelInfo=ModelManager::instance().getModelInfo(req.model);
+                if(modelInfo)
+                {
+                    this->completion(req, *modelInfo, resp);
+                    resp.cost=(resp.usage.prompt_tokens*modelInfo->pricing.prompt_token_cost)+(resp.usage.completion_tokens*modelInfo->pricing.completion_token_cost);
+                }
+                return resp;
+            }));
+    }
+
+    std::vector<CompletionResponse> responses;
+    responses.reserve(requests.size());
+    for(auto &fut:futures)
+    {
+        responses.push_back(fut.get());
+    }
+
+    return responses;
 }
 
 } // namespace arbiterAI

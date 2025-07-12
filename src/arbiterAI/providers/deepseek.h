@@ -13,9 +13,10 @@ namespace arbiterAI
 class Deepseek : public BaseProvider
 {
 public:
-Deepseek();
+    Deepseek();
 
     ErrorCode completion(const CompletionRequest &request,
+        const ModelInfo &model,
         CompletionResponse &response) override;
 
     ErrorCode streamingCompletion(const CompletionRequest &request,

@@ -8,6 +8,7 @@ OpenAI::OpenAI()
 }
 
 ErrorCode OpenAI::completion(const CompletionRequest &request,
+    const ModelInfo &model,
     CompletionResponse &response)
 {
     std::string apiKey;
@@ -67,6 +68,22 @@ nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool 
     {
         body["max_tokens"]=request.max_tokens.value();
     }
+    if(request.top_p.has_value())
+    {
+        body["top_p"]=request.top_p.value();
+    }
+    if(request.presence_penalty.has_value())
+    {
+        body["presence_penalty"]=request.presence_penalty.value();
+    }
+    if(request.frequency_penalty.has_value())
+    {
+        body["frequency_penalty"]=request.frequency_penalty.value();
+    }
+    if(request.stop.has_value()&&!request.stop->empty())
+    {
+        body["stop"]=request.stop.value();
+    }
 
     return body;
 }
@@ -120,7 +137,9 @@ ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
     if(jsonResponse.contains("usage")&&
         jsonResponse["usage"].contains("total_tokens"))
     {
-        response.tokens_used=jsonResponse["usage"]["total_tokens"];
+        response.usage.total_tokens=jsonResponse["usage"]["total_tokens"];
+        response.usage.prompt_tokens=jsonResponse["usage"]["prompt_tokens"];
+        response.usage.completion_tokens=jsonResponse["usage"]["completion_tokens"];
     }
 
     return ErrorCode::Success;

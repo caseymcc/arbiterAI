@@ -74,8 +74,14 @@ void LlamaInterface::initialize()
     }
 }
 
-ErrorCode LlamaInterface::completion(const std::string &prompt, std::string &result)
+ErrorCode LlamaInterface::completion(const CompletionRequest &request, std::string &result)
 {
+    std::string prompt;
+    for(const auto &msg:request.messages)
+    {
+        prompt+=msg.content;
+    }
+
     // tokenize the prompt
     std::vector<llama_token> tokens_list(prompt.size());
     int n_tokens=llama_tokenize(llama_model_get_vocab(m_model), prompt.c_str(), prompt.length(), tokens_list.data(), tokens_list.size(), true, false);
@@ -112,26 +118,55 @@ ErrorCode LlamaInterface::completion(const std::string &prompt, std::string &res
     std::vector<llama_token_data> candidates;
     candidates.reserve(n_vocab);
 
+    struct llama_sampler_chain_params params={};
+    struct llama_sampler *sampler_chain=llama_sampler_chain_init(params);
+
+    llama_sampler_chain_add(sampler_chain, llama_sampler_init_penalties(
+        -1,
+        1.0f,
+        request.frequency_penalty.value_or(0.0f),
+        request.presence_penalty.value_or(0.0f)
+    ));
+    if(request.top_p.has_value())
+    {
+        llama_sampler_chain_add(sampler_chain, llama_sampler_init_top_p(*request.top_p, 1));
+    }
+    if(request.temperature.has_value())
+    {
+        llama_sampler_chain_add(sampler_chain, llama_sampler_init_temp(*request.temperature));
+    }
+    llama_sampler_chain_add(sampler_chain, llama_sampler_init_greedy());
+
+    for(const auto &token:tokens_list)
+    {
+        llama_sampler_accept(sampler_chain, token);
+    }
+
     for(int i=0; i<n_len; ++i)
     {
-        auto *logits=llama_get_logits_ith(m_ctx, batch.n_tokens-1);
-
-        candidates.clear();
-        for(llama_token token_id=0; token_id<n_vocab; token_id++)
-        {
-            candidates.push_back({ token_id, logits[token_id], 0.0f });
-        }
-
-        auto max_it=std::max_element(candidates.begin(), candidates.end(),
-            [](const llama_token_data &a, const llama_token_data &b)
-            {
-                return a.logit<b.logit;
-            });
-        const llama_token next_token=max_it->id;
+        const llama_token next_token=llama_sampler_sample(sampler_chain, m_ctx, batch.n_tokens-1);
+        llama_sampler_accept(sampler_chain, next_token);
 
         if(next_token==llama_vocab_eos(llama_model_get_vocab(m_model)))
         {
             break;
+        }
+
+        if(request.stop.has_value())
+        {
+            bool stop_sequence_found=false;
+            for(const auto &stop_word:*request.stop)
+            {
+                if(result.size()>=stop_word.size()&&result.substr(result.size()-stop_word.size())==stop_word)
+                {
+                    stop_sequence_found=true;
+                    break;
+                }
+            }
+            if(stop_sequence_found)
+            {
+                break;
+            }
         }
 
         char piece[16];
@@ -151,19 +186,27 @@ ErrorCode LlamaInterface::completion(const std::string &prompt, std::string &res
         if(llama_decode(m_ctx, batch)!=0)
         {
             spdlog::error("llama_decode failed");
+            llama_sampler_free(sampler_chain);
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
         }
     }
+    llama_sampler_free(sampler_chain);
 
     llama_batch_free(batch);
 
     return ErrorCode::Success;
 }
 
-ErrorCode LlamaInterface::streamingCompletion(const std::string &prompt,
+ErrorCode LlamaInterface::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
+    std::string prompt;
+    for(const auto &msg:request.messages)
+    {
+        prompt+=msg.content;
+    }
+
     // tokenize the prompt
     std::vector<llama_token> tokens_list(prompt.size());
     int n_tokens=llama_tokenize(llama_model_get_vocab(m_model), prompt.c_str(), prompt.length(), tokens_list.data(), tokens_list.size(), true, false);
@@ -200,29 +243,69 @@ ErrorCode LlamaInterface::streamingCompletion(const std::string &prompt,
     std::vector<llama_token_data> candidates;
     candidates.reserve(n_vocab);
 
+    struct llama_sampler_chain_params params={};
+    struct llama_sampler *sampler_chain=llama_sampler_chain_init(params);
+
+    llama_sampler_chain_add(sampler_chain, llama_sampler_init_penalties(
+        -1,
+        1.0f,
+        request.frequency_penalty.value_or(0.0f),
+        request.presence_penalty.value_or(0.0f)
+    ));
+    if(request.top_p.has_value())
+    {
+        llama_sampler_chain_add(sampler_chain, llama_sampler_init_top_p(*request.top_p, 1));
+    }
+    if(request.temperature.has_value())
+    {
+        llama_sampler_chain_add(sampler_chain, llama_sampler_init_temp(*request.temperature));
+    }
+    llama_sampler_chain_add(sampler_chain, llama_sampler_init_greedy());
+
+    for(const auto &token:tokens_list)
+    {
+        llama_sampler_accept(sampler_chain, token);
+    }
+
     for(int i=0; i<n_len; ++i)
     {
-        auto *logits=llama_get_logits_ith(m_ctx, batch.n_tokens-1);
-
-        candidates.clear();
-        for(llama_token token_id=0; token_id<n_vocab; token_id++)
-        {
-            candidates.push_back({ token_id, logits[token_id], 0.0f });
-        }
-
-        auto max_it=std::max_element(candidates.begin(), candidates.end(),
-            [](const llama_token_data &a, const llama_token_data &b)
-            {
-                return a.logit<b.logit;
-            });
-        const llama_token next_token=max_it->id;
+        const llama_token next_token=llama_sampler_sample(sampler_chain, m_ctx, batch.n_tokens-1);
+        llama_sampler_accept(sampler_chain, next_token);
 
         if(next_token==llama_vocab_eos(llama_model_get_vocab(m_model)))
         {
             break;
         }
+
         char piece[16];
+
+        if(request.stop.has_value())
+        {
+            bool stop_sequence_found=false;
+            std::string current_output;
+            int len=llama_token_to_piece(llama_model_get_vocab(m_model), next_token, piece, sizeof(piece), 0, false);
+
+            if(len>0)
+            {
+                current_output.append(piece, len);
+            }
+
+            for(const auto &stop_word:*request.stop)
+            {
+                if(current_output.find(stop_word)!=std::string::npos)
+                {
+                    stop_sequence_found=true;
+                    break;
+                }
+            }
+            if(stop_sequence_found)
+            {
+                break;
+            }
+        }
+        
         int len=llama_token_to_piece(llama_model_get_vocab(m_model), next_token, piece, sizeof(piece), 0, false);
+
         if(len>0)
         {
             callback(std::string(piece, len));
@@ -238,10 +321,12 @@ ErrorCode LlamaInterface::streamingCompletion(const std::string &prompt,
         if(llama_decode(m_ctx, batch)!=0)
         {
             spdlog::error("llama_decode failed");
+            llama_sampler_free(sampler_chain);
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
         }
     }
+    llama_sampler_free(sampler_chain);
 
     llama_batch_free(batch);
 

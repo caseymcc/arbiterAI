@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+ARG DOCKER_VERSION=1.0.0
 FROM ubuntu:22.04
 
 # Install basic build tools and Python 3
@@ -53,4 +55,4 @@ ENV VCPKG_DEFAULT_BINARY_CACHE=/vcpkg_cache
 ENV CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
 
 # Build command (to be run when container starts)
-CMD ["bash"]
+CMD ["tail", "-f", "/dev/null"]

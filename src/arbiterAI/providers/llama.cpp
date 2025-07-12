@@ -32,14 +32,9 @@ Llama::Llama() :
 
 DownloadStatus Llama::getDownloadStatus(const std::string &modelName, std::string &error)
 {
-    std::lock_guard<std::mutex> lock(m_downloadMutex);
-    auto it=m_downloadStatus.find(modelName);
-    if(it!=m_downloadStatus.end())
-    {
-        error=it->second.error;
-        return it->second.status;
-    }
-    return DownloadStatus::Completed;
+    LlamaInterface &llamaInterface=LlamaInterface::instance();
+
+    return llamaInterface.getDownloadStatus(modelName, error);
 }
 
 /**
@@ -65,6 +60,7 @@ void Llama::initialize(const std::vector<ModelInfo> &models)
  * @return ErrorCode indicating success or failure
  */
 ErrorCode Llama::completion(const CompletionRequest &request,
+    const ModelInfo &model,
     CompletionResponse &response)
 {
     LlamaInterface &llamaInterface=LlamaInterface::instance();
@@ -77,14 +73,8 @@ ErrorCode Llama::completion(const CompletionRequest &request,
             return errorCode;
     }
 
-    std::string prompt;
-    for(const auto &msg:request.messages)
-    {
-        prompt+=msg.content;
-    }
-
     std::string result_text;
-    ErrorCode code=llamaInterface.completion(prompt, result_text);
+    ErrorCode code=llamaInterface.completion(request, result_text);
 
     if(code==ErrorCode::Success)
     {
@@ -115,14 +105,7 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
             return errorCode;
     }
 
-    std::string prompt;
-
-    for(const auto &msg:request.messages)
-    {
-        prompt+=msg.content;
-    }
-
-    return llamaInterface.streamingCompletion(prompt, callback);
+    return llamaInterface.streamingCompletion(request, callback);
 }
 
 /**

@@ -1,11 +1,13 @@
 #!/bin/bash
 
-IMAGE_NAME="arbiterai-dev"
+DOCKER_VERSION=$(grep -oP '(?<=^ARG DOCKER_VERSION=)[0-9]+\.[0-9]+\.[0-9]+' docker/Dockerfile)
+IMAGE_NAME="arbiterai-dev:${DOCKER_VERSION}"
 CONTAINER_NAME="arbiterai-dev-container"
 
 REBUILD=false
 STOP=false
 RESTART=false
+CI_MODE=false
 COMMAND_ARGS=()
 STOPPED=false
 
@@ -21,6 +23,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --restart)
             RESTART=true
+            shift
+            ;;
+        --ci)
+            CI_MODE=true
             shift
             ;;
         *)
@@ -60,7 +66,13 @@ if [ ! "$(docker ps -q -f name=$CONTAINER_NAME)" ] || [ "$REBUILD" = true ]; the
             docker build -t $IMAGE_NAME -f docker/Dockerfile .
         fi
         echo "Starting new container..."
-        docker run -d -it --name $CONTAINER_NAME -v "$(pwd)":/app -v "$(pwd)/models":/models -v "$(readlink -f "$(pwd)/../vcpkg_cache")":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+        VCPKG_CACHE_DIR=${VCPKG_CACHE_PATH:-"$(readlink -f "$(pwd)/../vcpkg_cache")"}
+        if [ "$CI_MODE" = true ]; then
+            # In CI, we run non-interactively and mount the workspace directly
+            docker run -d --name $CONTAINER_NAME -v "${GITHUB_WORKSPACE}":/app -v "${GITHUB_WORKSPACE}/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+        else
+            docker run -d -it --name $CONTAINER_NAME -v "$(pwd)":/app -v "$(pwd)/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+        fi
     else
         echo "Restarting existing container..."
         docker start $CONTAINER_NAME

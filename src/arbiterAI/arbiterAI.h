@@ -21,8 +21,13 @@
 #include <functional>
 #include <variant>
 
+#include <nlohmann/json.hpp>
+
 namespace arbiterAI
 {
+
+class CacheManager;
+class CostManager;
 
 /**
  * @enum ErrorCode
@@ -68,36 +73,132 @@ struct Message
     std::string content;
 };
 
+inline void to_json(nlohmann::json &j, const Message &m)
+{
+    j=nlohmann::json{ {"role", m.role}, {"content", m.content} };
+}
+
+inline void from_json(const nlohmann::json &j, Message &m)
+{
+    j.at("role").get_to(m.role);
+    j.at("content").get_to(m.content);
+}
+
 /**
  * @struct CompletionRequest
- * @brief Parameters for text completion requests
- */
+* @brief Parameters for text completion requests
+*/
 struct CompletionRequest
 {
     std::string model;
     std::vector<Message> messages;
-    std::optional<float> temperature;
+    std::optional<double> temperature;
     std::optional<int> max_tokens;
     std::optional<std::string> api_key;
     std::optional<std::string> provider;
+    std::optional<double> top_p;
+    std::optional<double> presence_penalty;
+    std::optional<double> frequency_penalty;
+    std::optional<std::vector<std::string>> stop;
 };
+
+inline void to_json(nlohmann::json &j, const CompletionRequest &r)
+{
+    j=nlohmann::json{
+        {"model", r.model},
+        {"messages", r.messages}
+    };
+    if(r.temperature.has_value()) j["temperature"]=r.temperature.value();
+    if(r.max_tokens.has_value()) j["max_tokens"]=r.max_tokens.value();
+    if(r.api_key.has_value()) j["api_key"]=r.api_key.value();
+    if(r.provider.has_value()) j["provider"]=r.provider.value();
+    if(r.top_p.has_value()) j["top_p"]=r.top_p.value();
+    if(r.presence_penalty.has_value()) j["presence_penalty"]=r.presence_penalty.value();
+    if(r.frequency_penalty.has_value()) j["frequency_penalty"]=r.frequency_penalty.value();
+    if(r.stop.has_value()) j["stop"]=r.stop.value();
+}
+
+inline void from_json(const nlohmann::json &j, CompletionRequest &r)
+{
+    j.at("model").get_to(r.model);
+    j.at("messages").get_to(r.messages);
+    if(j.contains("temperature")) r.temperature=j.at("temperature").get<double>();
+    if(j.contains("max_tokens")) r.max_tokens=j.at("max_tokens").get<int>();
+    if(j.contains("api_key")) r.api_key=j.at("api_key").get<std::string>();
+    if(j.contains("provider")) r.provider=j.at("provider").get<std::string>();
+    if(j.contains("top_p")) r.top_p=j.at("top_p").get<double>();
+    if(j.contains("presence_penalty")) r.presence_penalty=j.at("presence_penalty").get<double>();
+    if(j.contains("frequency_penalty")) r.frequency_penalty=j.at("frequency_penalty").get<double>();
+    if(j.contains("stop")) r.stop=j.at("stop").get<std::vector<std::string>>();
+}
+
+/**
+ * @struct Usage
+* @brief Token usage statistics
+*/
+struct Usage
+{
+    int prompt_tokens;
+    int completion_tokens;
+    int total_tokens;
+};
+
+inline void to_json(nlohmann::json &j, const Usage &u)
+{
+    j=nlohmann::json{
+        {"prompt_tokens", u.prompt_tokens},
+        {"completion_tokens", u.completion_tokens},
+        {"total_tokens", u.total_tokens}
+    };
+}
+
+inline void from_json(const nlohmann::json &j, Usage &u)
+{
+    j.at("prompt_tokens").get_to(u.prompt_tokens);
+    j.at("completion_tokens").get_to(u.completion_tokens);
+    j.at("total_tokens").get_to(u.total_tokens);
+}
 
 /**
  * @struct CompletionResponse
- * @brief Results from text completion requests
- */
+* @brief Results from text completion requests
+*/
 struct CompletionResponse
 {
     std::string text;
     std::string model;
-    int tokens_used;
+    Usage usage;
     std::string provider;  // "openai", "anthropic", etc.
+    double cost=0.0;
 };
+
+inline void to_json(nlohmann::json &j, const CompletionResponse &r)
+{
+    j=nlohmann::json{
+        {"text", r.text},
+        {"model", r.model},
+        {"usage", r.usage},
+        {"provider", r.provider},
+        {"cost", r.cost}
+    };
+}
+
+inline void from_json(const nlohmann::json &j, CompletionResponse &r)
+{
+    j.at("text").get_to(r.text);
+    j.at("model").get_to(r.model);
+    j.at("usage").get_to(r.usage);
+    j.at("provider").get_to(r.provider);
+    if(j.contains("cost"))
+    {
+        j.at("cost").get_to(r.cost);
+    }
+}
 
 /**
  * @struct EmbeddingRequest
- * @brief Parameters for embedding generation requests
- */
+* @brief Parameters for embedding generation requests
+*/
 struct EmbeddingRequest
 {
     std::string model;
@@ -112,17 +213,6 @@ struct Embedding
 {
     int index;
     std::vector<float> embedding;
-};
-
-/**
- * @struct Usage
- * @brief Token usage statistics
- */
-struct Usage
-{
-    int prompt_tokens;
-    int completion_tokens;
-    int total_tokens;
 };
 
 /**
@@ -149,14 +239,20 @@ struct EmbeddingResponse
 class arbiterAI
 {
 public:
-    arbiterAI();
+    arbiterAI(
+        bool enableCache=false,
+        const std::filesystem::path &cacheDir="",
+        std::chrono::seconds ttl=std::chrono::seconds(0),
+        double spendingLimit=-1.0,
+        const std::filesystem::path &costStateFile=""
+    );
     ~arbiterAI();
 
     /**
-     * @brief Initialize the ArbiterAI library
-     * @param configPaths List of paths to configuration files
-     * @return ErrorCode indicating success or failure
-     */
+    * @brief Initialize the ArbiterAI library
+    * @param configPaths List of paths to configuration files
+    * @return ErrorCode indicating success or failure
+    */
     ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths);
     /**
      * @brief Check if a model requires an API key
@@ -179,6 +275,7 @@ public:
     ErrorCode completion(const CompletionRequest &request, CompletionResponse &response);
     ErrorCode streamingCompletion(const CompletionRequest &request,
         std::function<void(const std::string &)> callback); ///< Callback for streaming chunks
+    std::vector<CompletionResponse> batchCompletion(const std::vector<CompletionRequest> &requests);
     /**
      * @brief Generate embeddings for input text
      * @param request Embedding generation parameters
@@ -193,6 +290,10 @@ public:
      * @return ErrorCode indicating current status
      */
     ErrorCode getDownloadStatus(const std::string &modelName, std::string &error);
+
+private:
+    std::unique_ptr<CacheManager> m_cacheManager;
+    std::unique_ptr<CostManager> m_costManager;
 };
 
 }//namespace arbiterAI

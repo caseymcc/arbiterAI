@@ -11,13 +11,28 @@
 namespace arbiterAI
 {
 
+bool ModelInfo::isCompatible(const std::string &clientVersion) const
+{
+    if (minClientVersion.has_value() && ModelManager::compareVersions(clientVersion, minClientVersion.value()) < 0)
+    {
+        return false;
+    }
+    if (maxClientVersion.has_value() && ModelManager::compareVersions(clientVersion, maxClientVersion.value()) > 0)
+    {
+        return false;
+    }
+    return true;
+}
+
 bool ModelInfo::isSchemaCompatible(const std::string &schemaVersion) const
 {
-    if(minSchemaVersion.empty()||schemaVersion.empty())
+    if (minSchemaVersion.empty() || schemaVersion.empty())
     {
         return true;
     }
-    return ModelManager::compareVersions(schemaVersion, minSchemaVersion)>=0;
+    // Check if schemaVersion is >= minSchemaVersion and <= configVersion
+    return ModelManager::compareVersions(schemaVersion, minSchemaVersion) >= 0 &&
+           ModelManager::compareVersions(schemaVersion, configVersion) <= 0;
 }
 
 ModelManager &ModelManager::instance()
@@ -31,7 +46,7 @@ void ModelManager::reset()
     instance()=ModelManager();
 }
 
-bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPaths, const std::vector<std::string> &remoteUrls)
+bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPaths, const std::filesystem::path &localOverridePath)
 {
     // Clear existing data
     m_models.clear();
@@ -39,76 +54,61 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
 
     bool anyLoaded=false;
 
-    // Load default models first
-    std::vector<std::string> default_models={ "anthropic.json", "deepseek.json", "llama.json", "openai.json" };
-    for(const auto &model_file:default_models)
+    // Initialize ConfigDownloader
+    const std::string remoteUrl="https://github.com/caseymcc/arbiterAI_config.git";
+    std::filesystem::path localPath=std::filesystem::temp_directory_path()/"arbiterAI_config";
+
+    m_configDownloader.initialize(remoteUrl, localPath);
+    // Load configs from the downloaded repository
+    auto remoteModelsPath=m_configDownloader.getLocalPath()/"models";
+    if(std::filesystem::exists(remoteModelsPath))
     {
-        std::filesystem::path defaultConfigPath="/app/src/arbiterAI/configs/defaults/models";
-        if(loadModelFile(defaultConfigPath/model_file))
+        for(const auto &entry:std::filesystem::directory_iterator(remoteModelsPath))
         {
-            anyLoaded=true;
+            if(entry.path().extension()==".json")
+            {
+                if(loadModelFile(entry.path()))
+                {
+                    anyLoaded=true;
+                }
+            }
         }
     }
 
-    // Load from remote URLs
-    for(const auto &url:remoteUrls)
+    // Process additional local directories from configPaths
+    for(const auto &configPath:configPaths)
     {
-        try
+        auto modelsPath=configPath/"models";
+        if(std::filesystem::exists(modelsPath))
         {
-            cpr::Response r=cpr::Get(cpr::Url{ url });
-            if(r.status_code==200)
+            for(const auto &entry:std::filesystem::directory_iterator(modelsPath))
             {
-                nlohmann::json remoteConfig=nlohmann::json::parse(r.text);
-                if(remoteConfig.contains("models")&&remoteConfig["models"].is_array())
+                if(entry.path().extension()==".json")
                 {
-                    for(const auto &modelJson:remoteConfig["models"])
+                    if(loadModelFile(entry.path()))
                     {
-                        ModelInfo info;
-                        if(parseModelInfo(modelJson, info))
-                        {
-                            // Sort by ranking (highest first)
-                            auto it=std::lower_bound(m_models.begin(), m_models.end(), info,
-                                [](const ModelInfo &a, const ModelInfo &b)
-                                {
-                                    return a.ranking>b.ranking;
-                                });
-                            m_models.insert(it, info);
-                            m_modelProviderMap[info.model]=info.provider;
-                            anyLoaded=true;
-                        }
+                        anyLoaded=true;
                     }
                 }
             }
         }
-        catch(const std::exception &e)
-        {
-            spdlog::error("Failed to load remote config from {}: {}", url, e.what());
-        }
     }
 
-    // Process directories in order, allowing later ones to override earlier ones
-    for(const auto &configPath:configPaths)
+    // Process local override directory
+    if(!localOverridePath.empty()&&std::filesystem::exists(localOverridePath))
     {
-        auto modelsPath=configPath/"models";
-        if(!std::filesystem::exists(modelsPath))
+        for(const auto &entry:std::filesystem::directory_iterator(localOverridePath))
         {
-            continue;
-        }
-
-        // Iterate through all JSON files in the models directory
-        for(const auto &entry:std::filesystem::directory_iterator(modelsPath))
-        {
-            if(entry.path().extension()!=".json")
+            if(entry.path().extension()==".json")
             {
-                continue;
-            }
-
-            if(loadModelFile(entry.path()))
-            {
-                anyLoaded=true;
+                if(loadModelFile(entry.path()))
+                {
+                    anyLoaded=true;
+                }
             }
         }
     }
+
     m_initialized=anyLoaded;
     return anyLoaded;
 }
@@ -314,13 +314,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
             {
                 info.maxOutputTokens=modelJson["max_output_tokens"].get<int>();
             }
-            if(modelJson.contains("input_cost_per_token"))
+            if(modelJson.contains("pricing"))
             {
-                info.inputCostPerToken=modelJson["input_cost_per_token"].get<double>();
-            }
-            if(modelJson.contains("output_cost_per_token"))
-            {
-                info.outputCostPerToken=modelJson["output_cost_per_token"].get<double>();
+                info.pricing=modelJson["pricing"].get<Pricing>();
             }
 
             // Find existing model to update
@@ -330,6 +326,8 @@ bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
             if(it!=m_models.end())
             {
                 // Update existing model settings
+                it->provider = info.provider;
+                it->ranking = info.ranking;
                 if(modelJson.contains("mode"))
                 {
                     it->mode=info.mode;
@@ -366,13 +364,9 @@ bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
                 {
                     it->maxOutputTokens=info.maxOutputTokens;
                 }
-                if(modelJson.contains("input_cost_per_token"))
+                if(modelJson.contains("pricing"))
                 {
-                    it->inputCostPerToken=info.inputCostPerToken;
-                }
-                if(modelJson.contains("output_cost_per_token"))
-                {
-                    it->outputCostPerToken=info.outputCostPerToken;
+                    it->pricing=info.pricing;
                 }
             }
             else

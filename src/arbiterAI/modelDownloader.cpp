@@ -26,8 +26,8 @@ std::future<bool> ModelDownloader::downloadModel(const std::string &downloadUrl,
             if(minVersion||maxVersion)
             {
                 std::string clientVersion="1.0.0"; // TODO: Get from build config
-                if((minVersion&&clientVersion<*minVersion)||
-                    (maxVersion&&clientVersion>*maxVersion))
+                if ((minVersion && ModelManager::compareVersions(clientVersion, *minVersion) < 0) ||
+                    (maxVersion && ModelManager::compareVersions(clientVersion, *maxVersion) > 0))
                 {
                     spdlog::error("Version mismatch: client {} not compatible with model requirements (min: {}, max: {})",
                         clientVersion, minVersion?*minVersion:"none", maxVersion?*maxVersion:"none");
@@ -85,15 +85,15 @@ std::future<bool> ModelDownloader::downloadModel(const std::string &downloadUrl,
 }
 
 
-std::future<nlohmann::json> ModelDownloader::downloadConfigFromRepo(const std::string &repoOwner, const std::string &repoName, const std::string &configPath, const std::optional<std::string> &ref)
+std::future<std::optional<nlohmann::json>> ModelDownloader::downloadConfigFromRepo(const std::string &repoOwner, const std::string &repoName, const std::string &configPath, const std::optional<std::string> &ref)
 {
-    return std::async(std::launch::async, [this, repoOwner, repoName, configPath, ref]()
+    return std::async(std::launch::async, [this, repoOwner, repoName, configPath, ref]() -> std::optional<nlohmann::json>
     {
         std::string cacheKey=fmt::format("{}/{}/{}/{}", repoOwner, repoName, ref.value_or("main"), configPath);
         if(auto cached=loadFromCache(cacheKey))
         {
             spdlog::debug("Returning cached config for: {}", cacheKey);
-            return *cached;
+            return cached;
         }
 
         std::string apiUrl=fmt::format("https://api.github.com/repos/{}/{}/contents/{}", repoOwner, repoName, configPath);
@@ -108,17 +108,18 @@ std::future<nlohmann::json> ModelDownloader::downloadConfigFromRepo(const std::s
         if(r.status_code!=200)
         {
             spdlog::error("GitHub API request failed for {}: {}", apiUrl, r.status_code);
-            throw std::runtime_error(fmt::format("GitHub API request failed: {}", r.status_code));
+            return std::nullopt;
         }
 
         auto config=parseConfigFromJSON(r.text);
         if(!config)
         {
-            throw std::runtime_error("Failed to parse GitHub config");
+            spdlog::error("Failed to parse GitHub config");
+            return std::nullopt;
         }
 
         saveToCache(cacheKey, *config);
-        return *config;
+        return config;
     });
 }
 
