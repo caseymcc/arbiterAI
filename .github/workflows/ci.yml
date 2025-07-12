@@ -30,15 +30,19 @@ jobs:
       if: github.event_name == 'pull_request'
       run: |
         git fetch origin main:main
+        # Check if Dockerfile was changed compared to main
         if git diff --name-only main..HEAD | grep -q "docker/Dockerfile"; then
-          OLD_VERSION=$(git show main:docker/Dockerfile | grep -oP '(?<=^ARG DOCKER_VERSION=)[0-9]+\.[0-9]+\.[0-9]+')
-          echo "Old Docker version: $OLD_VERSION"
-          if [ "${{ steps.docker_version.outputs.DOCKER_VERSION }}" = "$OLD_VERSION" ]; then
+          # Get old version from main, allow failure if file/version doesn't exist
+          OLD_VERSION=$(git show main:docker/Dockerfile 2>/dev/null | grep -oP '(?<=^ARG DOCKER_VERSION=)[0-9]+\.[0-9]+\.[0-9]+' || true)
+          
+          # If an old version exists and it's the same as the new one, fail the build.
+          if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" = "${{ steps.docker_version.outputs.DOCKER_VERSION }}" ]; then
             echo "Error: The Dockerfile was modified, but the DOCKER_VERSION was not updated."
+            echo "Old version: $OLD_VERSION"
+            echo "New version: ${{ steps.docker_version.outputs.DOCKER_VERSION }}"
             exit 1
           fi
         fi
-        exit 0
 
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v2
