@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG DOCKER_VERSION=1.0.1
+ARG DOCKER_VERSION=1.0.0
 FROM ubuntu:22.04
 
 # Install basic build tools and Python 3
