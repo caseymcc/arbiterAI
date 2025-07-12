@@ -51,14 +51,23 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ghcr.io/${{ github.repository }}
+        tags: |
+          type=raw,value=${{ steps.docker_version.outputs.DOCKER_VERSION }}
+
     - name: Build and cache Docker image
       uses: docker/build-push-action@v4
       with:
         context: .
         file: ./docker/Dockerfile
         push: ${{ github.ref == 'refs/heads/main' }}
-        tags: ghcr.io/${{ github.repository }}:${{ steps.docker_version.outputs.DOCKER_VERSION }}
-        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:${{ steps.docker_version.outputs.DOCKER_VERSION }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=registry,ref=${{ steps.meta.outputs.tags }}
         cache-to: type=inline
 
     - name: Create cache directories
