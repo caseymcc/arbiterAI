@@ -55,4 +55,4 @@ ENV VCPKG_DEFAULT_BINARY_CACHE=/vcpkg_cache
 ENV CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
 
 # Build command (to be run when container starts)
-CMD ["bash"]
+CMD ["tail", "-f", "/dev/null"]
