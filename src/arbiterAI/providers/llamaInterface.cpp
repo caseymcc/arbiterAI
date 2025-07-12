@@ -277,12 +277,14 @@ ErrorCode LlamaInterface::streamingCompletion(const CompletionRequest &request,
             break;
         }
 
+        char piece[16];
+
         if(request.stop.has_value())
         {
             bool stop_sequence_found=false;
             std::string current_output;
-            char piece[16];
             int len=llama_token_to_piece(llama_model_get_vocab(m_model), next_token, piece, sizeof(piece), 0, false);
+
             if(len>0)
             {
                 current_output.append(piece, len);
@@ -301,8 +303,9 @@ ErrorCode LlamaInterface::streamingCompletion(const CompletionRequest &request,
                 break;
             }
         }
-        char piece[16];
+        
         int len=llama_token_to_piece(llama_model_get_vocab(m_model), next_token, piece, sizeof(piece), 0, false);
+
         if(len>0)
         {
             callback(std::string(piece, len));
