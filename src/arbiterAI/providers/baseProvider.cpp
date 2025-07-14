@@ -60,6 +60,11 @@ DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std
     return DownloadStatus::Completed;
 }
 
+ErrorCode BaseProvider::getAvailableModels(std::vector<std::string>& models)
+{
+    return ErrorCode::NotImplemented;
+}
+
 std::vector<CompletionResponse> BaseProvider::batchCompletion(const std::vector<CompletionRequest> &requests)
 {
     std::vector<std::future<CompletionResponse>> futures;

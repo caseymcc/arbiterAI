@@ -126,4 +126,45 @@ ErrorCode OpenRouter_LLM::getEmbeddings(const EmbeddingRequest &request, Embeddi
     return ErrorCode::NotImplemented;
 }
 
+ErrorCode OpenRouter_LLM::getAvailableModels(std::vector<std::string>& models)
+{
+    std::string apiKey;
+    if (getApiKey("", std::nullopt, apiKey) != ErrorCode::Success)
+    {
+        return ErrorCode::ApiKeyNotFound;
+    }
+
+    cpr::Header headers{
+        {"Authorization", "Bearer " + apiKey}
+    };
+
+    std::string url = "https://openrouter.ai/api/v1/models";
+
+    cpr::Response r = cpr::Get(cpr::Url{ url }, headers);
+
+    if (r.status_code != 200)
+    {
+        return ErrorCode::NetworkError;
+    }
+
+    try
+    {
+        nlohmann::json jsonResponse = nlohmann::json::parse(r.text);
+        if (jsonResponse.contains("data") && jsonResponse["data"].is_array())
+        {
+            for (const auto& model : jsonResponse["data"])
+            {
+                if (model.contains("id"))
+                {
+                    models.push_back(model["id"]);
+                }
+            }
+        }
+        return ErrorCode::Success;
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+        return ErrorCode::InvalidResponse;
+    }
+}
 }

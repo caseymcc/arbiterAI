@@ -86,6 +86,7 @@ public:
     DownloadStatus getDownloadStatus(const std::string &modelName,
         std::string &error) override;
 
+    ErrorCode getAvailableModels(std::vector<std::string>& models) override;
 private:
 };
 

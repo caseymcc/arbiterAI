@@ -1,0 +1,38 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug/Linux - arbiterAI UnitTests",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/linux_x64_debug/arbiterai_tests",
+            "args":
+            [
+//                "--gtest_filter=ArbiterAITest.GetDownloadStatus"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/linux_x64_debug",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ],
+            "sourceFileMap":
+            {
+                "/app":"${workspaceFolder}"
+            }
+        }
+    ]
+}

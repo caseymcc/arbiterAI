@@ -140,4 +140,17 @@ ErrorCode Anthropic::getEmbeddings(const EmbeddingRequest &request,
     return ErrorCode::NotImplemented;
 }
 
+ErrorCode Anthropic::getAvailableModels(std::vector<std::string>& models)
+{
+    models = {
+        "claude-3-opus-20240229",
+        "claude-3-sonnet-20240229",
+        "claude-3-haiku-20240307",
+        "claude-2.1",
+        "claude-2.0",
+        "claude-instant-1.2"
+    };
+    return ErrorCode::Success;
+}
+
 } // namespace arbiterAI

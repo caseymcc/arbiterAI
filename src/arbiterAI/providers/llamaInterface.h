@@ -47,6 +47,8 @@ public:
     ErrorCode loadModel(const std::string &modelName);
 
     DownloadStatus getDownloadStatus(const std::string &modelName, std::string &error);
+
+    ErrorCode getAvailableModels(std::vector<std::string>& models);
     
 private:
     LlamaInterface();

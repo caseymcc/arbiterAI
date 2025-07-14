@@ -44,6 +44,7 @@ public:
 
     virtual DownloadStatus getDownloadStatus(const std::string &modelName, std::string &error);
 
+    virtual ErrorCode getAvailableModels(std::vector<std::string>& models);
 protected:
     ErrorCode getApiKey(const std::string &modelName,
         const std::optional<std::string> &requestApiKey, std::string &apiKey);

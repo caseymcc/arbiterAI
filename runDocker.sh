@@ -66,7 +66,7 @@ if [ ! "$(docker ps -q -f name=$CONTAINER_NAME)" ] || [ "$REBUILD" = true ]; the
             docker build -t $IMAGE_NAME -f docker/Dockerfile .
         fi
         echo "Starting new container..."
-        VCPKG_CACHE_DIR=${VCPKG_CACHE_PATH:-"$(readlink -f "$(pwd)/../vcpkg_cache")"}
+        VCPKG_CACHE_DIR=${VCPKG_CACHE_PATH:-"$HOME/vcpkg_cache"}
         if [ "$CI_MODE" = true ]; then
             # In CI, we run non-interactively and mount the workspace directly
             docker run -d --name $CONTAINER_NAME -v "${GITHUB_WORKSPACE}":/app -v "${GITHUB_WORKSPACE}/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME

@@ -280,4 +280,13 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     return ErrorCode::Success;
 }
 
+ErrorCode Deepseek::getAvailableModels(std::vector<std::string>& models)
+{
+    models = {
+        "deepseek-chat",
+        "deepseek-coder"
+    };
+    return ErrorCode::Success;
+}
+
 } // namespace arbiterAI

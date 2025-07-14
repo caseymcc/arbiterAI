@@ -23,6 +23,8 @@ public:
 
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
+
+    ErrorCode getAvailableModels(std::vector<std::string>& models) override;
 private:
     nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming);
     cpr::Header createHeaders(const std::string &apiKey);

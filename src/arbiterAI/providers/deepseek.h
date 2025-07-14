@@ -25,6 +25,7 @@ public:
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 
+    ErrorCode getAvailableModels(std::vector<std::string>& models) override;
 private:
     ErrorCode parseResponse(const cpr::Response &rawResponse,
         CompletionResponse &response);

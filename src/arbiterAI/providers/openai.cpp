@@ -289,4 +289,53 @@ ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
 }
 
 
+ErrorCode OpenAI::getAvailableModels(std::vector<std::string>& models)
+{
+    std::string apiKey;
+    auto result=getApiKey("", std::nullopt, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    auto headers = createHeaders(apiKey);
+    std::string modelsUrl = m_apiUrl + "/models";
+
+    auto raw_response = cpr::Get(
+        cpr::Url{ modelsUrl },
+        headers,
+        cpr::VerifySsl{ true }
+    );
+
+    if (raw_response.status_code != 200)
+    {
+        return ErrorCode::NetworkError;
+    }
+
+    nlohmann::json jsonResponse;
+    try
+    {
+        jsonResponse = nlohmann::json::parse(raw_response.text);
+    }
+    catch (const nlohmann::json::parse_error&)
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    if (!jsonResponse.contains("data") || !jsonResponse["data"].is_array())
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    for (const auto& model : jsonResponse["data"])
+    {
+        if (model.contains("id"))
+        {
+            models.push_back(model["id"]);
+        }
+    }
+
+    return ErrorCode::Success;
+}
+
 } // namespace arbiterAI
