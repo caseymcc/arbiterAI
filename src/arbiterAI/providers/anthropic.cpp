@@ -129,9 +129,59 @@ ErrorCode Anthropic::completion(const CompletionRequest &request,
 ErrorCode Anthropic::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    // TODO: Implement Anthropic streaming API
-    // This will be similar to OpenAI implementation but with Anthropic's specific API format
-    return ErrorCode::NotImplemented;
+    std::string apiKey;
+    auto result=getApiKey(request.model, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    auto headers=createHeaders(apiKey);
+    auto body=createRequestBody(request, true);
+    std::string completionUrl=m_apiUrl+"/messages";
+
+    auto session=cpr::Session();
+    session.SetUrl(cpr::Url{ completionUrl });
+    session.SetHeader(headers);
+    session.SetBody(body.dump());
+    session.SetVerifySsl(true);
+
+    session.SetOption(cpr::WriteCallback([callback](const std::string_view &data, intptr_t) -> bool
+        {
+            if(data.empty()||data=="\n") return true;
+
+            try
+            {
+                if(data.substr(0, 6)=="data: ")
+                {
+                    std::string jsonStr=std::string(data.substr(6));
+                    auto json=nlohmann::json::parse(jsonStr);
+
+                    if(json["type"]=="content_block_delta")
+                    {
+                        if(json.contains("delta")&&json["delta"].contains("text"))
+                        {
+                            std::string content=json["delta"]["text"];
+                            callback(content);
+                        }
+                    }
+                }
+            }
+            catch(const std::exception &)
+            {
+                return false;
+            }
+            return true;
+        }));
+
+    auto response=session.Post();
+
+    if(response.status_code!=200)
+    {
+        return ErrorCode::NetworkError;
+    }
+
+    return ErrorCode::Success;
 }
 
 ErrorCode Anthropic::getEmbeddings(const EmbeddingRequest &request,

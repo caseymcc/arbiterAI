@@ -116,8 +116,70 @@ OpenRouter_LLM::OpenRouter_LLM()
 
 ErrorCode OpenRouter_LLM::streamingCompletion(const CompletionRequest &request, std::function<void(const std::string &)> callback)
 {
-    // Not yet implemented for OpenRouter
-    return ErrorCode::NotImplemented;
+    std::string apiKey;
+    if(getApiKey(request.model, request.api_key, apiKey)!=ErrorCode::Success)
+    {
+        return ErrorCode::ApiKeyNotFound;
+    }
+
+    cpr::Header headers{
+        {"Authorization", "Bearer "+apiKey},
+        {"Content-Type", "application/json"}
+    };
+
+    ModelInfo model;
+    auto modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    std::string url=modelInfo->apiBase.value_or("https://openrouter.ai/api/v1")+"/chat/completions";
+
+    auto body=createRequestBody(request, true);
+
+    auto session=cpr::Session();
+    session.SetUrl(cpr::Url{ url });
+    session.SetHeader(headers);
+    session.SetBody(body.dump());
+    session.SetVerifySsl(true);
+
+    session.SetOption(cpr::WriteCallback([callback](const std::string_view &data, intptr_t) -> bool
+        {
+            if(data.empty()||data=="\n") return true;
+
+            try
+            {
+                if(data.substr(0, 6)=="data: ")
+                {
+                    std::string jsonStr=std::string(data.substr(6));
+                    if(jsonStr=="[DONE]") return true;
+
+                    auto json=nlohmann::json::parse(jsonStr);
+                    if(json.contains("choices")&&!json["choices"].empty()&&
+                        json["choices"][0].contains("delta")&&
+                        json["choices"][0]["delta"].contains("content"))
+                    {
+                        std::string content=json["choices"][0]["delta"]["content"];
+                        callback(content);
+                    }
+                }
+            }
+            catch(const std::exception &)
+            {
+                return false;
+            }
+            return true;
+        }));
+
+    auto response=session.Post();
+
+    if(response.status_code!=200)
+    {
+        return ErrorCode::NetworkError;
+    }
+
+    return ErrorCode::Success;
 }
 
 ErrorCode OpenRouter_LLM::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
