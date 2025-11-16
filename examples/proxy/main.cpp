@@ -49,7 +49,7 @@ int main()
     httplib::Server svr;
 
     // Initialize ArbiterAI
-    arbiterAI::arbiterAI arbiterInstance;
+    arbiterAI::ArbiterAI arbiterInstance;
     std::vector<std::filesystem::path> configPaths={ "./examples/model_config_v2.json" };
     arbiterAI::ErrorCode err=arbiterInstance.initialize(configPaths);
     if(err!=arbiterAI::ErrorCode::Success)

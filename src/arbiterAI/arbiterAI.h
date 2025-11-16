@@ -227,7 +227,7 @@ struct EmbeddingResponse
 };
 
 /**
- * @class arbiterAI
+ * @class ArbiterAI
  * @brief Main interface for ArbiterAI LLM operations
  *
  * Provides methods for:
@@ -236,17 +236,18 @@ struct EmbeddingResponse
  * - Embedding generation
  * - Model download status tracking
  */
-class arbiterAI
+class ArbiterAI
 {
 public:
-    arbiterAI(
-        bool enableCache=false,
-        const std::filesystem::path &cacheDir="",
-        std::chrono::seconds ttl=std::chrono::seconds(0),
-        double spendingLimit=-1.0,
-        const std::filesystem::path &costStateFile=""
-    );
-    ~arbiterAI();
+    static ArbiterAI &instance();
+
+    ArbiterAI(
+        bool enableCache = false,
+        const std::filesystem::path &cacheDir = "",
+        std::chrono::seconds ttl = std::chrono::seconds(0),
+        double spendingLimit = -1.0,
+        const std::filesystem::path &costStateFile = "");
+    ~ArbiterAI();
 
     /**
     * @brief Initialize the ArbiterAI library
@@ -290,6 +291,9 @@ public:
      * @return ErrorCode indicating current status
      */
     ErrorCode getDownloadStatus(const std::string &modelName, std::string &error);
+
+    bool initialized = false;
+    std::map<std::string, std::unique_ptr<class BaseProvider>> providers;
 
 private:
     std::unique_ptr<CacheManager> m_cacheManager;

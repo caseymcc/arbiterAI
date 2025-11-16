@@ -33,7 +33,7 @@ protected:
 
 TEST_F(ArbiterAITest, SupportModelDownload)
 {
-    arbiterAI ai;
+    ArbiterAI ai;
     ModelManager &mm = ModelManager::instance();
 
     ModelInfo localModel;

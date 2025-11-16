@@ -14,31 +14,18 @@
 namespace arbiterAI
 {
 
-namespace
+ArbiterAI &ArbiterAI::instance()
 {
-class arbiterAI_
-{
-public:
-    static arbiterAI_ &instance()
-    {
-        static arbiterAI_ instance;
-        return instance;
-    }
-
-    arbiterAI_()=default;
-
-    bool initialized=false;
-    std::map<std::string, std::unique_ptr<BaseProvider>> providers;
-};
+    static ArbiterAI instance;
+    return instance;
 }
 
-arbiterAI::arbiterAI(
+ArbiterAI::ArbiterAI(
     bool enableCache,
     const std::filesystem::path &cacheDir,
     std::chrono::seconds ttl,
     double spendingLimit,
-    const std::filesystem::path &costStateFile
-)
+    const std::filesystem::path &costStateFile)
 {
     if(enableCache)
     {
@@ -50,22 +37,21 @@ arbiterAI::arbiterAI(
     }
 }
 
-arbiterAI::~arbiterAI()
+ArbiterAI::~ArbiterAI()
 {
 }
 
-ErrorCode arbiterAI::initialize(const std::vector<std::filesystem::path> &configPaths)
+ErrorCode ArbiterAI::initialize(const std::vector<std::filesystem::path> &configPaths)
 {
     if(!ModelManager::instance().initialize(configPaths))
     {
         return ErrorCode::InvalidRequest;
     }
 
-    arbiterAI_::instance().initialized=true;
     return ErrorCode::Success;
 }
 
-bool arbiterAI::doesModelNeedApiKey(const std::string &model)
+bool ArbiterAI::doesModelNeedApiKey(const std::string &model)
 {
     auto provider=ModelManager::instance().getProvider(model);
 
@@ -77,7 +63,7 @@ bool arbiterAI::doesModelNeedApiKey(const std::string &model)
     return *provider=="openai";
 }
 
-bool arbiterAI::supportModelDownload(const std::string &provider)
+bool ArbiterAI::supportModelDownload(const std::string &provider)
 {
     if(provider=="llama")
     {
@@ -115,12 +101,12 @@ namespace
 {
 BaseProvider *getProvider(const std::string &providerName)
 {
-    auto &hermes=arbiterAI_::instance();
+    auto &arbiter = ArbiterAI::instance();
 
     // Check if we already have an Provider instance for this provider
-    auto it=hermes.providers.find(providerName);
+    auto it=arbiter.providers.find(providerName);
 
-    if(it==hermes.providers.end())
+    if(it==arbiter.providers.end())
     {
         // Create new Provider instance
         auto provider=createProvider(providerName);
@@ -131,16 +117,16 @@ BaseProvider *getProvider(const std::string &providerName)
         }
         auto models=ModelManager::instance().getModels(providerName);
         provider->initialize(models);
-        it=hermes.providers.emplace(providerName, std::move(provider)).first;
+        it=arbiter.providers.emplace(providerName, std::move(provider)).first;
     }
 
     return it->second.get();
 }
 }
 
-ErrorCode arbiterAI::completion(const CompletionRequest &request, CompletionResponse &response)
+ErrorCode ArbiterAI::completion(const CompletionRequest &request, CompletionResponse &response)
 {
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -204,10 +190,10 @@ ErrorCode arbiterAI::completion(const CompletionRequest &request, CompletionResp
     return result;
 }
 
-ErrorCode arbiterAI::streamingCompletion(const CompletionRequest &request,
+ErrorCode ArbiterAI::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -228,14 +214,14 @@ ErrorCode arbiterAI::streamingCompletion(const CompletionRequest &request,
     return provider->streamingCompletion(request, callback);
 }
 
-std::vector<CompletionResponse> arbiterAI::batchCompletion(const std::vector<CompletionRequest> &requests)
+std::vector<CompletionResponse> ArbiterAI::batchCompletion(const std::vector<CompletionRequest> &requests)
 {
     std::vector<CompletionResponse> allResponses(requests.size());
     std::vector<int> originalIndices(requests.size());
     std::vector<CompletionRequest> uncachedRequests;
     std::map<int, int> uncachedRequestIndexMap; // Maps original index to uncached index
 
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return allResponses; // Return responses with default/error state
     }
@@ -344,9 +330,9 @@ std::vector<CompletionResponse> arbiterAI::batchCompletion(const std::vector<Com
     return allResponses;
 }
 
-ErrorCode arbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
+ErrorCode ArbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
 {
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -367,7 +353,7 @@ ErrorCode arbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingRes
     return provider->getEmbeddings(request, response);
 }
 
-ErrorCode arbiterAI::getDownloadStatus(const std::string &modelName, std::string &error)
+ErrorCode ArbiterAI::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(modelName);
     if(!modelInfo)

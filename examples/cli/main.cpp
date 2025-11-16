@@ -38,7 +38,7 @@ int main(int argc, char *argv[])
 
     try
     {
-        arbiterAI::arbiterAI arbiterAI;
+        arbiterAI::ArbiterAI arbiterAI;
 
         arbiterAI::CompletionRequest request;
         if(!result["prompt"].as<std::string>().empty())
@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
         else
         {
             arbiterAI::CompletionResponse response;
-            arbiterAI::ErrorCode err=arbiterAI.completion(request, response);
+            arbiterAI::ErrorCode err = arbiterAI.completion(request, response);
             if(err!=arbiterAI::ErrorCode::Success)
             {
                 std::cerr<<"Error: "<<static_cast<int>(err)<<std::endl;
