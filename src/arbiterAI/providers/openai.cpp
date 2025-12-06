@@ -1,10 +1,22 @@
 #include "arbiterAI/providers/openai.h"
+#include <cstdlib>
 
 namespace arbiterAI
 {
 OpenAI::OpenAI()
     : BaseProvider("openai")
 {
+    // Allow overriding the API base URL for OpenAI-compatible local endpoints
+    // e.g. export OPENAI_BASE_URL="http://192.168.2.106/v1" before running tests
+    if(const char* base = std::getenv("OPENAI_BASE_URL"))
+    {
+        if(*base) { m_apiUrl = base; }
+    }
+    // Optional API key override (sometimes local servers omit auth)
+    if(const char* key = std::getenv("OPENAI_API_KEY"))
+    {
+        if(*key) { m_apiKey = key; }
+    }
 }
 
 ErrorCode OpenAI::completion(const CompletionRequest &request,

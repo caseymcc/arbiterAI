@@ -28,8 +28,6 @@
 
   - OpenAI: Full support for OpenAI's ChatCompletion and Completion APIs.
 
-- Future Providers:
-
   - Anthropic: Integration with Anthropic's Messages API.
 
   - DeepSeek: Support for DeepSeek's ChatCompletion API.
@@ -39,9 +37,10 @@
   - OpenRouter (to be added): A unified interface for numerous models accessible via the OpenRouter aggregation service.
 
 
+
 Configuration Management: A robust arbiterAI::ModelManager to dynamically load model configurations, provider endpoints, and API keys from multiple sources:
 
-File-based: Support for JSON configuration files (e.g., config.json).
+File-based: Support for YAML/JSON configuration files (e.g., models.yaml, config.json).
 
 Environment Variables: Secure fallback and override capabilities using environment variables (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY).
 

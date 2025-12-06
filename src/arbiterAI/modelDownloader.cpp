@@ -179,4 +179,166 @@ void ModelDownloader::saveToCache(const std::string &key, const nlohmann::json &
     }
 }
 
+std::future<bool> ModelDownloader::downloadModelWithProgress(
+    const std::string &downloadUrl,
+    const std::string &filePathStr,
+    const std::optional<std::string> &fileHash,
+    DownloadProgressCallback progressCallback,
+    const std::string &modelName)
+{
+    // Create tracking state
+    auto downloadState = std::make_shared<ActiveDownload>();
+    downloadState->modelName = modelName.empty() ? filePathStr : modelName;
+    downloadState->status = DownloadStatus::Pending;
+
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        m_activeDownloads[downloadState->modelName] = downloadState;
+    }
+
+    return std::async(std::launch::async, [this, downloadUrl, filePathStr, fileHash, progressCallback, downloadState]()
+    {
+        downloadState->status = DownloadStatus::InProgress;
+        std::filesystem::path filePath(filePathStr);
+
+        // Check if file already exists and is valid
+        if (std::filesystem::exists(filePath))
+        {
+            if (fileHash && m_fileVerifier->verifyFile(filePath.string(), *fileHash))
+            {
+                spdlog::info("Model already exists and is verified: {}", filePath.string());
+                downloadState->status = DownloadStatus::Completed;
+                downloadState->percentComplete = 100.0f;
+                if (progressCallback)
+                {
+                    progressCallback(0, 0, 100.0f);
+                }
+                return true;
+            }
+        }
+
+        // Check for partial download (resume support)
+        std::string partialPath = filePathStr + ".partial";
+        int64_t existingBytes = 0;
+        if (std::filesystem::exists(partialPath))
+        {
+            existingBytes = std::filesystem::file_size(partialPath);
+            spdlog::info("Found partial download with {} bytes", existingBytes);
+        }
+
+        spdlog::info("Downloading model from {} to {}", downloadUrl, filePath.string());
+
+        try
+        {
+            std::filesystem::create_directories(filePath.parent_path());
+        }
+        catch (const std::filesystem::filesystem_error &e)
+        {
+            spdlog::error("Failed to create directory: {}", e.what());
+            downloadState->status = DownloadStatus::Failed;
+            downloadState->error = e.what();
+            return false;
+        }
+
+        // Use CPR with progress callback
+        cpr::Response r = cpr::Get(
+            cpr::Url{downloadUrl},
+            cpr::ProgressCallback([&downloadState, &progressCallback](cpr::cpr_off_t downloadTotal, 
+                                                                        cpr::cpr_off_t downloadNow,
+                                                                        cpr::cpr_off_t uploadTotal,
+                                                                        cpr::cpr_off_t uploadNow,
+                                                                        intptr_t userdata) -> bool
+            {
+                downloadState->bytesDownloaded = downloadNow;
+                downloadState->totalBytes = downloadTotal;
+                
+                float percent = 0.0f;
+                if (downloadTotal > 0)
+                {
+                    percent = (static_cast<float>(downloadNow) / downloadTotal) * 100.0f;
+                }
+                downloadState->percentComplete = percent;
+                
+                if (progressCallback)
+                {
+                    progressCallback(downloadNow, downloadTotal, percent);
+                }
+                
+                return true;  // Continue downloading
+            })
+        );
+
+        if (r.status_code != 200)
+        {
+            spdlog::error("Failed to download model. Status code: {}", r.status_code);
+            downloadState->status = DownloadStatus::Failed;
+            downloadState->error = "HTTP error: " + std::to_string(r.status_code);
+            return false;
+        }
+
+        try
+        {
+            std::ofstream outFile(filePath, std::ios::binary);
+            outFile.write(r.text.c_str(), r.text.length());
+            outFile.close();
+            
+            // Remove partial file if it exists
+            if (std::filesystem::exists(partialPath))
+            {
+                std::filesystem::remove(partialPath);
+            }
+        }
+        catch (const std::filesystem::filesystem_error &e)
+        {
+            spdlog::error("Failed to write model to file: {}. Error: {}", filePath.string(), e.what());
+            downloadState->status = DownloadStatus::Failed;
+            downloadState->error = e.what();
+            return false;
+        }
+
+        if (fileHash)
+        {
+            if (m_fileVerifier->verifyFile(filePath.string(), *fileHash))
+            {
+                spdlog::info("Model downloaded and verified successfully: {}", filePath.string());
+                downloadState->status = DownloadStatus::Completed;
+                downloadState->percentComplete = 100.0f;
+                return true;
+            }
+            else
+            {
+                spdlog::error("SHA256 verification failed for: {}", filePath.string());
+                downloadState->status = DownloadStatus::Failed;
+                downloadState->error = "SHA256 verification failed";
+                return false;
+            }
+        }
+
+        downloadState->status = DownloadStatus::Completed;
+        downloadState->percentComplete = 100.0f;
+        return true;
+    });
+}
+
+std::shared_ptr<ActiveDownload> ModelDownloader::getDownloadState(const std::string &modelName)
+{
+    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+    auto it = m_activeDownloads.find(modelName);
+    if (it != m_activeDownloads.end())
+    {
+        return it->second;
+    }
+    return nullptr;
+}
+
+int64_t ModelDownloader::getPartialDownloadSize(const std::string &filePath)
+{
+    std::string partialPath = filePath + ".partial";
+    if (std::filesystem::exists(partialPath))
+    {
+        return std::filesystem::file_size(partialPath);
+    }
+    return 0;
+}
+
 } // namespace arbiterAI

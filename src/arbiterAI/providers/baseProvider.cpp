@@ -57,7 +57,20 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
 
 DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std::string &error)
 {
-    return DownloadStatus::Completed;
+    // Default implementation for cloud providers - no download needed
+    return DownloadStatus::NotApplicable;
+}
+
+ErrorCode BaseProvider::getDownloadProgress(const std::string &modelName, DownloadProgress &progress)
+{
+    // Default implementation for cloud providers
+    progress.status = DownloadStatus::NotApplicable;
+    progress.modelName = modelName;
+    progress.bytesDownloaded = 0;
+    progress.totalBytes = 0;
+    progress.percentComplete = 0.0f;
+    progress.errorMessage.clear();
+    return ErrorCode::Success;
 }
 
 ErrorCode BaseProvider::getAvailableModels(std::vector<std::string>& models)

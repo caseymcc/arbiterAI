@@ -1,4 +1,5 @@
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/chatClient.h"
 #include "arbiterAI/cacheManager.h"
 #include "arbiterAI/costManager.h"
 #include "arbiterAI/modelManager.h"
@@ -6,7 +7,7 @@
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
 #include "arbiterAI/providers/deepseek.h"
-#include "arbiterAI/providers/llama.h"
+// #include "arbiterAI/providers/llama.h"  // Disabled - not built in CMakeLists
 #include "arbiterAI/providers/openrouter.h"
 
 #include <memory>
@@ -47,7 +48,8 @@ ErrorCode ArbiterAI::initialize(const std::vector<std::filesystem::path> &config
     {
         return ErrorCode::InvalidRequest;
     }
-
+    // Mark global singleton initialized so subsequent operations succeed
+    ArbiterAI::instance().initialized = true;
     return ErrorCode::Success;
 }
 
@@ -86,10 +88,11 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     {
         return std::make_unique<Deepseek>();
     }
-    else if(provider=="llama")
-    {
-        return std::make_unique<Llama>();
-    }
+    // Llama provider disabled - not built in CMakeLists
+    // else if(provider=="llama")
+    // {
+    //     return std::make_unique<Llama>();
+    // }
     else if(provider=="openrouter")
     {
         return std::make_unique<OpenRouter_LLM>();
@@ -368,8 +371,10 @@ ErrorCode ArbiterAI::getDownloadStatus(const std::string &modelName, std::string
         auto status=provider->getDownloadStatus(modelName, error);
         switch(status)
         {
+        case DownloadStatus::NotApplicable:
         case DownloadStatus::NotStarted:
             return ErrorCode::Success;
+        case DownloadStatus::Pending:
         case DownloadStatus::InProgress:
             return ErrorCode::ModelDownloading;
         case DownloadStatus::Completed:
@@ -381,5 +386,96 @@ ErrorCode ArbiterAI::getDownloadStatus(const std::string &modelName, std::string
     return ErrorCode::UnsupportedProvider;
 }
 
+// ========== ChatClient Factory Methods ==========
+
+std::shared_ptr<ChatClient> ArbiterAI::createChatClient(const ChatConfig& config)
+{
+    if (!initialized)
+    {
+        return nullptr;
+    }
+
+    // Get model info
+    std::optional<ModelInfo> modelInfo = ModelManager::instance().getModelInfo(config.model);
+    if (!modelInfo)
+    {
+        return nullptr;
+    }
+
+    // Get or create provider
+    auto provider = getSharedProvider(modelInfo->provider);
+    if (!provider)
+    {
+        return nullptr;
+    }
+
+    // Create and return the ChatClient
+    return std::make_shared<ChatClient>(config, provider, *modelInfo);
+}
+
+std::shared_ptr<ChatClient> ArbiterAI::createChatClient(const std::string& model)
+{
+    ChatConfig config;
+    config.model = model;
+    return createChatClient(config);
+}
+
+std::shared_ptr<BaseProvider> ArbiterAI::getSharedProvider(const std::string& providerName)
+{
+    // Check if we already have a provider instance
+    auto it = providers.find(providerName);
+
+    if (it == providers.end())
+    {
+        // Create new provider instance
+        auto provider = createProvider(providerName);
+
+        if (!provider)
+        {
+            return nullptr;
+        }
+
+        auto models = ModelManager::instance().getModels(providerName);
+        provider->initialize(models);
+
+        it = providers.emplace(providerName, std::move(provider)).first;
+    }
+
+    // Return a shared_ptr that doesn't own the pointer (the unique_ptr in providers owns it)
+    // This is safe as long as ArbiterAI outlives all ChatClients
+    return std::shared_ptr<BaseProvider>(std::shared_ptr<void>{}, it->second.get());
+}
+
+// ========== Model Information Methods ==========
+
+ErrorCode ArbiterAI::getModelInfo(const std::string& modelName, ModelInfo& info)
+{
+    auto modelInfo = ModelManager::instance().getModelInfo(modelName);
+    if (!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+    info = *modelInfo;
+    return ErrorCode::Success;
+}
+
+ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
+{
+    auto allModels = ModelManager::instance().getModelsByRanking();
+    models.clear();
+    models.reserve(allModels.size());
+    for (const auto& m : allModels)
+    {
+        models.push_back(m.model);
+    }
+    return ErrorCode::Success;
+}
+
+ErrorCode ArbiterAI::shutdown()
+{
+    providers.clear();
+    initialized = false;
+    return ErrorCode::Success;
+}
 
 } // namespace arbiterAI
