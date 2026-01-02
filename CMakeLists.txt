@@ -113,6 +113,7 @@ target_link_libraries(arbiterai
         tests/configDownloaderTests.cpp
         tests/arbiterAITests.cpp
         tests/chatClientTests.cpp
+        tests/providerTests.cpp
     )
     
     target_link_libraries(arbiterai_tests

@@ -11,6 +11,7 @@ namespace arbiterAI
 
 class Anthropic : public BaseProvider
 {
+    friend class ProviderTest;
 public:
     Anthropic();
 

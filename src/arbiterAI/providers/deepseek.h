@@ -12,6 +12,7 @@ namespace arbiterAI
 
 class Deepseek : public BaseProvider
 {
+    friend class ProviderTest;
 public:
     Deepseek();
 

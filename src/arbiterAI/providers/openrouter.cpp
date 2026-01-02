@@ -8,9 +8,7 @@
 namespace arbiterAI
 {
 
-namespace
-{
-nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming)
+nlohmann::json OpenRouter_LLM::createRequestBody(const CompletionRequest &request, bool streaming)
 {
     nlohmann::json body;
     body["model"]=request.model;
@@ -57,7 +55,7 @@ nlohmann::json createRequestBody(const CompletionRequest &request, bool streamin
     return body;
 }
 
-ErrorCode parseResponse(const cpr::Response &rawResponse, CompletionResponse &response)
+ErrorCode OpenRouter_LLM::parseResponse(const cpr::Response &rawResponse, CompletionResponse &response)
 {
     if(rawResponse.status_code!=200)
     {
@@ -82,7 +80,6 @@ ErrorCode parseResponse(const cpr::Response &rawResponse, CompletionResponse &re
     {
         return ErrorCode::InvalidResponse;
     }
-}
 }
 
 ErrorCode OpenRouter_LLM::completion(const CompletionRequest &request, const ModelInfo &model, CompletionResponse &response)
