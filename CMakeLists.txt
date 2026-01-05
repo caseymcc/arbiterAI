@@ -64,6 +64,8 @@ set(arbiterai_src
     ./src/arbiterAI/providers/anthropic.cpp
     ./src/arbiterAI/providers/deepseek.h
     ./src/arbiterAI/providers/deepseek.cpp
+    ./src/arbiterAI/providers/mock.h
+    ./src/arbiterAI/providers/mock.cpp
 #    ./src/arbiterAI/providers/llama.h
 #    ./src/arbiterAI/providers/llama.cpp
 #    ./src/arbiterAI/providers/llamaInterface.h
@@ -114,6 +116,7 @@ target_link_libraries(arbiterai
         tests/arbiterAITests.cpp
         tests/chatClientTests.cpp
         tests/providerTests.cpp
+        tests/mockProviderTests.cpp
     )
     
     target_link_libraries(arbiterai_tests

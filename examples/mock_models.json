@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "name": "mock-model",
+      "provider": "mock",
+      "ranking": 1,
+      "description": "Mock provider for testing - no API key required",
+      "capabilities": {
+        "completion": true,
+        "streaming": true,
+        "embeddings": false,
+        "function_calling": false
+      },
+      "limits": {
+        "max_tokens": 100000,
+        "context_window": 100000
+      },
+      "pricing": {
+        "prompt": 0.0,
+        "completion": 0.0
+      }
+    },
+    {
+      "name": "mock-chat",
+      "provider": "mock",
+      "ranking": 1,
+      "description": "Mock chat model for testing conversations",
+      "capabilities": {
+        "completion": true,
+        "streaming": true,
+        "embeddings": false,
+        "function_calling": false
+      },
+      "limits": {
+        "max_tokens": 100000,
+        "context_window": 100000
+      },
+      "pricing": {
+        "prompt": 0.0,
+        "completion": 0.0
+      }
+    }
+  ]
+}

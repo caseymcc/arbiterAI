@@ -39,6 +39,8 @@ A modern, high-performance C++17 library designed to provide a unified, embeddab
 
   - OpenRouter: A unified interface for numerous models accessible via the OpenRouter aggregation service.
 
+  - Mock: A testing provider that enables repeatable, deterministic testing without requiring actual LLM calls. Supports echo tags for controlling expected responses.
+
 
 Configuration Management: A robust arbiterAI::ModelManager to dynamically load model configurations, provider endpoints, and API keys from multiple sources:
 

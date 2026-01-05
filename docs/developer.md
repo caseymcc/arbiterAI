@@ -101,6 +101,33 @@ The provider system abstracts the implementation details of various LLM backends
     *   Return N/A or not-applicable status for `getDownloadStatus` since they are cloud-based
     *   Support tool/function calling according to each API's specification
 
+*   **Mock Provider ([`Mock`](src/arbiterAI/providers/mock.h)):** A testing provider designed for repeatable, predictable testing without requiring actual LLM calls. It:
+    *   Extracts expected responses from `<echo>...</echo>` tags in user messages
+    *   Returns default mock response when no echo tags are present
+    *   Simulates realistic token usage for testing statistics tracking
+    *   Supports both blocking and streaming completion modes
+    *   Requires no network calls or API keys
+    *   Enables deterministic testing of application logic
+    
+    Example usage in tests:
+    ```cpp
+    // Configure a model to use the mock provider
+    ChatConfig config;
+    config.model = "mock-model";  // Provider must be set to "mock" in config
+    
+    auto client = ArbiterAI::instance().createChatClient(config);
+    
+    // Use echo tags to control response
+    CompletionRequest request;
+    request.messages = {
+        {Role::User, "What is 2+2? <echo>4</echo>"}
+    };
+    
+    CompletionResponse response;
+    client->completion(request, response);
+    // response.text will be "4"
+    ```
+
 *   **Local Provider ([`Llama`](src/arbiterAI/providers/llama.h)):** This provider interfaces with the `llama.cpp` library to run models locally. It:
     *   Manages model loading into memory and local inference
     *   Handles model file downloads and verification

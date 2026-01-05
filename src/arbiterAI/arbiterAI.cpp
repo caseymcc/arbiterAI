@@ -9,6 +9,7 @@
 #include "arbiterAI/providers/deepseek.h"
 // #include "arbiterAI/providers/llama.h"  // Disabled - not built in CMakeLists
 #include "arbiterAI/providers/openrouter.h"
+#include "arbiterAI/providers/mock.h"
 
 #include <memory>
 
@@ -96,6 +97,10 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     else if(provider=="openrouter")
     {
         return std::make_unique<OpenRouter_LLM>();
+    }
+    else if(provider=="mock")
+    {
+        return std::make_unique<Mock>();
     }
     return nullptr;
 }
