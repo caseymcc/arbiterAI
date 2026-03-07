@@ -16,6 +16,9 @@
 namespace arbiterAI
 {
 
+// Forward declaration
+static std::unique_ptr<BaseProvider> createProvider(const std::string &provider);
+
 ArbiterAI &ArbiterAI::instance()
 {
     static ArbiterAI instance;
@@ -49,6 +52,17 @@ ErrorCode ArbiterAI::initialize(const std::vector<std::filesystem::path> &config
     {
         return ErrorCode::InvalidRequest;
     }
+
+    // Load connection configurations from arbiterAI config files in configPaths
+    for(const auto &configPath : configPaths)
+    {
+        auto connectionConfigFile = configPath / "connections.json";
+        if(std::filesystem::exists(connectionConfigFile))
+        {
+            loadProviderConfig(connectionConfigFile);
+        }
+    }
+
     // Mark global singleton initialized so subsequent operations succeed
     ArbiterAI::instance().initialized = true;
     return ErrorCode::Success;
@@ -107,11 +121,26 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
 
 namespace
 {
-BaseProvider *getProvider(const std::string &providerName)
+BaseProvider *getProvider(const std::string &providerName, const std::string &modelName = "")
 {
     auto &arbiter = ArbiterAI::instance();
 
-    // Check if we already have an Provider instance for this provider
+    // First check if this model is registered to a specific connection
+    if(!modelName.empty())
+    {
+        auto connectionIt = arbiter.connectionModels.find(modelName);
+        if(connectionIt != arbiter.connectionModels.end())
+        {
+            // Use the connection-specific provider
+            auto providerIt = arbiter.providers.find(connectionIt->second);
+            if(providerIt != arbiter.providers.end())
+            {
+                return providerIt->second.get();
+            }
+        }
+    }
+
+    // Check if we already have a Provider instance for this provider
     auto it=arbiter.providers.find(providerName);
 
     if(it==arbiter.providers.end())
@@ -174,7 +203,7 @@ ErrorCode ArbiterAI::completion(const CompletionRequest &request, CompletionResp
         }
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
 
     if(!provider)
     {
@@ -212,7 +241,7 @@ ErrorCode ArbiterAI::streamingCompletion(const CompletionRequest &request,
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
 
     if(!provider)
     {
@@ -306,7 +335,7 @@ std::vector<CompletionResponse> ArbiterAI::batchCompletion(const std::vector<Com
             continue;
         }
 
-        BaseProvider *provider=getProvider(modelInfo->provider);
+        BaseProvider *provider=getProvider(modelInfo->provider, modelName);
         if(!provider)
         {
             // Handle unsupported provider
@@ -351,7 +380,7 @@ ErrorCode ArbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingRes
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
 
     if(!provider)
     {
@@ -369,7 +398,7 @@ ErrorCode ArbiterAI::getDownloadStatus(const std::string &modelName, std::string
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, modelName);
 
     if(provider)
     {
@@ -481,6 +510,92 @@ ErrorCode ArbiterAI::shutdown()
     providers.clear();
     initialized = false;
     return ErrorCode::Success;
+}
+
+void ArbiterAI::loadProviderConfig(const std::filesystem::path& configPath)
+{
+    try
+    {
+        std::ifstream file(configPath);
+        if(!file.is_open())
+        {
+            return;
+        }
+
+        nlohmann::json config;
+        file >> config;
+
+        if(!config.contains("connections") || !config["connections"].is_array())
+        {
+            return;
+        }
+
+        for(const auto& connectionJson : config["connections"])
+        {
+            if(!connectionJson.contains("name") || !connectionJson.contains("provider"))
+                continue;
+
+            std::string connectionName = connectionJson["name"].get<std::string>();
+            std::string providerType = connectionJson["provider"].get<std::string>();
+            
+            // Get or create the provider for this connection
+            BaseProvider* provider = nullptr;
+            auto it = providers.find(connectionName);
+            if(it == providers.end())
+            {
+                // Create provider instance based on provider type
+                auto newProvider = createProvider(providerType);
+                if(!newProvider)
+                    continue;
+                
+                // Initialize the provider with models from ModelManager
+                auto models = ModelManager::instance().getModels(providerType);
+                newProvider->initialize(models);
+                
+                providers[connectionName] = std::move(newProvider);
+                provider = providers[connectionName].get();
+            }
+            else
+            {
+                provider = it->second.get();
+            }
+
+            if(!provider)
+                continue;
+
+            // Set API URL if provided
+            if(connectionJson.contains("api_url"))
+            {
+                std::string apiUrl = connectionJson["api_url"].get<std::string>();
+                provider->setApiUrl(apiUrl);
+            }
+
+            // Set API key if provided
+            if(connectionJson.contains("api_key"))
+            {
+                std::string apiKey = connectionJson["api_key"].get<std::string>();
+                provider->setApiKey(apiKey);
+            }
+
+            // Register models for this connection
+            if(connectionJson.contains("models") && connectionJson["models"].is_array())
+            {
+                for(const auto& modelName : connectionJson["models"])
+                {
+                    if(modelName.is_string())
+                    {
+                        // Register this model to use this connection (provider instance)
+                        std::string model = modelName.get<std::string>();
+                        connectionModels[model] = connectionName;
+                    }
+                }
+            }
+        }
+    }
+    catch(const std::exception& e)
+    {
+        // Silently ignore errors - provider config is optional
+    }
 }
 
 } // namespace arbiterAI

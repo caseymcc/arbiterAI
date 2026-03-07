@@ -32,7 +32,14 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
         return ErrorCode::Success;
     }
 
-    // 2. Check the model info from ModelManager
+    // 2. Check if API key was set via setApiKey()
+    if(!m_apiKey.empty())
+    {
+        apiKey=m_apiKey;
+        return ErrorCode::Success;
+    }
+
+    // 3. Check the model info from ModelManager
     auto modelInfo=ModelManager::instance().getModelInfo(modelName);
     if(modelInfo&&modelInfo->apiKey.has_value()&&!modelInfo->apiKey.value().empty())
     {
@@ -40,7 +47,7 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
         return ErrorCode::Success;
     }
 
-    // 3. Fallback to environment variables
+    // 4. Fallback to environment variables
     if(!m_provider.empty())
     {
         std::string envVarName=to_upper(m_provider)+"_API_KEY";

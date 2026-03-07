@@ -60,7 +60,8 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
 
     m_configDownloader.initialize(remoteUrl, localPath);
     // Load configs from the downloaded repository
-    auto remoteModelsPath=m_configDownloader.getLocalPath()/"models";
+    // The config repo has models in configs/defaults/models/
+    auto remoteModelsPath=m_configDownloader.getLocalPath()/"configs"/"defaults"/"models";
     if(std::filesystem::exists(remoteModelsPath))
     {
         for(const auto &entry:std::filesystem::directory_iterator(remoteModelsPath))
@@ -79,12 +80,15 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
     for(const auto &configPath:configPaths)
     {
         auto modelsPath=configPath/"models";
+        spdlog::info("Looking for models in: {}", modelsPath.string());
         if(std::filesystem::exists(modelsPath))
         {
+            spdlog::info("Found models directory: {}", modelsPath.string());
             for(const auto &entry:std::filesystem::directory_iterator(modelsPath))
             {
                 if(entry.path().extension()==".json")
                 {
+                    spdlog::info("Loading model file: {}", entry.path().string());
                     if(loadModelFile(entry.path()))
                     {
                         anyLoaded=true;

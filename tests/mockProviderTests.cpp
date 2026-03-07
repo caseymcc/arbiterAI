@@ -19,7 +19,7 @@ protected:
         provider = std::make_unique<Mock>();
         
         // Create a minimal ModelInfo
-        modelInfo.name = "mock-model";
+        modelInfo.model = "mock-model";
         modelInfo.provider = "mock";
         modelInfo.ranking = 1;
     }

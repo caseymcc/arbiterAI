@@ -229,6 +229,39 @@ inline void from_json(const nlohmann::json &j, Message &m)
 }
 
 /**
+ * @struct ProviderConfig
+ * @brief Configuration for a specific LLM connection
+ */
+struct ProviderConfig
+{
+    std::string name;                      ///< Connection name/identifier
+    std::string provider;                  ///< Provider type (openai, anthropic, deepseek, etc.)
+    std::optional<std::string> apiUrl;     ///< Custom API endpoint URL
+    std::optional<std::string> apiKey;     ///< API key for authentication
+    std::vector<std::string> models;       ///< Models available through this connection
+};
+
+inline void to_json(nlohmann::json &j, const ProviderConfig &p)
+{
+    j = nlohmann::json{
+        {"name", p.name},
+        {"provider", p.provider}
+    };
+    if (p.apiUrl.has_value()) j["api_url"] = p.apiUrl.value();
+    if (p.apiKey.has_value()) j["api_key"] = p.apiKey.value();
+    if (!p.models.empty()) j["models"] = p.models;
+}
+
+inline void from_json(const nlohmann::json &j, ProviderConfig &p)
+{
+    j.at("name").get_to(p.name);
+    j.at("provider").get_to(p.provider);
+    if (j.contains("api_url")) p.apiUrl = j.at("api_url").get<std::string>();
+    if (j.contains("api_key")) p.apiKey = j.at("api_key").get<std::string>();
+    if (j.contains("models")) j.at("models").get_to(p.models);
+}
+
+/**
  * @struct CompletionRequest
 * @brief Parameters for text completion requests
 */
@@ -413,7 +446,7 @@ public:
 
     /**
     * @brief Initialize the ArbiterAI library
-    * @param configPaths List of paths to configuration files
+    * @param configPaths List of paths to configuration directories (will search for providers.json in each)
     * @return ErrorCode indicating success or failure
     */
     ErrorCode initialize(const std::vector<std::filesystem::path> &configPaths);
@@ -527,6 +560,7 @@ public:
 
     bool initialized = false;
     std::map<std::string, std::unique_ptr<class BaseProvider>> providers;
+    std::map<std::string, std::string> connectionModels;  ///< Maps model name to connection name
 
 private:
     /**
@@ -535,6 +569,12 @@ private:
      * @return Shared pointer to the provider
      */
     std::shared_ptr<BaseProvider> getSharedProvider(const std::string& providerName);
+
+    /**
+     * @brief Load provider configuration from a JSON file
+     * @param configPath Path to providers.json configuration file
+     */
+    void loadProviderConfig(const std::filesystem::path& configPath);
 
     std::unique_ptr<CacheManager> m_cacheManager;
     std::unique_ptr<CostManager> m_costManager;

@@ -26,6 +26,9 @@ public:
         EmbeddingResponse &response) override;
 
     ErrorCode getAvailableModels(std::vector<std::string>& models) override;
+
+    void setApiUrl(const std::string &url) override { m_apiUrl = url; }
+
 private:
     nlohmann::json createRequestBody(const CompletionRequest &request, bool streaming);
     cpr::Header createHeaders(const std::string &apiKey);

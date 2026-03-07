@@ -105,12 +105,25 @@ public:
      */
     std::string getProviderName() const { return m_provider; }
 
+    /**
+     * @brief Set the API endpoint URL for this provider
+     * @param url The endpoint URL
+     */
+    virtual void setApiUrl(const std::string &url) {}
+
+    /**
+     * @brief Set the API key for this provider
+     * @param key The API key
+     */
+    virtual void setApiKey(const std::string &key) { m_apiKey = key; }
+
 protected:
     ErrorCode getApiKey(const std::string &modelName,
         const std::optional<std::string> &requestApiKey, std::string &apiKey);
 
 protected:
     std::string m_provider;
+    std::string m_apiKey;  ///< API key set via setApiKey()
 };
 
 } // namespace arbiterAI
