@@ -34,3 +34,6 @@
 # Build files
 build/
 vcpkg_installed/
+
+# Cloned config repository
+arbiterAI_config/

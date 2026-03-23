@@ -3,12 +3,14 @@
 This guide covers testing strategies and tools available in ArbiterAI, with special focus on the Mock provider for repeatable testing.
 
 ## Table of Contents
+
 1. [Overview](#overview)
 2. [Mock Provider](#mock-provider)
 3. [Echo Tag Syntax](#echo-tag-syntax)
 4. [Usage Examples](#usage-examples)
 5. [Testing Best Practices](#testing-best-practices)
 6. [Integration Testing](#integration-testing)
+7. [Test Configuration](#test-configuration)
 
 ## Overview
 
@@ -27,7 +29,7 @@ The Mock provider enables deterministic, repeatable testing by allowing test cod
 The Mock provider ([`src/arbiterAI/providers/mock.h`](../src/arbiterAI/providers/mock.h)) provides:
 
 - **Echo Mode**: Extract expected responses from `<echo>` tags in messages
-- **Default Responses**: Returns helpful message when no echo tags found
+- **Default Responses**: Returns a helpful message when no echo tags are found
 - **Token Simulation**: Calculates realistic token usage statistics
 - **Streaming Support**: Simulates streaming behavior with configurable chunk sizes
 - **No Network Calls**: Completely local, no external dependencies
@@ -50,28 +52,25 @@ To use the Mock provider, configure a model with `"provider": "mock"` in your mo
 }
 ```
 
-Or create a `ChatClient` with the mock model:
+Then create a `ChatClient` with the mock model:
 
 ```cpp
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/chatClient.h"
 
 // Initialize ArbiterAI with config that includes mock model
-ArbiterAI& ai = ArbiterAI::instance();
-ai.initialize(configPaths);
+arbiterAI::ArbiterAI& ai = arbiterAI::ArbiterAI::instance();
+ai.initialize({"path/to/config"});
 
 // Create chat client using mock model
-ChatConfig config;
+arbiterAI::ChatConfig config;
 config.model = "mock-model";
-config.temperature = 0.7;  // Ignored by mock, but demonstrates API usage
-
 auto chatClient = ai.createChatClient(config);
 ```
 
 ## Echo Tag Syntax
 
 ### Basic Syntax
-
-The echo tag syntax is simple and flexible:
 
 ```
 <echo>expected response text</echo>
@@ -88,33 +87,22 @@ The echo tag syntax is simple and flexible:
 
 ### Examples
 
-Simple response:
+**Simple response:**
 ```
 User: "What is 2+2? <echo>4</echo>"
 Response: "4"
 ```
 
-Multiline response:
+**Multiline response:**
 ```
 User: "Write hello in Python <echo>
 def hello():
     print('Hello, World!')
 </echo>"
-Response: "def hello():
-    print('Hello, World!')"
+Response: "def hello():\n    print('Hello, World!')"
 ```
 
-Complex narrative:
-```
-User: "Explain quantum computing in simple terms. <echo>
-Quantum computing uses quantum bits (qubits) that can exist in multiple 
-states simultaneously, unlike classical bits that are either 0 or 1. 
-This allows quantum computers to process certain types of problems 
-exponentially faster than traditional computers.
-</echo>"
-```
-
-Hidden in conversation:
+**Hidden in conversation:**
 ```
 System: "You are a helpful assistant."
 User: "Tell me about space <echo>Space is vast and full of stars.</echo>"
@@ -138,70 +126,64 @@ This helps identify when tests are missing echo tags.
 ```cpp
 #include <gtest/gtest.h>
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/chatClient.h"
 
 class MockProviderTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ArbiterAI& ai = ArbiterAI::instance();
-        // Assume config includes mock-model
+        arbiterAI::ArbiterAI& ai = arbiterAI::ArbiterAI::instance();
         ai.initialize({"test_config.json"});
-        
-        ChatConfig config;
+
+        arbiterAI::ChatConfig config;
         config.model = "mock-model";
         chatClient = ai.createChatClient(config);
     }
-    
-    std::shared_ptr<ChatClient> chatClient;
+
+    std::shared_ptr<arbiterAI::ChatClient> chatClient;
 };
 
 TEST_F(MockProviderTest, EchoTagExtraction) {
-    CompletionRequest request;
-    request.messages = {
-        {Role::User, "Calculate sum <echo>42</echo>"}
-    };
-    
-    CompletionResponse response;
-    ErrorCode result = chatClient->completion(request, response);
-    
-    EXPECT_EQ(result, ErrorCode::Success);
+    arbiterAI::CompletionRequest request;
+    request.messages = {{"user", "Calculate sum <echo>42</echo>"}};
+
+    arbiterAI::CompletionResponse response;
+    auto result = chatClient->completion(request, response);
+
+    EXPECT_EQ(result, arbiterAI::ErrorCode::Success);
     EXPECT_EQ(response.text, "42");
 }
 
 TEST_F(MockProviderTest, MultilineEcho) {
-    CompletionRequest request;
+    arbiterAI::CompletionRequest request;
     request.messages = {
-        {Role::User, "Generate code <echo>int main() {\n    return 0;\n}</echo>"}
+        {"user", "Generate code <echo>int main() {\n    return 0;\n}</echo>"}
     };
-    
-    CompletionResponse response;
-    ErrorCode result = chatClient->completion(request, response);
-    
-    EXPECT_EQ(result, ErrorCode::Success);
+
+    arbiterAI::CompletionResponse response;
+    auto result = chatClient->completion(request, response);
+
+    EXPECT_EQ(result, arbiterAI::ErrorCode::Success);
     EXPECT_EQ(response.text, "int main() {\n    return 0;\n}");
 }
 
 TEST_F(MockProviderTest, DefaultResponse) {
-    CompletionRequest request;
-    request.messages = {
-        {Role::User, "No echo tag here"}
-    };
-    
-    CompletionResponse response;
-    ErrorCode result = chatClient->completion(request, response);
-    
-    EXPECT_EQ(result, ErrorCode::Success);
+    arbiterAI::CompletionRequest request;
+    request.messages = {{"user", "No echo tag here"}};
+
+    arbiterAI::CompletionResponse response;
+    auto result = chatClient->completion(request, response);
+
+    EXPECT_EQ(result, arbiterAI::ErrorCode::Success);
     EXPECT_TRUE(response.text.find("mock response") != std::string::npos);
 }
 
 TEST_F(MockProviderTest, TokenUsageSimulation) {
-    CompletionRequest request;
-    request.messages = {
-        {Role::User, "Test <echo>Response</echo>"}
-    };
-    
-    CompletionResponse response;
+    arbiterAI::CompletionRequest request;
+    request.messages = {{"user", "Test <echo>Response</echo>"}};
+
+    arbiterAI::CompletionResponse response;
     chatClient->completion(request, response);
-    
+
     // Mock provider simulates token usage
     EXPECT_GT(response.usage.total_tokens, 0);
     EXPECT_GT(response.usage.prompt_tokens, 0);
@@ -213,24 +195,24 @@ TEST_F(MockProviderTest, TokenUsageSimulation) {
 
 ```cpp
 TEST_F(MockProviderTest, StreamingCompletion) {
-    CompletionRequest request;
+    arbiterAI::CompletionRequest request;
     request.messages = {
-        {Role::User, "Stream this <echo>Hello streaming world!</echo>"}
+        {"user", "Stream this <echo>Hello streaming world!</echo>"}
     };
-    
+
     std::string accumulated;
     int chunkCount = 0;
-    
+
     auto callback = [&](const std::string& chunk, bool done) {
         if (!done) {
             accumulated += chunk;
             chunkCount++;
         }
     };
-    
-    ErrorCode result = chatClient->streamingCompletion(request, callback);
-    
-    EXPECT_EQ(result, ErrorCode::Success);
+
+    auto result = chatClient->streamingCompletion(request, callback);
+
+    EXPECT_EQ(result, arbiterAI::ErrorCode::Success);
     EXPECT_EQ(accumulated, "Hello streaming world!");
     EXPECT_GT(chunkCount, 1); // Should stream in multiple chunks
 }
@@ -241,24 +223,20 @@ TEST_F(MockProviderTest, StreamingCompletion) {
 ```cpp
 TEST_F(MockProviderTest, ConversationHistory) {
     // First message
-    CompletionRequest request1;
-    request1.messages = {{Role::User, "First <echo>Response 1</echo>"}};
-    CompletionResponse response1;
+    arbiterAI::CompletionRequest request1;
+    request1.messages = {{"user", "First <echo>Response 1</echo>"}};
+    arbiterAI::CompletionResponse response1;
     chatClient->completion(request1, response1);
-    
+
     // Second message
-    CompletionRequest request2;
-    request2.messages = {{Role::User, "Second <echo>Response 2</echo>"}};
-    CompletionResponse response2;
+    arbiterAI::CompletionRequest request2;
+    request2.messages = {{"user", "Second <echo>Response 2</echo>"}};
+    arbiterAI::CompletionResponse response2;
     chatClient->completion(request2, response2);
-    
+
     // Check history
     auto history = chatClient->getHistory();
     EXPECT_EQ(history.size(), 4); // 2 user + 2 assistant messages
-    EXPECT_EQ(history[0].content, "First <echo>Response 1</echo>");
-    EXPECT_EQ(history[1].content, "Response 1");
-    EXPECT_EQ(history[2].content, "Second <echo>Response 2</echo>");
-    EXPECT_EQ(history[3].content, "Response 2");
 }
 ```
 
@@ -268,10 +246,10 @@ TEST_F(MockProviderTest, ConversationHistory) {
 
 ```cpp
 // GOOD: Explicit expected response
-request.messages = {{Role::User, "Question <echo>Expected answer</echo>"}};
+request.messages = {{"user", "Question <echo>Expected answer</echo>"}};
 
 // BAD: Relies on default response (less clear intent)
-request.messages = {{Role::User, "Question"}};
+request.messages = {{"user", "Question"}};
 ```
 
 ### 2. Test Both Success and Edge Cases
@@ -289,24 +267,21 @@ TEST_F(Test, MissingEchoTag) {
 
 // Test empty echo tag
 TEST_F(Test, EmptyEcho) {
-    request.messages = {{Role::User, "<echo></echo>"}};
+    request.messages = {{"user", "<echo></echo>"}};
     // ... verify behavior ...
 }
 ```
 
-### 3. Use Realistic Test Data
+### 3. Use Raw String Literals for Multiline Responses
 
 ```cpp
-// GOOD: Realistic multi-line code response
-request.messages = {{Role::User, R"(
+request.messages = {{"user", R"(
 Write a function <echo>
 def calculate_sum(a, b):
     """Calculate sum of two numbers."""
     return a + b
 </echo>
 )"}};
-
-// Also good: Use raw string literals for readability
 ```
 
 ### 4. Test Token Usage Tracking
@@ -314,10 +289,10 @@ def calculate_sum(a, b):
 ```cpp
 TEST_F(Test, UsageStatistics) {
     chatClient->completion(request, response);
-    
-    UsageStats stats;
+
+    arbiterAI::UsageStats stats;
     chatClient->getUsageStats(stats);
-    
+
     EXPECT_GT(stats.totalTokens, 0);
     EXPECT_GT(stats.completionCount, 0);
 }
@@ -327,12 +302,10 @@ TEST_F(Test, UsageStatistics) {
 
 ```cpp
 TEST_F(Test, IsolatedSession) {
-    // Each test gets fresh client from SetUp()
-    // No cross-contamination of history or state
-    
-    ChatConfig config;
+    // Each test gets a fresh client — no cross-contamination
+    arbiterAI::ChatConfig config;
     config.model = "mock-model";
-    auto isolatedClient = ArbiterAI::instance().createChatClient(config);
+    auto isolatedClient = arbiterAI::ArbiterAI::instance().createChatClient(config);
     // ... test in isolation ...
 }
 ```
@@ -343,10 +316,10 @@ TEST_F(Test, IsolatedSession) {
 
 ```cpp
 TEST_F(IntegrationTest, HandleMissingModel) {
-    ChatConfig config;
+    arbiterAI::ChatConfig config;
     config.model = "non-existent-model";
-    
-    auto client = ArbiterAI::instance().createChatClient(config);
+
+    auto client = arbiterAI::ArbiterAI::instance().createChatClient(config);
     EXPECT_EQ(client, nullptr); // Should fail gracefully
 }
 ```
@@ -355,19 +328,19 @@ TEST_F(IntegrationTest, HandleMissingModel) {
 
 ```cpp
 TEST_F(IntegrationTest, CacheWithMock) {
-    ChatConfig config;
+    arbiterAI::ChatConfig config;
     config.model = "mock-model";
     config.enableCache = true;
-    
-    auto client = ArbiterAI::instance().createChatClient(config);
-    
-    CompletionRequest request;
-    request.messages = {{Role::User, "Test <echo>Cached response</echo>"}};
-    
-    CompletionResponse response1, response2;
+
+    auto client = arbiterAI::ArbiterAI::instance().createChatClient(config);
+
+    arbiterAI::CompletionRequest request;
+    request.messages = {{"user", "Test <echo>Cached response</echo>"}};
+
+    arbiterAI::CompletionResponse response1, response2;
     client->completion(request, response1);
     client->completion(request, response2); // Should be cached
-    
+
     EXPECT_EQ(response1.text, response2.text);
     EXPECT_FALSE(response1.fromCache);
     EXPECT_TRUE(response2.fromCache);
@@ -378,25 +351,25 @@ TEST_F(IntegrationTest, CacheWithMock) {
 
 ```cpp
 TEST_F(IntegrationTest, TemperatureChange) {
-    auto client = ArbiterAI::instance().createChatClient(config);
-    
-    EXPECT_EQ(client->getTemperature(), 0.7);
-    
+    auto client = arbiterAI::ArbiterAI::instance().createChatClient(config);
+
     client->setTemperature(0.3);
-    EXPECT_EQ(client->getTemperature(), 0.3);
-    
-    // Mock provider ignores temperature, but API still works
-    CompletionRequest request;
-    request.messages = {{Role::User, "Test <echo>Result</echo>"}};
-    
-    CompletionResponse response;
-    EXPECT_EQ(client->completion(request, response), ErrorCode::Success);
+    EXPECT_DOUBLE_EQ(client->getTemperature(), 0.3);
+
+    // Mock provider ignores temperature, but the API still works
+    arbiterAI::CompletionRequest request;
+    request.messages = {{"user", "Test <echo>Result</echo>"}};
+
+    arbiterAI::CompletionResponse response;
+    EXPECT_EQ(client->completion(request, response), arbiterAI::ErrorCode::Success);
 }
 ```
 
-## Sample Test Configuration
+## Test Configuration
 
-Create a test configuration file `test_models.json`:
+### Sample Configuration File
+
+Create a test configuration file (`test_models.json`):
 
 ```json
 {
@@ -422,17 +395,31 @@ Create a test configuration file `test_models.json`:
 }
 ```
 
-## Conclusion
+See also [`examples/mock_models.json`](../examples/mock_models.json) for a ready-to-use configuration.
 
-The Mock provider enables comprehensive testing of ArbiterAI-based applications without external dependencies. By using echo tags, tests can:
+### Test Files
 
-- Control exact expected outputs
-- Verify conversation flow and history management
-- Test error handling and edge cases
-- Validate statistics and token tracking
-- Ensure deterministic, repeatable results
+| File | Description |
+|------|-------------|
+| [`tests/mockProviderTests.cpp`](../tests/mockProviderTests.cpp) | Mock provider unit tests |
+| [`tests/chatClientTests.cpp`](../tests/chatClientTests.cpp) | ChatClient tests |
+| [`tests/arbiterAITests.cpp`](../tests/arbiterAITests.cpp) | Core library tests |
+| [`tests/providerTests.cpp`](../tests/providerTests.cpp) | Provider integration tests |
+| [`tests/modelManagerTests.cpp`](../tests/modelManagerTests.cpp) | Model configuration tests |
+| [`tests/modelDownloaderTests.cpp`](../tests/modelDownloaderTests.cpp) | Download and verification tests |
+| [`tests/configDownloaderTests.cpp`](../tests/configDownloaderTests.cpp) | Config download tests |
 
-For more information, see:
-- [`src/arbiterAI/providers/mock.h`](../src/arbiterAI/providers/mock.h) - Mock provider interface
-- [`src/arbiterAI/providers/mock.cpp`](../src/arbiterAI/providers/mock.cpp) - Implementation details
-- [`developer.md`](developer.md) - Overall architecture documentation
+### Running Tests
+
+From inside the Docker container:
+
+```bash
+./build/linux_x64_debug/arbiterai_tests
+```
+
+## Further Reading
+
+- [Developer Guide](developer.md) — Architecture and API reference
+- [Examples](../examples/README.md) — Working example code
+- [`src/arbiterAI/providers/mock.h`](../src/arbiterAI/providers/mock.h) — Mock provider header
+- [`src/arbiterAI/providers/mock.cpp`](../src/arbiterAI/providers/mock.cpp) — Mock provider implementation
