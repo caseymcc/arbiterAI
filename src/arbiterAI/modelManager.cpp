@@ -56,24 +56,31 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
 
     // Initialize ConfigDownloader
     const std::string remoteUrl="https://github.com/caseymcc/arbiterAI_config.git";
-    std::filesystem::path localPath=std::filesystem::temp_directory_path()/"arbiterAI_config";
+    std::filesystem::path remotePath=std::filesystem::current_path()/"arbiterAI_config";
 
-    m_configDownloader.initialize(remoteUrl, localPath);
-    // Load configs from the downloaded repository
-    // The config repo has models in configs/defaults/models/
-    auto remoteModelsPath=m_configDownloader.getLocalPath()/"configs"/"defaults"/"models";
-    if(std::filesystem::exists(remoteModelsPath))
+    ConfigDownloadStatus dlStatus=m_configDownloader.initialize(remoteUrl, remotePath);
+    if(dlStatus==ConfigDownloadStatus::Success||dlStatus==ConfigDownloadStatus::FallbackToCache)
     {
-        for(const auto &entry:std::filesystem::directory_iterator(remoteModelsPath))
+        // Load configs from the downloaded repository
+        // The config repo has models in configs/defaults/models/
+        auto remoteModelsPath=m_configDownloader.getLocalPath()/"configs"/"defaults"/"models";
+        if(std::filesystem::exists(remoteModelsPath))
         {
-            if(entry.path().extension()==".json")
+            for(const auto &entry:std::filesystem::directory_iterator(remoteModelsPath))
             {
-                if(loadModelFile(entry.path()))
+                if(entry.path().extension()==".json")
                 {
-                    anyLoaded=true;
+                    if(loadModelFile(entry.path()))
+                    {
+                        anyLoaded=true;
+                    }
                 }
             }
         }
+    }
+    else
+    {
+        spdlog::warn("Config download failed (status {}), skipping remote configs", static_cast<int>(dlStatus));
     }
 
     // Process additional local directories from configPaths
@@ -212,6 +219,87 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
         if(compat.contains("max_client_version"))
         {
             info.maxClientVersion=compat["max_client_version"].get<std::string>();
+        }
+    }
+
+    // Hardware requirements (local models)
+    if(modelJson.contains("hardware_requirements"))
+    {
+        auto &hw=modelJson["hardware_requirements"];
+
+        HardwareRequirements reqs;
+        if(hw.contains("min_system_ram_mb"))
+        {
+            reqs.minSystemRamMb=hw["min_system_ram_mb"].get<int>();
+        }
+        if(hw.contains("parameter_count"))
+        {
+            reqs.parameterCount=hw["parameter_count"].get<std::string>();
+        }
+        info.hardwareRequirements=reqs;
+    }
+
+    // Context scaling (local models)
+    if(modelJson.contains("context_scaling"))
+    {
+        auto &cs=modelJson["context_scaling"];
+
+        ContextScaling scaling;
+        if(cs.contains("base_context"))
+        {
+            scaling.baseContext=cs["base_context"].get<int>();
+        }
+        if(cs.contains("max_context"))
+        {
+            scaling.maxContext=cs["max_context"].get<int>();
+        }
+        if(cs.contains("vram_per_1k_context_mb"))
+        {
+            scaling.vramPer1kContextMb=cs["vram_per_1k_context_mb"].get<int>();
+        }
+        info.contextScaling=scaling;
+    }
+
+    // Variants (quantization variants for local models)
+    if(modelJson.contains("variants")&&modelJson["variants"].is_array())
+    {
+        for(const auto &variantJson:modelJson["variants"])
+        {
+            ModelVariant variant;
+
+            if(variantJson.contains("quantization"))
+            {
+                variant.quantization=variantJson["quantization"].get<std::string>();
+            }
+            if(variantJson.contains("file_size_mb"))
+            {
+                variant.fileSizeMb=variantJson["file_size_mb"].get<int>();
+            }
+            if(variantJson.contains("min_vram_mb"))
+            {
+                variant.minVramMb=variantJson["min_vram_mb"].get<int>();
+            }
+            if(variantJson.contains("recommended_vram_mb"))
+            {
+                variant.recommendedVramMb=variantJson["recommended_vram_mb"].get<int>();
+            }
+            if(variantJson.contains("download"))
+            {
+                auto &dl=variantJson["download"];
+                if(dl.contains("url"))
+                {
+                    variant.download.url=dl["url"].get<std::string>();
+                }
+                if(dl.contains("sha256"))
+                {
+                    variant.download.sha256=dl["sha256"].get<std::string>();
+                }
+                if(dl.contains("filename"))
+                {
+                    variant.download.filename=dl["filename"].get<std::string>();
+                }
+            }
+            info.variants.push_back(variant);
         }
     }
 
@@ -371,6 +459,18 @@ bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
                 if(modelJson.contains("pricing"))
                 {
                     it->pricing=info.pricing;
+                }
+                if(modelJson.contains("hardware_requirements"))
+                {
+                    it->hardwareRequirements=info.hardwareRequirements;
+                }
+                if(modelJson.contains("context_scaling"))
+                {
+                    it->contextScaling=info.contextScaling;
+                }
+                if(modelJson.contains("variants"))
+                {
+                    it->variants=info.variants;
                 }
             }
             else

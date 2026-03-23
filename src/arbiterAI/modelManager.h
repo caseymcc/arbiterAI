@@ -16,11 +16,35 @@ namespace arbiterAI
 
 class ModelManager; // Forward declaration
 
-struct DownloadMetadata
-{
+struct DownloadMetadata {
     std::string url;
     std::string sha256;
     std::string cachePath;
+};
+
+struct HardwareRequirements {
+    int minSystemRamMb=0;
+    std::string parameterCount;
+};
+
+struct ContextScaling {
+    int baseContext=4096;
+    int maxContext=4096;
+    int vramPer1kContextMb=0;
+};
+
+struct VariantDownload {
+    std::string url;
+    std::string sha256;
+    std::string filename;
+};
+
+struct ModelVariant {
+    std::string quantization;
+    int fileSizeMb=0;
+    int minVramMb=0;
+    int recommendedVramMb=0;
+    VariantDownload download;
 };
 
 struct Pricing
@@ -63,6 +87,9 @@ struct ModelInfo
     int maxInputTokens{ 3072 };
     int maxOutputTokens{ 1024 };
     Pricing pricing;
+    std::optional<HardwareRequirements> hardwareRequirements;
+    std::optional<ContextScaling> contextScaling;
+    std::vector<ModelVariant> variants;
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;

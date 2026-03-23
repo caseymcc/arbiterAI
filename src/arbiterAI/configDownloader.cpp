@@ -1,110 +1,253 @@
-#include "configDownloader.h"
+#include "arbiterAI/configDownloader.h"
 
 #include <git2.h>
-#include <iostream>
 #include <spdlog/spdlog.h>
 
 namespace arbiterAI
 {
-void ConfigDownloader::initialize(const std::string &repoUrl, const std::filesystem::path &localPath, const std::string &version)
+
+ConfigDownloadStatus ConfigDownloader::initialize(
+    const std::string &repoUrl,
+    const std::filesystem::path &localPath,
+    const std::string &version)
 {
+    m_repoUrl=repoUrl;
     m_localPath=localPath;
+    m_version=version;
+    m_initialized=true;
+
     git_libgit2_init();
-    git_repository *repo=nullptr;
+
+    ConfigDownloadStatus status;
 
     if(std::filesystem::exists(localPath)&&!std::filesystem::is_empty(localPath))
     {
-        spdlog::info("Checking for configuration updates in existing repository...");
-        if(git_repository_open(&repo, localPath.c_str())<0)
-        {
-            spdlog::error("Failed to open repository at {}", localPath.string());
-            git_libgit2_shutdown();
-            return;
-        }
-
-        spdlog::info("Fetching latest updates from remote...");
-        git_remote *remote=nullptr;
-        if(git_remote_lookup(&remote, repo, "origin")<0)
-        {
-            spdlog::error("Failed to lookup remote 'origin'");
-        }
-        else
-        {
-            git_fetch_options fetch_opts=GIT_FETCH_OPTIONS_INIT;
-            if(git_remote_fetch(remote, NULL, &fetch_opts, NULL)<0)
-            {
-                const git_error *e=git_error_last();
-                spdlog::error("Failed to fetch from remote: {}", e->message);
-            }
-            git_remote_free(remote);
-        }
+        // Existing repo — fetch updates and checkout
+        status=fetchAndUpdate();
     }
     else
     {
-        spdlog::info("Cloning remote configurations from {}...", repoUrl);
-        git_clone_options clone_opts=GIT_CLONE_OPTIONS_INIT;
-        if(git_clone(&repo, repoUrl.c_str(), localPath.c_str(), &clone_opts)<0)
-        {
-            const git_error *e=git_error_last();
-            spdlog::error("Failed to clone repository: {}", e->message);
-            git_libgit2_shutdown();
-            return;
-        }
-        spdlog::info("Successfully cloned configurations.");
+        // Fresh clone
+        status=cloneRepo();
     }
 
-    if(repo)
+    if(status==ConfigDownloadStatus::Success)
     {
-        spdlog::info("Checking out version: {}", version);
-        git_object *obj=nullptr;
-        std::string ref_name="refs/tags/"+version;
-        if(git_revparse_single(&obj, repo, version.c_str())!=0)
-        {
-            // If version is not a SHA, try as a branch
-            ref_name="refs/remotes/origin/"+version;
-            if(git_revparse_single(&obj, repo, ref_name.c_str())!=0)
-            {
-                // If not a branch, try as a tag
-                ref_name="refs/tags/"+version;
-                if(git_revparse_single(&obj, repo, ref_name.c_str())!=0)
-                {
-                    const git_error *e=git_error_last();
-                    spdlog::error("Failed to find version '{}': {}", version, e?e->message:"unknown error");
-                    git_repository_free(repo);
-                    git_libgit2_shutdown();
-                    return;
-                }
-            }
-        }
-
-        git_checkout_options checkout_opts=GIT_CHECKOUT_OPTIONS_INIT;
-        checkout_opts.checkout_strategy=GIT_CHECKOUT_FORCE;
-
-        if(git_checkout_tree(repo, obj, &checkout_opts)!=0)
-        {
-            const git_error *e=git_error_last();
-            spdlog::error("Failed to checkout version '{}': {}", version, e?e->message:"unknown error");
-        }
-        else
-        {
-            spdlog::info("Successfully checked out version '{}'", version);
-            // Detach HEAD
-            if(git_repository_set_head_detached(repo, git_object_id(obj))!=0)
-            {
-                const git_error *e=git_error_last();
-                spdlog::error("Failed to detach HEAD: {}", e?e->message:"unknown error");
-            }
-        }
-
-        git_object_free(obj);
-        git_repository_free(repo);
+        status=checkoutVersion();
     }
+
+    // If remote operations failed but we have a cached copy, fall back to it
+    if(status!=ConfigDownloadStatus::Success&&hasCachedConfig())
+    {
+        spdlog::warn("Remote sync failed, falling back to cached config at {}", m_localPath.string());
+        status=ConfigDownloadStatus::FallbackToCache;
+    }
+
+    m_status=status;
+    m_lastSync=std::chrono::steady_clock::now();
 
     git_libgit2_shutdown();
+    return m_status;
+}
+
+ConfigDownloadStatus ConfigDownloader::refresh()
+{
+    if(!m_initialized)
+    {
+        return ConfigDownloadStatus::NotInitialized;
+    }
+
+    // Skip refresh if interval has not elapsed
+    auto elapsed=std::chrono::steady_clock::now()-m_lastSync;
+    if(elapsed<m_refreshInterval)
+    {
+        return ConfigDownloadStatus::Success;
+    }
+
+    git_libgit2_init();
+
+    ConfigDownloadStatus status=fetchAndUpdate();
+    if(status==ConfigDownloadStatus::Success)
+    {
+        status=checkoutVersion();
+    }
+
+    if(status!=ConfigDownloadStatus::Success&&hasCachedConfig())
+    {
+        spdlog::warn("Refresh failed, continuing with cached config");
+        status=ConfigDownloadStatus::FallbackToCache;
+    }
+
+    m_status=status;
+    m_lastSync=std::chrono::steady_clock::now();
+
+    git_libgit2_shutdown();
+    return m_status;
+}
+
+void ConfigDownloader::setRefreshInterval(std::chrono::seconds interval)
+{
+    m_refreshInterval=interval;
 }
 
 const std::filesystem::path &ConfigDownloader::getLocalPath() const
 {
     return m_localPath;
 }
+
+ConfigDownloadStatus ConfigDownloader::getStatus() const
+{
+    return m_status;
 }
+
+bool ConfigDownloader::hasCachedConfig() const
+{
+    if(!std::filesystem::exists(m_localPath))
+    {
+        return false;
+    }
+
+    // Check if the local path contains any JSON files (configs may be in subdirectories)
+    for(const auto &entry:std::filesystem::recursive_directory_iterator(m_localPath))
+    {
+        if(entry.path().extension()==".json")
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+ConfigDownloadStatus ConfigDownloader::cloneRepo()
+{
+    spdlog::info("Cloning config repository from {}...", m_repoUrl);
+
+    git_repository *repo=nullptr;
+    git_clone_options cloneOpts=GIT_CLONE_OPTIONS_INIT;
+
+    int error=git_clone(&repo, m_repoUrl.c_str(), m_localPath.c_str(), &cloneOpts);
+    if(error<0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to clone config repository: {}", e?e->message:"unknown error");
+        if(repo)
+        {
+            git_repository_free(repo);
+        }
+        return ConfigDownloadStatus::CloneFailed;
+    }
+
+    spdlog::info("Successfully cloned config repository");
+    git_repository_free(repo);
+    return ConfigDownloadStatus::Success;
+}
+
+ConfigDownloadStatus ConfigDownloader::fetchAndUpdate()
+{
+    spdlog::info("Fetching config updates from remote...");
+
+    git_repository *repo=nullptr;
+    int error=git_repository_open(&repo, m_localPath.c_str());
+    if(error<0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to open config repository at {}: {}", m_localPath.string(), e?e->message:"unknown error");
+        return ConfigDownloadStatus::FetchFailed;
+    }
+
+    git_remote *remote=nullptr;
+    error=git_remote_lookup(&remote, repo, "origin");
+    if(error<0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to lookup remote 'origin': {}", e?e->message:"unknown error");
+        git_repository_free(repo);
+        return ConfigDownloadStatus::FetchFailed;
+    }
+
+    git_fetch_options fetchOpts=GIT_FETCH_OPTIONS_INIT;
+    error=git_remote_fetch(remote, nullptr, &fetchOpts, nullptr);
+
+    git_remote_free(remote);
+    git_repository_free(repo);
+
+    if(error<0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to fetch from remote: {}", e?e->message:"unknown error");
+        return ConfigDownloadStatus::FetchFailed;
+    }
+
+    spdlog::info("Successfully fetched config updates");
+    return ConfigDownloadStatus::Success;
+}
+
+ConfigDownloadStatus ConfigDownloader::checkoutVersion()
+{
+    git_repository *repo=nullptr;
+    int error=git_repository_open(&repo, m_localPath.c_str());
+    if(error<0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to open repository for checkout: {}", e?e->message:"unknown error");
+        return ConfigDownloadStatus::CheckoutFailed;
+    }
+
+    spdlog::info("Checking out version: {}", m_version);
+
+    // Try to resolve the version as a direct ref, remote branch, or tag
+    git_object *obj=nullptr;
+    error=git_revparse_single(&obj, repo, m_version.c_str());
+
+    if(error!=0)
+    {
+        // Try as a remote branch
+        std::string remoteBranch="refs/remotes/origin/"+m_version;
+        error=git_revparse_single(&obj, repo, remoteBranch.c_str());
+    }
+
+    if(error!=0)
+    {
+        // Try as a tag
+        std::string tag="refs/tags/"+m_version;
+        error=git_revparse_single(&obj, repo, tag.c_str());
+    }
+
+    if(error!=0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to find version '{}': {}", m_version, e?e->message:"unknown error");
+        git_repository_free(repo);
+        return ConfigDownloadStatus::CheckoutFailed;
+    }
+
+    git_checkout_options checkoutOpts=GIT_CHECKOUT_OPTIONS_INIT;
+    checkoutOpts.checkout_strategy=GIT_CHECKOUT_FORCE;
+
+    error=git_checkout_tree(repo, obj, &checkoutOpts);
+    if(error!=0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::error("Failed to checkout version '{}': {}", m_version, e?e->message:"unknown error");
+        git_object_free(obj);
+        git_repository_free(repo);
+        return ConfigDownloadStatus::CheckoutFailed;
+    }
+
+    // Detach HEAD to the checked-out commit
+    error=git_repository_set_head_detached(repo, git_object_id(obj));
+    if(error!=0)
+    {
+        const git_error *e=git_error_last();
+        spdlog::warn("Failed to detach HEAD: {}", e?e->message:"unknown error");
+        // Non-fatal — checkout succeeded
+    }
+
+    spdlog::info("Successfully checked out version '{}'", m_version);
+
+    git_object_free(obj);
+    git_repository_free(repo);
+    return ConfigDownloadStatus::Success;
+}
+
+} // namespace arbiterAI
