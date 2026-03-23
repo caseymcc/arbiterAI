@@ -1,0 +1,595 @@
+#include "arbiterAI/hardwareDetector.h"
+
+#include <spdlog/spdlog.h>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <cstring>
+
+#ifdef __linux__
+    #include <dlfcn.h>
+#endif
+
+// NVML type definitions (mirrors nvml.h without requiring the header)
+namespace
+{
+
+typedef enum
+{
+    NVML_SUCCESS=0
+} NvmlReturn;
+
+struct NvmlDevice;
+typedef NvmlDevice *NvmlDeviceHandle;
+
+struct NvmlMemory
+{
+    unsigned long long total;
+    unsigned long long free;
+    unsigned long long used;
+};
+
+struct NvmlUtilization
+{
+    unsigned int gpu;
+    unsigned int memory;
+};
+
+typedef NvmlReturn (*NvmlInitFunc)();
+typedef NvmlReturn (*NvmlShutdownFunc)();
+typedef NvmlReturn (*NvmlDeviceGetCountFunc)(unsigned int *);
+typedef NvmlReturn (*NvmlDeviceGetHandleByIndexFunc)(unsigned int, NvmlDeviceHandle *);
+typedef NvmlReturn (*NvmlDeviceGetNameFunc)(NvmlDeviceHandle, char *, unsigned int);
+typedef NvmlReturn (*NvmlDeviceGetMemoryInfoFunc)(NvmlDeviceHandle, NvmlMemory *);
+typedef NvmlReturn (*NvmlDeviceGetUtilizationRatesFunc)(NvmlDeviceHandle, NvmlUtilization *);
+typedef NvmlReturn (*NvmlDeviceGetCudaComputeCapabilityFunc)(NvmlDeviceHandle, int *, int *);
+
+// Vulkan type definitions (mirrors vulkan_core.h without requiring the header)
+typedef enum
+{
+    VK_SUCCESS=0
+} VkResult;
+
+typedef enum
+{
+    VK_STRUCTURE_TYPE_APPLICATION_INFO=0,
+    VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO=1
+} VkStructureType;
+
+typedef enum
+{
+    VK_MEMORY_HEAP_DEVICE_LOCAL_BIT=0x00000001
+} VkMemoryHeapFlagBits;
+
+typedef struct VkApplicationInfo {
+    VkStructureType sType;
+    const void *pNext;
+    const char *pApplicationName;
+    uint32_t applicationVersion;
+    const char *pEngineName;
+    uint32_t engineVersion;
+    uint32_t apiVersion;
+} VkApplicationInfo;
+
+typedef struct VkInstanceCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    uint32_t flags;
+    const VkApplicationInfo *pApplicationInfo;
+    uint32_t enabledLayerCount;
+    const char *const *ppEnabledLayerNames;
+    uint32_t enabledExtensionCount;
+    const char *const *ppEnabledExtensionNames;
+} VkInstanceCreateInfo;
+
+struct VkInstance_T;
+typedef VkInstance_T *VkInstance;
+
+struct VkPhysicalDevice_T;
+typedef VkPhysicalDevice_T *VkPhysicalDevice;
+
+typedef struct VkPhysicalDeviceLimits {
+    char padding[504]; // exact size of VkPhysicalDeviceLimits
+} VkPhysicalDeviceLimits;
+
+typedef struct VkPhysicalDeviceSparseProperties {
+    uint32_t residencyStandard2DBlockShape;
+    uint32_t residencyStandard2DMultisampleBlockShape;
+    uint32_t residencyStandard3DBlockShape;
+    uint32_t residencyAlignedMipSize;
+    uint32_t residencyNonResidentStrict;
+} VkPhysicalDeviceSparseProperties;
+
+typedef struct VkPhysicalDeviceProperties {
+    uint32_t apiVersion;
+    uint32_t driverVersion;
+    uint32_t vendorID;
+    uint32_t deviceID;
+    uint32_t deviceType; // VkPhysicalDeviceType
+    char deviceName[256]; // VK_MAX_PHYSICAL_DEVICE_NAME_SIZE
+    uint8_t pipelineCacheUUID[16]; // VK_UUID_SIZE
+    VkPhysicalDeviceLimits limits;
+    VkPhysicalDeviceSparseProperties sparseProperties;
+} VkPhysicalDeviceProperties;
+
+typedef struct VkMemoryHeap {
+    uint64_t size;
+    uint32_t flags; // VkMemoryHeapFlags
+} VkMemoryHeap;
+
+typedef struct VkMemoryType {
+    uint32_t propertyFlags;
+    uint32_t heapIndex;
+} VkMemoryType;
+
+typedef struct VkPhysicalDeviceMemoryProperties {
+    uint32_t memoryTypeCount;
+    VkMemoryType memoryTypes[32]; // VK_MAX_MEMORY_TYPES
+    uint32_t memoryHeapCount;
+    VkMemoryHeap memoryHeaps[16]; // VK_MAX_MEMORY_HEAPS
+} VkPhysicalDeviceMemoryProperties;
+
+typedef void *AllocationCallbacks;
+
+typedef VkResult (*VkCreateInstanceFunc)(const VkInstanceCreateInfo *, const AllocationCallbacks *, VkInstance *);
+typedef void (*VkDestroyInstanceFunc)(VkInstance, const AllocationCallbacks *);
+typedef VkResult (*VkEnumeratePhysicalDevicesFunc)(VkInstance, uint32_t *, VkPhysicalDevice *);
+typedef void (*VkGetPhysicalDevicePropertiesFunc)(VkPhysicalDevice, VkPhysicalDeviceProperties *);
+typedef void (*VkGetPhysicalDeviceMemoryPropertiesFunc)(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties *);
+
+const int NVML_DEVICE_NAME_BUFFER_SIZE=96;
+
+} // anonymous namespace
+
+namespace arbiterAI
+{
+
+HardwareDetector &HardwareDetector::instance()
+{
+    static HardwareDetector detector;
+    return detector;
+}
+
+HardwareDetector::HardwareDetector()
+{
+    loadNvml();
+    loadVulkan();
+    refresh();
+}
+
+HardwareDetector::~HardwareDetector()
+{
+    unloadNvml();
+    unloadVulkan();
+}
+
+void HardwareDetector::refresh()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    m_systemInfo.gpus.clear();
+    detectSystemRam();
+    detectCpuInfo();
+    detectCpuUtilization();
+    detectNvmlGpus();
+    detectVulkanGpus();
+}
+
+SystemInfo HardwareDetector::getSystemInfo() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_systemInfo;
+}
+
+std::vector<GpuInfo> HardwareDetector::getGpus() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_systemInfo.gpus;
+}
+
+int HardwareDetector::getTotalFreeVramMb() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    int total=0;
+    for(const GpuInfo &gpu:m_systemInfo.gpus)
+    {
+        total+=gpu.vramFreeMb;
+    }
+    return total;
+}
+
+int HardwareDetector::getTotalFreeRamMb() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_systemInfo.freeRamMb;
+}
+
+bool HardwareDetector::isNvmlAvailable() const
+{
+    return m_nvmlLoaded;
+}
+
+bool HardwareDetector::isVulkanAvailable() const
+{
+    return m_vulkanLoaded;
+}
+
+// --- System RAM detection ---
+
+void HardwareDetector::detectSystemRam()
+{
+#ifdef __linux__
+    std::ifstream meminfo("/proc/meminfo");
+    if(!meminfo.is_open())
+    {
+        spdlog::warn("Failed to open /proc/meminfo");
+        return;
+    }
+
+    std::string line;
+    while(std::getline(meminfo, line))
+    {
+        long long value=0;
+        if(line.find("MemTotal:")==0)
+        {
+            std::istringstream iss(line.substr(9));
+            iss >> value; // in kB
+            m_systemInfo.totalRamMb=static_cast<int>(value/1024);
+        }
+        else if(line.find("MemAvailable:")==0)
+        {
+            std::istringstream iss(line.substr(13));
+            iss >> value; // in kB
+            m_systemInfo.freeRamMb=static_cast<int>(value/1024);
+        }
+    }
+#endif
+}
+
+// --- CPU info detection ---
+
+void HardwareDetector::detectCpuInfo()
+{
+    m_systemInfo.cpuCores=static_cast<int>(std::thread::hardware_concurrency());
+}
+
+void HardwareDetector::detectCpuUtilization()
+{
+#ifdef __linux__
+    std::ifstream stat("/proc/stat");
+    if(!stat.is_open())
+    {
+        spdlog::warn("Failed to open /proc/stat");
+        return;
+    }
+
+    std::string line;
+    std::getline(stat, line);
+
+    // Format: cpu user nice system idle iowait irq softirq steal
+    if(line.find("cpu ")!=0)
+    {
+        return;
+    }
+
+    std::istringstream iss(line.substr(4));
+    long long user=0, nice=0, system=0, idle=0, iowait=0, irq=0, softirq=0, steal=0;
+
+    iss >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+
+    long long totalIdle=idle+iowait;
+    long long total=user+nice+system+idle+iowait+irq+softirq+steal;
+
+    if(m_prevCpuTotal>0)
+    {
+        long long totalDelta=total-m_prevCpuTotal;
+        long long idleDelta=totalIdle-m_prevCpuIdle;
+
+        if(totalDelta>0)
+        {
+            m_systemInfo.cpuUtilizationPercent=static_cast<float>(totalDelta-idleDelta)*100.0f/static_cast<float>(totalDelta);
+        }
+    }
+
+    m_prevCpuIdle=totalIdle;
+    m_prevCpuTotal=total;
+#endif
+}
+
+// --- NVML GPU detection ---
+
+bool HardwareDetector::loadNvml()
+{
+#ifdef __linux__
+    m_nvmlLib=dlopen("libnvidia-ml.so.1", RTLD_LAZY);
+    if(!m_nvmlLib)
+    {
+        m_nvmlLib=dlopen("libnvidia-ml.so", RTLD_LAZY);
+    }
+    if(!m_nvmlLib)
+    {
+        spdlog::debug("NVML not available: {}", dlerror());
+        return false;
+    }
+
+    m_nvmlInit=dlsym(m_nvmlLib, "nvmlInit_v2");
+    m_nvmlShutdown=dlsym(m_nvmlLib, "nvmlShutdown");
+    m_nvmlDeviceGetCount=dlsym(m_nvmlLib, "nvmlDeviceGetCount_v2");
+    m_nvmlDeviceGetHandleByIndex=dlsym(m_nvmlLib, "nvmlDeviceGetHandleByIndex_v2");
+    m_nvmlDeviceGetName=dlsym(m_nvmlLib, "nvmlDeviceGetName");
+    m_nvmlDeviceGetMemoryInfo=dlsym(m_nvmlLib, "nvmlDeviceGetMemoryInfo");
+    m_nvmlDeviceGetUtilizationRates=dlsym(m_nvmlLib, "nvmlDeviceGetUtilizationRates");
+    m_nvmlDeviceGetCudaComputeCapability=dlsym(m_nvmlLib, "nvmlDeviceGetCudaComputeCapability");
+
+    if(!m_nvmlInit||!m_nvmlShutdown||!m_nvmlDeviceGetCount||
+        !m_nvmlDeviceGetHandleByIndex||!m_nvmlDeviceGetName||
+        !m_nvmlDeviceGetMemoryInfo)
+    {
+        spdlog::warn("NVML loaded but missing required symbols");
+        unloadNvml();
+        return false;
+    }
+
+    m_nvmlLoaded=true;
+    spdlog::info("NVML loaded successfully");
+    return true;
+#else
+    return false;
+#endif
+}
+
+void HardwareDetector::unloadNvml()
+{
+#ifdef __linux__
+    if(m_nvmlLib)
+    {
+        dlclose(m_nvmlLib);
+        m_nvmlLib=nullptr;
+    }
+    m_nvmlLoaded=false;
+    m_nvmlInit=nullptr;
+    m_nvmlShutdown=nullptr;
+    m_nvmlDeviceGetCount=nullptr;
+    m_nvmlDeviceGetHandleByIndex=nullptr;
+    m_nvmlDeviceGetName=nullptr;
+    m_nvmlDeviceGetMemoryInfo=nullptr;
+    m_nvmlDeviceGetUtilizationRates=nullptr;
+    m_nvmlDeviceGetCudaComputeCapability=nullptr;
+#endif
+}
+
+void HardwareDetector::detectNvmlGpus()
+{
+    if(!m_nvmlLoaded)
+    {
+        return;
+    }
+
+    NvmlInitFunc init=reinterpret_cast<NvmlInitFunc>(m_nvmlInit);
+    NvmlShutdownFunc shutdown=reinterpret_cast<NvmlShutdownFunc>(m_nvmlShutdown);
+    NvmlDeviceGetCountFunc getCount=reinterpret_cast<NvmlDeviceGetCountFunc>(m_nvmlDeviceGetCount);
+    NvmlDeviceGetHandleByIndexFunc getHandle=reinterpret_cast<NvmlDeviceGetHandleByIndexFunc>(m_nvmlDeviceGetHandleByIndex);
+    NvmlDeviceGetNameFunc getName=reinterpret_cast<NvmlDeviceGetNameFunc>(m_nvmlDeviceGetName);
+    NvmlDeviceGetMemoryInfoFunc getMemory=reinterpret_cast<NvmlDeviceGetMemoryInfoFunc>(m_nvmlDeviceGetMemoryInfo);
+    NvmlDeviceGetUtilizationRatesFunc getUtilization=reinterpret_cast<NvmlDeviceGetUtilizationRatesFunc>(m_nvmlDeviceGetUtilizationRates);
+    NvmlDeviceGetCudaComputeCapabilityFunc getComputeCap=reinterpret_cast<NvmlDeviceGetCudaComputeCapabilityFunc>(m_nvmlDeviceGetCudaComputeCapability);
+
+    if(init()!=NVML_SUCCESS)
+    {
+        spdlog::warn("NVML initialization failed");
+        return;
+    }
+
+    unsigned int deviceCount=0;
+    if(getCount(&deviceCount)!=NVML_SUCCESS)
+    {
+        spdlog::warn("Failed to get NVML device count");
+        shutdown();
+        return;
+    }
+
+    for(unsigned int i=0; i<deviceCount; ++i)
+    {
+        NvmlDeviceHandle device=nullptr;
+        if(getHandle(i, &device)!=NVML_SUCCESS)
+        {
+            continue;
+        }
+
+        GpuInfo gpu;
+        gpu.index=static_cast<int>(i);
+        gpu.backend=GpuBackend::CUDA;
+
+        char name[NVML_DEVICE_NAME_BUFFER_SIZE];
+        if(getName(device, name, NVML_DEVICE_NAME_BUFFER_SIZE)==NVML_SUCCESS)
+        {
+            gpu.name=name;
+        }
+
+        NvmlMemory memory;
+        if(getMemory(device, &memory)==NVML_SUCCESS)
+        {
+            gpu.vramTotalMb=static_cast<int>(memory.total/(1024*1024));
+            gpu.vramFreeMb=static_cast<int>(memory.free/(1024*1024));
+        }
+
+        if(getUtilization)
+        {
+            NvmlUtilization utilization;
+            if(getUtilization(device, &utilization)==NVML_SUCCESS)
+            {
+                gpu.utilizationPercent=static_cast<float>(utilization.gpu);
+            }
+        }
+
+        if(getComputeCap)
+        {
+            int major=0, minor=0;
+            if(getComputeCap(device, &major, &minor)==NVML_SUCCESS)
+            {
+                gpu.computeCapability=static_cast<float>(major)+static_cast<float>(minor)*0.1f;
+            }
+        }
+
+        spdlog::info("NVML GPU {}: {} ({}MB VRAM, {}MB free, CC {:.1f})",
+            gpu.index, gpu.name, gpu.vramTotalMb, gpu.vramFreeMb, gpu.computeCapability);
+
+        m_systemInfo.gpus.push_back(gpu);
+    }
+
+    shutdown();
+}
+
+// --- Vulkan GPU detection ---
+
+bool HardwareDetector::loadVulkan()
+{
+#ifdef __linux__
+    m_vulkanLib=dlopen("libvulkan.so.1", RTLD_LAZY);
+    if(!m_vulkanLib)
+    {
+        m_vulkanLib=dlopen("libvulkan.so", RTLD_LAZY);
+    }
+    if(!m_vulkanLib)
+    {
+        spdlog::debug("Vulkan not available: {}", dlerror());
+        return false;
+    }
+
+    m_vkCreateInstance=dlsym(m_vulkanLib, "vkCreateInstance");
+    m_vkDestroyInstance=dlsym(m_vulkanLib, "vkDestroyInstance");
+    m_vkEnumeratePhysicalDevices=dlsym(m_vulkanLib, "vkEnumeratePhysicalDevices");
+    m_vkGetPhysicalDeviceProperties=dlsym(m_vulkanLib, "vkGetPhysicalDeviceProperties");
+    m_vkGetPhysicalDeviceMemoryProperties=dlsym(m_vulkanLib, "vkGetPhysicalDeviceMemoryProperties");
+
+    if(!m_vkCreateInstance||!m_vkDestroyInstance||
+        !m_vkEnumeratePhysicalDevices||!m_vkGetPhysicalDeviceProperties||
+        !m_vkGetPhysicalDeviceMemoryProperties)
+    {
+        spdlog::warn("Vulkan loaded but missing required symbols");
+        unloadVulkan();
+        return false;
+    }
+
+    m_vulkanLoaded=true;
+    spdlog::info("Vulkan loaded successfully");
+    return true;
+#else
+    return false;
+#endif
+}
+
+void HardwareDetector::unloadVulkan()
+{
+#ifdef __linux__
+    if(m_vulkanLib)
+    {
+        dlclose(m_vulkanLib);
+        m_vulkanLib=nullptr;
+    }
+    m_vulkanLoaded=false;
+    m_vkCreateInstance=nullptr;
+    m_vkDestroyInstance=nullptr;
+    m_vkEnumeratePhysicalDevices=nullptr;
+    m_vkGetPhysicalDeviceProperties=nullptr;
+    m_vkGetPhysicalDeviceMemoryProperties=nullptr;
+#endif
+}
+
+void HardwareDetector::detectVulkanGpus()
+{
+    if(!m_vulkanLoaded)
+    {
+        return;
+    }
+
+    VkCreateInstanceFunc createInstance=reinterpret_cast<VkCreateInstanceFunc>(m_vkCreateInstance);
+    VkDestroyInstanceFunc destroyInstance=reinterpret_cast<VkDestroyInstanceFunc>(m_vkDestroyInstance);
+    VkEnumeratePhysicalDevicesFunc enumDevices=reinterpret_cast<VkEnumeratePhysicalDevicesFunc>(m_vkEnumeratePhysicalDevices);
+    VkGetPhysicalDevicePropertiesFunc getProperties=reinterpret_cast<VkGetPhysicalDevicePropertiesFunc>(m_vkGetPhysicalDeviceProperties);
+    VkGetPhysicalDeviceMemoryPropertiesFunc getMemProperties=reinterpret_cast<VkGetPhysicalDeviceMemoryPropertiesFunc>(m_vkGetPhysicalDeviceMemoryProperties);
+
+    // Create a minimal Vulkan instance
+    VkApplicationInfo appInfo{};
+    appInfo.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName="ArbiterAI HardwareDetector";
+    appInfo.applicationVersion=1;
+    appInfo.apiVersion=(1u<<22)|(0u<<12)|0u; // VK_MAKE_API_VERSION(0,1,0,0)
+
+    VkInstanceCreateInfo createInfo{};
+    createInfo.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo=&appInfo;
+
+    VkInstance vkInstance=nullptr;
+    if(createInstance(&createInfo, nullptr, &vkInstance)!=VK_SUCCESS)
+    {
+        spdlog::warn("Failed to create Vulkan instance for hardware detection");
+        return;
+    }
+
+    // Enumerate physical devices
+    uint32_t deviceCount=0;
+    enumDevices(vkInstance, &deviceCount, nullptr);
+    if(deviceCount==0)
+    {
+        spdlog::info("No Vulkan physical devices found");
+        destroyInstance(vkInstance, nullptr);
+        return;
+    }
+
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    enumDevices(vkInstance, &deviceCount, devices.data());
+
+    int gpuOffset=static_cast<int>(m_systemInfo.gpus.size());
+
+    for(uint32_t i=0; i<deviceCount; ++i)
+    {
+        VkPhysicalDeviceProperties props{};
+        getProperties(devices[i], &props);
+
+        // Skip devices already detected via NVML (match by name)
+        bool alreadyDetected=false;
+        for(const GpuInfo &existing:m_systemInfo.gpus)
+        {
+            if(existing.name==props.deviceName)
+            {
+                alreadyDetected=true;
+                break;
+            }
+        }
+        if(alreadyDetected)
+        {
+            continue;
+        }
+
+        VkPhysicalDeviceMemoryProperties memProps{};
+        getMemProperties(devices[i], &memProps);
+
+        // Sum device-local heap sizes for total VRAM
+        int vramTotalMb=0;
+        for(uint32_t h=0; h<memProps.memoryHeapCount; ++h)
+        {
+            if(memProps.memoryHeaps[h].flags&VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            {
+                vramTotalMb+=static_cast<int>(memProps.memoryHeaps[h].size/(1024*1024));
+            }
+        }
+
+        GpuInfo gpu;
+        gpu.index=gpuOffset+static_cast<int>(i);
+        gpu.name=props.deviceName;
+        gpu.backend=GpuBackend::Vulkan;
+        gpu.vramTotalMb=vramTotalMb;
+        gpu.vramFreeMb=vramTotalMb; // Vulkan doesn't provide free VRAM — approximate as total
+
+        spdlog::info("Vulkan GPU {}: {} ({}MB VRAM)", gpu.index, gpu.name, gpu.vramTotalMb);
+
+        m_systemInfo.gpus.push_back(gpu);
+    }
+
+    destroyInstance(vkInstance, nullptr);
+}
+
+} // namespace arbiterAI

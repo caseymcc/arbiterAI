@@ -56,6 +56,10 @@ set(arbiterai_src
     ./src/arbiterAI/fileVerifier.cpp
     ./src/arbiterAI/configDownloader.h
     ./src/arbiterAI/configDownloader.cpp
+    ./src/arbiterAI/hardwareDetector.h
+    ./src/arbiterAI/hardwareDetector.cpp
+    ./src/arbiterAI/modelFitCalculator.h
+    ./src/arbiterAI/modelFitCalculator.cpp
     ./src/arbiterAI/providers/baseProvider.h
     ./src/arbiterAI/providers/baseProvider.cpp
     ./src/arbiterAI/providers/openai.h
@@ -103,6 +107,7 @@ target_link_libraries(arbiterai
         nlohmann_json_schema_validator::validator
         OpenSSL::SSL
         OpenSSL::Crypto
+        ${CMAKE_DL_LIBS}
 )
  
  if(BUILD_TESTING)
@@ -117,6 +122,7 @@ target_link_libraries(arbiterai
         tests/chatClientTests.cpp
         tests/providerTests.cpp
         tests/mockProviderTests.cpp
+        tests/hardwareDetectorTests.cpp
     )
     
     target_link_libraries(arbiterai_tests
