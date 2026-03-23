@@ -12,6 +12,7 @@ namespace arbiterAI
 
 class Deepseek : public BaseProvider
 {
+    friend class ProviderTest;
 public:
     Deepseek();
 
@@ -25,6 +26,10 @@ public:
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 
+    ErrorCode getAvailableModels(std::vector<std::string>& models) override;
+
+    void setApiUrl(const std::string &url) override { m_apiUrl = url; }
+
 private:
     ErrorCode parseResponse(const cpr::Response &rawResponse,
         CompletionResponse &response);
@@ -35,7 +40,6 @@ private:
     cpr::Header createHeaders(const std::string &apiKey);
 
     std::string m_apiUrl="https://api.deepseek.com/chat/completions";
-    std::string m_apiKey="";
 };
 
 } // namespace arbiterAI

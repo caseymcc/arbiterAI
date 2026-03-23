@@ -452,6 +452,15 @@ DownloadStatus LlamaInterface::getDownloadStatus(const std::string &modelName, s
     return DownloadStatus::Failed;
 }
 
+ErrorCode LlamaInterface::getAvailableModels(std::vector<std::string>& models)
+{
+    for (const auto& modelInfo : m_llamaModels)
+    {
+        models.push_back(modelInfo.modelInfo.model);
+    }
+    return ErrorCode::Success;
+}
+
 bool LlamaInterface::isLoaded(const std::string &modelName) const
 {
     if(!m_modelInfo||m_modelInfo->model!=modelName)

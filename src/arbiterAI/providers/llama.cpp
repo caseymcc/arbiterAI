@@ -147,4 +147,10 @@ ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
     return code;
 }
 
+ErrorCode Llama::getAvailableModels(std::vector<std::string>& models)
+{
+    LlamaInterface &llamaInterface=LlamaInterface::instance();
+    return llamaInterface.getAvailableModels(models);
+}
+
 } // namespace arbiterAI

@@ -8,7 +8,6 @@
         "json-schema-validator",
         "yaml-cpp",
         "cpp-httplib",
-        "llama-cpp",
         "spdlog",
         "picosha2",
         "libgit2",

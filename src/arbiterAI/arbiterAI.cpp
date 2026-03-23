@@ -1,4 +1,5 @@
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/chatClient.h"
 #include "arbiterAI/cacheManager.h"
 #include "arbiterAI/costManager.h"
 #include "arbiterAI/modelManager.h"
@@ -6,39 +7,30 @@
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
 #include "arbiterAI/providers/deepseek.h"
-#include "arbiterAI/providers/llama.h"
+// #include "arbiterAI/providers/llama.h"  // Disabled - not built in CMakeLists
 #include "arbiterAI/providers/openrouter.h"
+#include "arbiterAI/providers/mock.h"
 
 #include <memory>
 
 namespace arbiterAI
 {
 
-namespace
-{
-class arbiterAI_
-{
-public:
-    static arbiterAI_ &instance()
-    {
-        static arbiterAI_ instance;
-        return instance;
-    }
+// Forward declaration
+static std::unique_ptr<BaseProvider> createProvider(const std::string &provider);
 
-    arbiterAI_()=default;
-
-    bool initialized=false;
-    std::map<std::string, std::unique_ptr<BaseProvider>> providers;
-};
+ArbiterAI &ArbiterAI::instance()
+{
+    static ArbiterAI instance;
+    return instance;
 }
 
-arbiterAI::arbiterAI(
+ArbiterAI::ArbiterAI(
     bool enableCache,
     const std::filesystem::path &cacheDir,
     std::chrono::seconds ttl,
     double spendingLimit,
-    const std::filesystem::path &costStateFile
-)
+    const std::filesystem::path &costStateFile)
 {
     if(enableCache)
     {
@@ -50,22 +42,33 @@ arbiterAI::arbiterAI(
     }
 }
 
-arbiterAI::~arbiterAI()
+ArbiterAI::~ArbiterAI()
 {
 }
 
-ErrorCode arbiterAI::initialize(const std::vector<std::filesystem::path> &configPaths)
+ErrorCode ArbiterAI::initialize(const std::vector<std::filesystem::path> &configPaths)
 {
     if(!ModelManager::instance().initialize(configPaths))
     {
         return ErrorCode::InvalidRequest;
     }
 
-    arbiterAI_::instance().initialized=true;
+    // Load connection configurations from arbiterAI config files in configPaths
+    for(const auto &configPath : configPaths)
+    {
+        auto connectionConfigFile = configPath / "connections.json";
+        if(std::filesystem::exists(connectionConfigFile))
+        {
+            loadProviderConfig(connectionConfigFile);
+        }
+    }
+
+    // Mark global singleton initialized so subsequent operations succeed
+    ArbiterAI::instance().initialized = true;
     return ErrorCode::Success;
 }
 
-bool arbiterAI::doesModelNeedApiKey(const std::string &model)
+bool ArbiterAI::doesModelNeedApiKey(const std::string &model)
 {
     auto provider=ModelManager::instance().getProvider(model);
 
@@ -77,7 +80,7 @@ bool arbiterAI::doesModelNeedApiKey(const std::string &model)
     return *provider=="openai";
 }
 
-bool arbiterAI::supportModelDownload(const std::string &provider)
+bool ArbiterAI::supportModelDownload(const std::string &provider)
 {
     if(provider=="llama")
     {
@@ -100,27 +103,47 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     {
         return std::make_unique<Deepseek>();
     }
-    else if(provider=="llama")
-    {
-        return std::make_unique<Llama>();
-    }
+    // Llama provider disabled - not built in CMakeLists
+    // else if(provider=="llama")
+    // {
+    //     return std::make_unique<Llama>();
+    // }
     else if(provider=="openrouter")
     {
         return std::make_unique<OpenRouter_LLM>();
+    }
+    else if(provider=="mock")
+    {
+        return std::make_unique<Mock>();
     }
     return nullptr;
 }
 
 namespace
 {
-BaseProvider *getProvider(const std::string &providerName)
+BaseProvider *getProvider(const std::string &providerName, const std::string &modelName = "")
 {
-    auto &hermes=arbiterAI_::instance();
+    auto &arbiter = ArbiterAI::instance();
 
-    // Check if we already have an Provider instance for this provider
-    auto it=hermes.providers.find(providerName);
+    // First check if this model is registered to a specific connection
+    if(!modelName.empty())
+    {
+        auto connectionIt = arbiter.connectionModels.find(modelName);
+        if(connectionIt != arbiter.connectionModels.end())
+        {
+            // Use the connection-specific provider
+            auto providerIt = arbiter.providers.find(connectionIt->second);
+            if(providerIt != arbiter.providers.end())
+            {
+                return providerIt->second.get();
+            }
+        }
+    }
 
-    if(it==hermes.providers.end())
+    // Check if we already have a Provider instance for this provider
+    auto it=arbiter.providers.find(providerName);
+
+    if(it==arbiter.providers.end())
     {
         // Create new Provider instance
         auto provider=createProvider(providerName);
@@ -131,16 +154,16 @@ BaseProvider *getProvider(const std::string &providerName)
         }
         auto models=ModelManager::instance().getModels(providerName);
         provider->initialize(models);
-        it=hermes.providers.emplace(providerName, std::move(provider)).first;
+        it=arbiter.providers.emplace(providerName, std::move(provider)).first;
     }
 
     return it->second.get();
 }
 }
 
-ErrorCode arbiterAI::completion(const CompletionRequest &request, CompletionResponse &response)
+ErrorCode ArbiterAI::completion(const CompletionRequest &request, CompletionResponse &response)
 {
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -180,7 +203,7 @@ ErrorCode arbiterAI::completion(const CompletionRequest &request, CompletionResp
         }
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
 
     if(!provider)
     {
@@ -204,10 +227,10 @@ ErrorCode arbiterAI::completion(const CompletionRequest &request, CompletionResp
     return result;
 }
 
-ErrorCode arbiterAI::streamingCompletion(const CompletionRequest &request,
+ErrorCode ArbiterAI::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -218,7 +241,7 @@ ErrorCode arbiterAI::streamingCompletion(const CompletionRequest &request,
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
 
     if(!provider)
     {
@@ -228,14 +251,14 @@ ErrorCode arbiterAI::streamingCompletion(const CompletionRequest &request,
     return provider->streamingCompletion(request, callback);
 }
 
-std::vector<CompletionResponse> arbiterAI::batchCompletion(const std::vector<CompletionRequest> &requests)
+std::vector<CompletionResponse> ArbiterAI::batchCompletion(const std::vector<CompletionRequest> &requests)
 {
     std::vector<CompletionResponse> allResponses(requests.size());
     std::vector<int> originalIndices(requests.size());
     std::vector<CompletionRequest> uncachedRequests;
     std::map<int, int> uncachedRequestIndexMap; // Maps original index to uncached index
 
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return allResponses; // Return responses with default/error state
     }
@@ -312,7 +335,7 @@ std::vector<CompletionResponse> arbiterAI::batchCompletion(const std::vector<Com
             continue;
         }
 
-        BaseProvider *provider=getProvider(modelInfo->provider);
+        BaseProvider *provider=getProvider(modelInfo->provider, modelName);
         if(!provider)
         {
             // Handle unsupported provider
@@ -344,9 +367,9 @@ std::vector<CompletionResponse> arbiterAI::batchCompletion(const std::vector<Com
     return allResponses;
 }
 
-ErrorCode arbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
+ErrorCode ArbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response)
 {
-    if(!arbiterAI_::instance().initialized)
+    if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
     }
@@ -357,7 +380,7 @@ ErrorCode arbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingRes
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
 
     if(!provider)
     {
@@ -367,7 +390,7 @@ ErrorCode arbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingRes
     return provider->getEmbeddings(request, response);
 }
 
-ErrorCode arbiterAI::getDownloadStatus(const std::string &modelName, std::string &error)
+ErrorCode ArbiterAI::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(modelName);
     if(!modelInfo)
@@ -375,15 +398,17 @@ ErrorCode arbiterAI::getDownloadStatus(const std::string &modelName, std::string
         return ErrorCode::UnknownModel;
     }
 
-    BaseProvider *provider=getProvider(modelInfo->provider);
+    BaseProvider *provider=getProvider(modelInfo->provider, modelName);
 
     if(provider)
     {
         auto status=provider->getDownloadStatus(modelName, error);
         switch(status)
         {
+        case DownloadStatus::NotApplicable:
         case DownloadStatus::NotStarted:
             return ErrorCode::Success;
+        case DownloadStatus::Pending:
         case DownloadStatus::InProgress:
             return ErrorCode::ModelDownloading;
         case DownloadStatus::Completed:
@@ -395,5 +420,182 @@ ErrorCode arbiterAI::getDownloadStatus(const std::string &modelName, std::string
     return ErrorCode::UnsupportedProvider;
 }
 
+// ========== ChatClient Factory Methods ==========
+
+std::shared_ptr<ChatClient> ArbiterAI::createChatClient(const ChatConfig& config)
+{
+    if (!initialized)
+    {
+        return nullptr;
+    }
+
+    // Get model info
+    std::optional<ModelInfo> modelInfo = ModelManager::instance().getModelInfo(config.model);
+    if (!modelInfo)
+    {
+        return nullptr;
+    }
+
+    // Get or create provider
+    auto provider = getSharedProvider(modelInfo->provider);
+    if (!provider)
+    {
+        return nullptr;
+    }
+
+    // Create and return the ChatClient
+    return std::make_shared<ChatClient>(config, provider, *modelInfo);
+}
+
+std::shared_ptr<ChatClient> ArbiterAI::createChatClient(const std::string& model)
+{
+    ChatConfig config;
+    config.model = model;
+    return createChatClient(config);
+}
+
+std::shared_ptr<BaseProvider> ArbiterAI::getSharedProvider(const std::string& providerName)
+{
+    // Check if we already have a provider instance
+    auto it = providers.find(providerName);
+
+    if (it == providers.end())
+    {
+        // Create new provider instance
+        auto provider = createProvider(providerName);
+
+        if (!provider)
+        {
+            return nullptr;
+        }
+
+        auto models = ModelManager::instance().getModels(providerName);
+        provider->initialize(models);
+
+        it = providers.emplace(providerName, std::move(provider)).first;
+    }
+
+    // Return a shared_ptr that doesn't own the pointer (the unique_ptr in providers owns it)
+    // This is safe as long as ArbiterAI outlives all ChatClients
+    return std::shared_ptr<BaseProvider>(std::shared_ptr<void>{}, it->second.get());
+}
+
+// ========== Model Information Methods ==========
+
+ErrorCode ArbiterAI::getModelInfo(const std::string& modelName, ModelInfo& info)
+{
+    auto modelInfo = ModelManager::instance().getModelInfo(modelName);
+    if (!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+    info = *modelInfo;
+    return ErrorCode::Success;
+}
+
+ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
+{
+    auto allModels = ModelManager::instance().getModelsByRanking();
+    models.clear();
+    models.reserve(allModels.size());
+    for (const auto& m : allModels)
+    {
+        models.push_back(m.model);
+    }
+    return ErrorCode::Success;
+}
+
+ErrorCode ArbiterAI::shutdown()
+{
+    providers.clear();
+    initialized = false;
+    return ErrorCode::Success;
+}
+
+void ArbiterAI::loadProviderConfig(const std::filesystem::path& configPath)
+{
+    try
+    {
+        std::ifstream file(configPath);
+        if(!file.is_open())
+        {
+            return;
+        }
+
+        nlohmann::json config;
+        file >> config;
+
+        if(!config.contains("connections") || !config["connections"].is_array())
+        {
+            return;
+        }
+
+        for(const auto& connectionJson : config["connections"])
+        {
+            if(!connectionJson.contains("name") || !connectionJson.contains("provider"))
+                continue;
+
+            std::string connectionName = connectionJson["name"].get<std::string>();
+            std::string providerType = connectionJson["provider"].get<std::string>();
+            
+            // Get or create the provider for this connection
+            BaseProvider* provider = nullptr;
+            auto it = providers.find(connectionName);
+            if(it == providers.end())
+            {
+                // Create provider instance based on provider type
+                auto newProvider = createProvider(providerType);
+                if(!newProvider)
+                    continue;
+                
+                // Initialize the provider with models from ModelManager
+                auto models = ModelManager::instance().getModels(providerType);
+                newProvider->initialize(models);
+                
+                providers[connectionName] = std::move(newProvider);
+                provider = providers[connectionName].get();
+            }
+            else
+            {
+                provider = it->second.get();
+            }
+
+            if(!provider)
+                continue;
+
+            // Set API URL if provided
+            if(connectionJson.contains("api_url"))
+            {
+                std::string apiUrl = connectionJson["api_url"].get<std::string>();
+                provider->setApiUrl(apiUrl);
+            }
+
+            // Set API key if provided
+            if(connectionJson.contains("api_key"))
+            {
+                std::string apiKey = connectionJson["api_key"].get<std::string>();
+                provider->setApiKey(apiKey);
+            }
+
+            // Register models for this connection
+            if(connectionJson.contains("models") && connectionJson["models"].is_array())
+            {
+                for(const auto& modelName : connectionJson["models"])
+                {
+                    if(modelName.is_string())
+                    {
+                        // Register this model to use this connection (provider instance)
+                        std::string model = modelName.get<std::string>();
+                        connectionModels[model] = connectionName;
+                    }
+                }
+            }
+        }
+    }
+    catch(const std::exception& e)
+    {
+        // Silently ignore errors - provider config is optional
+    }
+}
 
 } // namespace arbiterAI

@@ -32,7 +32,14 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
         return ErrorCode::Success;
     }
 
-    // 2. Check the model info from ModelManager
+    // 2. Check if API key was set via setApiKey()
+    if(!m_apiKey.empty())
+    {
+        apiKey=m_apiKey;
+        return ErrorCode::Success;
+    }
+
+    // 3. Check the model info from ModelManager
     auto modelInfo=ModelManager::instance().getModelInfo(modelName);
     if(modelInfo&&modelInfo->apiKey.has_value()&&!modelInfo->apiKey.value().empty())
     {
@@ -40,7 +47,7 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
         return ErrorCode::Success;
     }
 
-    // 3. Fallback to environment variables
+    // 4. Fallback to environment variables
     if(!m_provider.empty())
     {
         std::string envVarName=to_upper(m_provider)+"_API_KEY";
@@ -57,7 +64,25 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
 
 DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std::string &error)
 {
-    return DownloadStatus::Completed;
+    // Default implementation for cloud providers - no download needed
+    return DownloadStatus::NotApplicable;
+}
+
+ErrorCode BaseProvider::getDownloadProgress(const std::string &modelName, DownloadProgress &progress)
+{
+    // Default implementation for cloud providers
+    progress.status = DownloadStatus::NotApplicable;
+    progress.modelName = modelName;
+    progress.bytesDownloaded = 0;
+    progress.totalBytes = 0;
+    progress.percentComplete = 0.0f;
+    progress.errorMessage.clear();
+    return ErrorCode::Success;
+}
+
+ErrorCode BaseProvider::getAvailableModels(std::vector<std::string>& models)
+{
+    return ErrorCode::NotImplemented;
 }
 
 std::vector<CompletionResponse> BaseProvider::batchCompletion(const std::vector<CompletionRequest> &requests)

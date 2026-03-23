@@ -89,16 +89,45 @@ if [ ! -d "$BUILD_DIR" ] || [ ! -f "$BUILD_DIR/build.ninja" ]; then
     echo "--- Build directory not ready for Ninja. Configuring CMake for $BUILD_TYPE, $OS on $ARCH... ---"
     mkdir -p "$BUILD_DIR"
 
+    # --- Find vcpkg ---
+    if [ -n "$VCPKG_ROOT" ]; then
+        echo "Using VCPKG_ROOT from environment: $VCPKG_ROOT"
+    elif [ -d "../../external/vcpkg" ]; then
+        VCPKG_ROOT="$(readlink -f ../../external/vcpkg)"
+        echo "Found local vcpkg at: $VCPKG_ROOT"
+    elif [ -d "/opt/vcpkg" ]; then
+        VCPKG_ROOT="/opt/vcpkg"
+        echo "Found system vcpkg at: $VCPKG_ROOT"
+    else
+        echo "Error: Could not find vcpkg. Please install it in ../../external/vcpkg or set VCPKG_ROOT."
+        exit 1
+    fi
+
+    # --- Adjust toolchain and overlay paths ---
+    # Assuming script is run from project root, so CMAKE_CURRENT_SOURCE_DIR . is correct.
+    # We substitute /app with the current directory path.
+    PROJECT_ROOT=$(pwd)
+
+    # --- Check for Ninja ---
+    if command -v ninja &> /dev/null; then
+        GENERATOR="Ninja"
+        BUILD_CMD="ninja"
+    else
+        echo "Ninja not found. Falling back to Unix Makefiles."
+        GENERATOR="Unix Makefiles"
+        BUILD_CMD="make -j$(nproc)"
+    fi
+
     CMAKE_ARGS=(
-        "-G" "Ninja"
+        "-G" "$GENERATOR"
         "-S" "."
         "-B" "$BUILD_DIR"
         "-DCMAKE_BUILD_TYPE=${BUILD_TYPE^}"
         "-DCMAKE_C_FLAGS=${CUSTOM_C_FLAGS}"
         "-DCMAKE_CXX_FLAGS=${CUSTOM_CXX_FLAGS}"
-        "-DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
-        "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/app/cmake/toolchains/${OS}-${ARCH}.cmake"
-        "-DVCPKG_OVERLAY_PORTS=/app/vcpkg/custom_ports"
+        "-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${PROJECT_ROOT}/cmake/toolchains/${OS}-${ARCH}.cmake"
+        "-DVCPKG_OVERLAY_PORTS=${PROJECT_ROOT}/vcpkg/custom_ports"
     )
 
     cmake "${CMAKE_ARGS[@]}"
@@ -106,10 +135,10 @@ fi
 
 # --- Build the application ---
 if [ "$REBUILD_APP" = true ]; then
-    echo "--- Rebuilding application (clean build) with Ninja ---"
-    ninja -C "$BUILD_DIR" clean
-    ninja -C "$BUILD_DIR"
+    echo "--- Rebuilding application (clean build) with $GENERATOR ---"
+    cmake --build "$BUILD_DIR" --target clean
+    eval "$BUILD_CMD -C \"$BUILD_DIR\""
 else
-    echo "--- Building application with Ninja ---"
-    ninja -C "$BUILD_DIR"
+    echo "--- Building application with $GENERATOR ---"
+    eval "$BUILD_CMD -C \"$BUILD_DIR\""
 fi
