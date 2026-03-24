@@ -31,7 +31,7 @@ find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
-#find_package(llama CONFIG REQUIRED)
+find_package(llama CONFIG REQUIRED)
 find_package(libgit2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -56,6 +56,14 @@ set(arbiterai_src
     ./src/arbiterAI/fileVerifier.cpp
     ./src/arbiterAI/configDownloader.h
     ./src/arbiterAI/configDownloader.cpp
+    ./src/arbiterAI/hardwareDetector.h
+    ./src/arbiterAI/hardwareDetector.cpp
+    ./src/arbiterAI/modelFitCalculator.h
+    ./src/arbiterAI/modelFitCalculator.cpp
+    ./src/arbiterAI/modelRuntime.h
+    ./src/arbiterAI/modelRuntime.cpp
+    ./src/arbiterAI/telemetryCollector.h
+    ./src/arbiterAI/telemetryCollector.cpp
     ./src/arbiterAI/providers/baseProvider.h
     ./src/arbiterAI/providers/baseProvider.cpp
     ./src/arbiterAI/providers/openai.h
@@ -66,10 +74,8 @@ set(arbiterai_src
     ./src/arbiterAI/providers/deepseek.cpp
     ./src/arbiterAI/providers/mock.h
     ./src/arbiterAI/providers/mock.cpp
-#    ./src/arbiterAI/providers/llama.h
-#    ./src/arbiterAI/providers/llama.cpp
-#    ./src/arbiterAI/providers/llamaInterface.h
-#    ./src/arbiterAI/providers/llamaInterface.cpp
+    ./src/arbiterAI/providers/llama.h
+    ./src/arbiterAI/providers/llama.cpp
    ./src/arbiterAI/providers/openrouter.h
    ./src/arbiterAI/providers/openrouter.cpp
 )
@@ -86,7 +92,7 @@ target_include_directories(arbiterai
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<INSTALL_INTERFACE:include>
-#        ${LLAMA_INCLUDE_DIRS}
+        ${LLAMA_INCLUDE_DIRS}
     PRIVATE
         ${PICOSHA2_INCLUDE_DIRS}
 )
@@ -95,7 +101,7 @@ target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
         nlohmann_json::nlohmann_json
-#        llama
+        llama
         libgit2::libgit2package
     PRIVATE
         spdlog::spdlog
@@ -103,6 +109,7 @@ target_link_libraries(arbiterai
         nlohmann_json_schema_validator::validator
         OpenSSL::SSL
         OpenSSL::Crypto
+        ${CMAKE_DL_LIBS}
 )
  
  if(BUILD_TESTING)
@@ -117,6 +124,10 @@ target_link_libraries(arbiterai
         tests/chatClientTests.cpp
         tests/providerTests.cpp
         tests/mockProviderTests.cpp
+        tests/hardwareDetectorTests.cpp
+        tests/modelRuntimeTests.cpp
+        tests/telemetryCollectorTests.cpp
+        tests/llamaProviderTests.cpp
     )
     
     target_link_libraries(arbiterai_tests
@@ -145,6 +156,26 @@ target_link_libraries(arbiterAI-proxy
     PRIVATE
         arbiterai
         httplib::httplib
+)
+
+add_executable(arbiterAI-server
+    src/server/main.cpp
+    src/server/routes.h
+    src/server/routes.cpp
+    src/server/dashboard.h
+)
+
+target_include_directories(arbiterAI-server
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/server
+)
+
+target_link_libraries(arbiterAI-server
+    PRIVATE
+        arbiterai
+        httplib::httplib
+        cxxopts::cxxopts
+        spdlog::spdlog
 )
 
 install(

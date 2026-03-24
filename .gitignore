@@ -34,3 +34,10 @@
 # Build files
 build/
 vcpkg_installed/
+
+# Cloned config repository
+arbiterAI_config/
+
+# Downloaded model cache
+model_cache/
+models/

@@ -361,6 +361,37 @@ std::string ChatClient::getProvider() const
     return m_modelInfo.provider;
 }
 
+ErrorCode ChatClient::switchModel(const std::string &newModel)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    // Look up the new model
+    std::optional<ModelInfo> modelInfo = ModelManager::instance().getModelInfo(newModel);
+
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    // Get or create the provider for the new model
+    auto provider = ArbiterAI::instance().getSharedProvider(modelInfo->provider);
+
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    // Update session state — preserve history and tools
+    m_config.model = newModel;
+    m_modelInfo = *modelInfo;
+    m_provider = provider;
+
+    // Reset stats for the new model
+    m_stats = UsageStats{};
+
+    return ErrorCode::Success;
+}
+
 // ========== Download Status ==========
 
 ErrorCode ChatClient::getDownloadStatus(DownloadProgress& progress)

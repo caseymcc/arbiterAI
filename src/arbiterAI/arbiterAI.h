@@ -30,6 +30,10 @@ class CacheManager;
 class CostManager;
 class BaseProvider;
 struct ModelInfo;
+struct ModelFit;
+struct LoadedModel;
+struct SystemSnapshot;
+struct InferenceStats;
 
 /**
  * @enum ErrorCode
@@ -552,6 +556,65 @@ public:
      */
     ErrorCode getDownloadStatus(const std::string &modelName, std::string &error);
 
+    // ========== Local Model Management ==========
+
+    /**
+     * @brief Load a local model into VRAM for inference
+     * @param model Model name
+     * @param variant Quantization variant (empty = auto-select)
+     * @param contextSize Context size (0 = model default)
+     * @return ErrorCode indicating success, ModelDownloading, or failure
+     */
+    ErrorCode loadModel(const std::string &model, const std::string &variant="", int contextSize=0);
+
+    /**
+     * @brief Unload a model from VRAM/RAM
+     * @param model Model name
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode unloadModel(const std::string &model);
+
+    /**
+     * @brief Pin a model to keep it in RAM for quick reload
+     * @param model Model name
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode pinModel(const std::string &model);
+
+    /**
+     * @brief Unpin a model, allowing LRU eviction
+     * @param model Model name
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode unpinModel(const std::string &model);
+
+    /**
+     * @brief Get hardware fit capabilities for all local models
+     * @return Vector of ModelFit results
+     */
+    std::vector<ModelFit> getLocalModelCapabilities();
+
+    /**
+     * @brief Get state of all loaded/tracked models
+     * @return Vector of LoadedModel states
+     */
+    std::vector<LoadedModel> getLoadedModels();
+
+    // ========== Telemetry ==========
+
+    /**
+     * @brief Get a current system snapshot including hardware, loaded models, and performance
+     * @return SystemSnapshot with current state
+     */
+    SystemSnapshot getTelemetrySnapshot() const;
+
+    /**
+     * @brief Get inference history within a time window
+     * @param window Time window to query (e.g., 5 minutes)
+     * @return Vector of InferenceStats entries within the window
+     */
+    std::vector<InferenceStats> getInferenceHistory(std::chrono::minutes window) const;
+
     /**
      * @brief Shutdown the library and clean up resources
      * @return ErrorCode::Success
@@ -562,14 +625,14 @@ public:
     std::map<std::string, std::unique_ptr<class BaseProvider>> providers;
     std::map<std::string, std::string> connectionModels;  ///< Maps model name to connection name
 
-private:
     /**
-     * @brief Get or create a shared provider reference for ChatClient
+     * @brief Get or create a shared provider reference
      * @param providerName Provider identifier
-     * @return Shared pointer to the provider
+     * @return Shared pointer to the provider, or nullptr if unknown
      */
     std::shared_ptr<BaseProvider> getSharedProvider(const std::string& providerName);
 
+private:
     /**
      * @brief Load provider configuration from a JSON file
      * @param configPath Path to providers.json configuration file

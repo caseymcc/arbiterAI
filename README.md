@@ -1,57 +1,91 @@
 # ArbiterAI
 
-ArbiterAI is a modern, high-performance C++17 library designed to provide a unified, embeddable interface for interacting with various Large Language Model (LLM) providers.
+A modern, high-performance C++17 library that provides a unified, embeddable interface for interacting with multiple Large Language Model (LLM) providers. ArbiterAI simplifies LLM integration for C++ applications by offering a single, consistent API across diverse backends — from cloud services to local models.
 
-## Building the Project
+## Key Features
 
-The project is built using Docker to ensure a consistent build environment.
+- **Unified API** — Single interface for completions and streaming across all providers
+- **Session-Oriented Chat** — Stateful `ChatClient` with conversation history, tool calling, and per-session caching
+- **Multiple Providers** — OpenAI, Anthropic, DeepSeek, OpenRouter, llama.cpp (local), and a Mock provider for testing
+- **Model Management** — Dynamic configuration from JSON files with schema validation and remote updates
+- **Cost Tracking** — Per-session and global spending limits with persistent state
+- **Response Caching** — TTL-based caching to reduce costs and latency
+- **Tool/Function Calling** — Define tools with JSON schemas for LLM function calling
+- **Mock Provider** — Deterministic testing with `<echo>` tags — no API keys or network required
 
-1.  **Start the Docker container:**
+## Quick Start
+
+```cpp
+#include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/chatClient.h"
+
+// Initialize the library
+arbiterAI::ArbiterAI& ai = arbiterAI::ArbiterAI::instance();
+ai.initialize({"path/to/config"});
+
+// Create a chat session
+arbiterAI::ChatConfig config;
+config.model = "gpt-4";
+config.temperature = 0.7;
+auto client = ai.createChatClient(config);
+
+// Send a message
+arbiterAI::CompletionRequest request;
+request.messages = {{"user", "Hello!"}};
+arbiterAI::CompletionResponse response;
+client->completion(request, response);
+std::cout << response.text << std::endl;
+```
+
+## Building
+
+The project uses CMake and vcpkg for dependency management. A Docker environment is provided for consistent builds.
+
+1. **Start the Docker container:**
     ```bash
     ./runDocker.sh
     ```
-    This will start the container and attach a shell to it.
 
-2.  **Build the application:**
-    Inside the Docker container's shell, run the build script:
+2. **Build inside the container:**
     ```bash
     ./build.sh
     ```
-    To perform a clean rebuild, use:
+    For a clean rebuild:
     ```bash
     ./build.sh --rebuild
     ```
 
-The application binaries will be located in the `build/` directory inside the container.
+Build output is located in `build/linux_x64_debug/`.
 
 ## Running Tests
 
-Tests are run from within the Docker container.
+From inside the Docker container:
 
-1.  **Start the Docker container** (if not already running):
-    ```bash
-    ./runDocker.sh
-    ```
+```bash
+./build/linux_x64_debug/arbiterai_tests
+```
 
-2.  **Run the tests:**
-    The tests are run as part of the build process. To run them explicitly, you can execute the test binary from the build directory:
-    ```bash
-    ./build/linux_x64_Debug/tests/arbiterAITests
-    ```
-    (The exact path may vary depending on the build configuration).    (The exact path may vary depending on the build configuration).
+Tests use Google Test and include coverage for all core components, providers, and the mock provider.
 
 ## Documentation
 
-- **[Project Overview](docs/project.md)** - High-level project goals and features
-- **[Developer Guide](docs/developer.md)** - Architecture, API reference, and component details
-- **[Testing Guide](docs/testing.md)** - Mock provider and testing strategies
-- **[Examples](examples/README.md)** - Example applications and usage patterns
+| Document | Description |
+|----------|-------------|
+| [Project Overview](docs/project.md) | Goals, features, and supported providers |
+| [Developer Guide](docs/developer.md) | Architecture, API reference, and component details |
+| [Testing Guide](docs/testing.md) | Mock provider, echo tags, and testing strategies |
+| [Development Process](docs/development.md) | Workflow and task tracking |
+| [Examples](examples/README.md) | CLI, proxy, and mock provider examples |
 
-## Mock Provider for Testing
+## Mock Provider
 
-ArbiterAI includes a Mock provider for testing without requiring actual LLM calls. Use `<echo>` tags to control responses:
+ArbiterAI includes a Mock provider for testing without API keys or network calls. Use `<echo>` tags to control responses:
 
 ```cpp
+arbiterAI::ChatConfig config;
+config.model = "mock-model";
+auto client = ai.createChatClient(config);
+
 arbiterAI::CompletionRequest request;
 request.messages = {{"user", "What is 2+2? <echo>4</echo>"}};
 
@@ -60,4 +94,8 @@ client->completion(request, response);
 // response.text == "4"
 ```
 
-See [docs/testing.md](docs/testing.md) and [examples/mock_example.cpp](examples/mock_example.cpp) for more details.
+See the [Testing Guide](docs/testing.md) for full echo tag syntax and examples.
+
+## License
+
+See [LICENSE](LICENSE) for details.

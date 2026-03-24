@@ -25,6 +25,8 @@ jobs:
       run: |
         VERSION=$(grep -oP '(?<=^ARG DOCKER_VERSION=)[0-9]+\.[0-9]+\.[0-9]+' docker/Dockerfile)
         echo "DOCKER_VERSION=$VERSION" >> $GITHUB_OUTPUT
+        REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+        echo "REPO_LC=$REPO_LC" >> $GITHUB_OUTPUT
 
     - name: Verify Dockerfile version update on PR
       if: github.event_name == 'pull_request'
@@ -55,7 +57,9 @@ jobs:
       id: meta
       uses: docker/metadata-action@v4
       with:
-        images: ghcr.io/${{ github.repository }}
+        images: |
+          ghcr.io/${{ steps.docker_version.outputs.REPO_LC }}
+          arbiterai-dev
         tags: |
           type=raw,value=${{ steps.docker_version.outputs.DOCKER_VERSION }}
 
@@ -64,10 +68,11 @@ jobs:
       with:
         context: .
         file: ./docker/Dockerfile
-        push: ${{ github.ref == 'refs/heads/main' }}
+        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        load: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=registry,ref=${{ steps.meta.outputs.tags }}
+        cache-from: type=registry,ref=ghcr.io/${{ steps.docker_version.outputs.REPO_LC }}:${{ steps.docker_version.outputs.DOCKER_VERSION }}
         cache-to: type=inline
 
     - name: Create cache directories
@@ -87,3 +92,11 @@ jobs:
       run: ./runDocker.sh --ci ./build.sh
       env:
         VCPKG_CACHE_PATH: ${{ github.workspace }}/vcpkg_cache
+
+    - name: Print vcpkg build logs on failure
+      if: failure()
+      run: |
+        echo "=== vcpkg manifest install log ==="
+        docker exec arbiterai-dev-container cat /app/build/linux_x64_debug/vcpkg-manifest-install.log 2>/dev/null || true
+        echo "=== vcpkg build logs ==="
+        docker exec arbiterai-dev-container bash -c 'for f in /opt/vcpkg/buildtrees/*/install-*-out.log; do echo "--- $f ---"; tail -80 "$f"; done' 2>/dev/null || true

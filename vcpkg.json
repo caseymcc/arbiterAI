@@ -1,6 +1,7 @@
 {
     "name": "arbiterai",
     "version": "0.1.0",
+    "builtin-baseline": "f33cc491c85a7d643c5ab6da1667c1458e6d7abf",
     "dependencies": [
         "cpr",
         "gtest",
@@ -11,6 +12,7 @@
         "spdlog",
         "picosha2",
         "libgit2",
-        "cxxopts"
+        "cxxopts",
+        "llama-cpp"
     ]
 }

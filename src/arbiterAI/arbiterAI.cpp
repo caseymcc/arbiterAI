@@ -3,11 +3,13 @@
 #include "arbiterAI/cacheManager.h"
 #include "arbiterAI/costManager.h"
 #include "arbiterAI/modelManager.h"
+#include "arbiterAI/modelRuntime.h"
+#include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
 #include "arbiterAI/providers/deepseek.h"
-// #include "arbiterAI/providers/llama.h"  // Disabled - not built in CMakeLists
+#include "arbiterAI/providers/llama.h"
 #include "arbiterAI/providers/openrouter.h"
 #include "arbiterAI/providers/mock.h"
 
@@ -103,11 +105,10 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     {
         return std::make_unique<Deepseek>();
     }
-    // Llama provider disabled - not built in CMakeLists
-    // else if(provider=="llama")
-    // {
-    //     return std::make_unique<Llama>();
-    // }
+    else if(provider=="llama")
+    {
+        return std::make_unique<Llama>();
+    }
     else if(provider=="openrouter")
     {
         return std::make_unique<OpenRouter_LLM>();
@@ -503,6 +504,50 @@ ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
         models.push_back(m.model);
     }
     return ErrorCode::Success;
+}
+
+// ========== Local Model Management ==========
+
+ErrorCode ArbiterAI::loadModel(const std::string &model, const std::string &variant, int contextSize)
+{
+    return ModelRuntime::instance().loadModel(model, variant, contextSize);
+}
+
+ErrorCode ArbiterAI::unloadModel(const std::string &model)
+{
+    return ModelRuntime::instance().unloadModel(model);
+}
+
+ErrorCode ArbiterAI::pinModel(const std::string &model)
+{
+    return ModelRuntime::instance().pinModel(model);
+}
+
+ErrorCode ArbiterAI::unpinModel(const std::string &model)
+{
+    return ModelRuntime::instance().unpinModel(model);
+}
+
+std::vector<ModelFit> ArbiterAI::getLocalModelCapabilities()
+{
+    return ModelRuntime::instance().getLocalModelCapabilities();
+}
+
+std::vector<LoadedModel> ArbiterAI::getLoadedModels()
+{
+    return ModelRuntime::instance().getModelStates();
+}
+
+// ========== Telemetry ==========
+
+SystemSnapshot ArbiterAI::getTelemetrySnapshot() const
+{
+    return TelemetryCollector::instance().getSnapshot();
+}
+
+std::vector<InferenceStats> ArbiterAI::getInferenceHistory(std::chrono::minutes window) const
+{
+    return TelemetryCollector::instance().getHistory(window);
 }
 
 ErrorCode ArbiterAI::shutdown()

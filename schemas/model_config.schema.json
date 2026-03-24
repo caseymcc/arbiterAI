@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://arbiterAI/schemas/model-config/v1.0.0",
+  "$id": "https://arbiterAI/schemas/model-config/v1.1.0",
   "title": "ArbiterAI Model Configuration",
   "description": "Schema for model configuration files",
   "type": "object",
@@ -10,7 +10,7 @@
       "type": "string",
       "description": "Version of this configuration schema",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "examples": ["1.0.0"]
+      "examples": ["1.0.0", "1.1.0"]
     },
     "models": {
       "type": "array",
@@ -30,17 +30,40 @@
           "provider": {
             "type": "string",
             "description": "Model provider/service",
-            "enum": ["anthropic", "llama", "openai", "deepseek"]
+            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock"]
           },
           "ranking": {
             "type": "integer",
-            "description": "Preference order (lower is better)",
+            "description": "Preference order (higher is better)",
             "minimum": 0,
-            "default": 0
+            "maximum": 100,
+            "default": 50
+          },
+          "mode": {
+            "type": "string",
+            "description": "Operation mode",
+            "default": "chat"
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Custom API endpoint URL"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Local model file path"
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key for this model"
+          },
+          "examples_as_sys_msg": {
+            "type": "boolean",
+            "description": "Whether to include examples as system messages",
+            "default": false
           },
           "download": {
             "type": "object",
-            "description": "Download metadata",
+            "description": "Download metadata for single-file models",
             "properties": {
               "url": {
                 "type": "string",
@@ -80,21 +103,125 @@
               }
             }
           },
-          "contextWindow": {
+          "context_window": {
             "type": "integer",
+            "description": "Context window size in tokens",
             "minimum": 0
           },
-          "maxTokens": {
+          "max_tokens": {
             "type": "integer",
+            "description": "Maximum tokens per completion",
             "minimum": 0
           },
-          "inputCostPerToken": {
-            "type": "number",
+          "max_input_tokens": {
+            "type": "integer",
+            "description": "Maximum input tokens",
             "minimum": 0
           },
-          "outputCostPerToken": {
-            "type": "number",
+          "max_output_tokens": {
+            "type": "integer",
+            "description": "Maximum output tokens",
             "minimum": 0
+          },
+          "pricing": {
+            "type": "object",
+            "description": "Token pricing information",
+            "properties": {
+              "prompt_token_cost": {
+                "type": "number",
+                "minimum": 0
+              },
+              "completion_token_cost": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          },
+          "hardware_requirements": {
+            "type": "object",
+            "description": "Minimum hardware requirements for local models",
+            "properties": {
+              "min_system_ram_mb": {
+                "type": "integer",
+                "description": "Minimum system RAM in MB for CPU offload",
+                "minimum": 0
+              },
+              "parameter_count": {
+                "type": "string",
+                "description": "Human-readable parameter count (e.g. 7B, 13B, 70B)"
+              }
+            }
+          },
+          "context_scaling": {
+            "type": "object",
+            "description": "Context size scaling based on available VRAM",
+            "properties": {
+              "base_context": {
+                "type": "integer",
+                "description": "Context size at minimum VRAM",
+                "minimum": 0
+              },
+              "max_context": {
+                "type": "integer",
+                "description": "Maximum context the model supports",
+                "minimum": 0
+              },
+              "vram_per_1k_context_mb": {
+                "type": "integer",
+                "description": "Additional VRAM in MB per 1K context tokens",
+                "minimum": 0
+              }
+            }
+          },
+          "variants": {
+            "type": "array",
+            "description": "Quantization variants for local models",
+            "items": {
+              "type": "object",
+              "required": ["quantization"],
+              "properties": {
+                "quantization": {
+                  "type": "string",
+                  "description": "Quantization format (e.g. Q4_K_M, Q8_0, F16)"
+                },
+                "file_size_mb": {
+                  "type": "integer",
+                  "description": "File size in MB",
+                  "minimum": 0
+                },
+                "min_vram_mb": {
+                  "type": "integer",
+                  "description": "Minimum VRAM in MB to run this variant",
+                  "minimum": 0
+                },
+                "recommended_vram_mb": {
+                  "type": "integer",
+                  "description": "Recommended VRAM in MB for good performance",
+                  "minimum": 0
+                },
+                "download": {
+                  "type": "object",
+                  "description": "Download metadata for this variant",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri",
+                      "description": "Download URL"
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$",
+                      "description": "SHA256 checksum"
+                    },
+                    "filename": {
+                      "type": "string",
+                      "description": "Local filename for the downloaded model"
+                    }
+                  },
+                  "required": ["url", "sha256", "filename"]
+                }
+              }
+            }
           }
         }
       }
