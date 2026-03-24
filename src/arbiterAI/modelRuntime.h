@@ -15,6 +15,10 @@
 #include <functional>
 #include <chrono>
 
+// Forward declarations for llama.cpp types
+struct llama_model;
+struct llama_context;
+
 namespace arbiterAI
 {
 
@@ -37,6 +41,8 @@ struct LoadedModel {
     std::vector<int> gpuIndices;
     std::chrono::steady_clock::time_point lastUsed;
     bool pinned=false;
+    llama_model *llamaModel=nullptr;
+    llama_context *llamaCtx=nullptr;
 };
 
 class ModelRuntime {
@@ -99,6 +105,17 @@ public:
     /// Check if inference is currently active.
     bool isInferenceActive() const;
 
+    /// Get the llama_model handle for a loaded local model.
+    /// Returns nullptr if not loaded or not a local model.
+    llama_model *getLlamaModel(const std::string &model) const;
+
+    /// Get the llama_context handle for a loaded local model.
+    /// Returns nullptr if not loaded or not a local model.
+    llama_context *getLlamaContext(const std::string &model) const;
+
+    /// Get the ModelInfo for a loaded model.
+    std::optional<ModelInfo> getLoadedModelInfo(const std::string &model) const;
+
 private:
     ModelRuntime();
 
@@ -117,11 +134,33 @@ private:
     /// Evict LRU non-pinned Ready models to stay within RAM budget.
     void evictReadyModels();
 
+    /// Initialize the llama.cpp backend (called once on first local model load).
+    void initLlamaBackend();
+
+    /// Load a GGUF file into llama.cpp.
+    ErrorCode loadLlamaModel(
+        const std::string &model,
+        const std::string &filePath,
+        int contextSize,
+        const std::vector<int> &gpuIndices);
+
+    /// Free llama.cpp resources for a model.
+    void freeLlamaModel(LoadedModel &entry);
+
+    /// Download a model file synchronously.
+    /// @return true on success, false on failure.
+    bool downloadModelFile(
+        const std::string &url,
+        const std::string &filePath,
+        const std::string &sha256,
+        const std::string &modelName);
+
     std::map<std::string, LoadedModel> m_models;
     mutable std::mutex m_mutex;
     int m_readyRamBudgetMb=0;
     std::atomic<bool> m_inferenceActive{false};
     std::string m_inferenceModel;
+    bool m_llamaInitialized=false;
 
     struct SwapRequest {
         std::string model;

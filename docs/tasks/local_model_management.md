@@ -551,6 +551,281 @@ docker run -d -it $GPU_FLAG --name $CONTAINER_NAME ...
 
 ---
 
+## Phase 7: Llama Provider Refactor & Re-enable
+
+**Goal:** Delete the legacy `LlamaInterface` singleton, move llama.cpp model ownership (`llama_model*` / `llama_context*`) into `ModelRuntime`, rewrite the `Llama` provider to delegate to `ModelRuntime` for inference, add proper chat template formatting, re-enable the llama.cpp build, and verify end-to-end with a Qwen2.5-7B-Instruct Q4_K_M test.
+
+### Current State
+
+The llama provider is fully disabled:
+- `CMakeLists.txt` — llama source files, `find_package(llama)`, and `llama` link target are all commented out.
+- `vcpkg.json` — `llama-cpp` is not listed as a dependency (custom port exists at `vcpkg/custom_ports/llama-cpp/`).
+- `arbiterAI.cpp` — `#include "arbiterAI/providers/llama.h"` and the `createProvider("llama")` case are commented out.
+- `LlamaInterface` — Pre-Phase-3 singleton that manages one model at a time with its own download logic, duplicating responsibilities now handled by `ModelRuntime`.
+
+### 7.1 Re-enable llama.cpp Build
+
+Add the llama.cpp dependency back into the build system:
+
+**`vcpkg.json`:**
+```json
+"dependencies": [
+    // ...existing deps...
+    "llama-cpp"
+]
+```
+
+**`CMakeLists.txt`:**
+- Uncomment `find_package(llama CONFIG REQUIRED)`
+- Add llama source files back to `arbiterai_src` (new files, not the old `llamaInterface` ones)
+- Uncomment `${LLAMA_INCLUDE_DIRS}` in `target_include_directories`
+- Uncomment `llama` in `target_link_libraries`
+
+### 7.2 Move llama.cpp Handles into `ModelRuntime`
+
+`ModelRuntime` already tracks model state (`LoadedModel` struct with state, variant, context size, etc.) but doesn't own any llama.cpp objects. Extend it to own the actual model/context handles for local models.
+
+**Add to `LoadedModel`:**
+```cpp
+struct LoadedModel {
+    // ...existing fields...
+    llama_model *llamaModel=nullptr;
+    llama_context *llamaCtx=nullptr;
+};
+```
+
+**Add to `ModelRuntime`:**
+```cpp
+class ModelRuntime {
+public:
+    // ...existing public methods...
+
+    /// Get the llama_model handle for a loaded local model.
+    /// Returns nullptr if not loaded or not a local model.
+    llama_model *getLlamaModel(const std::string &model) const;
+
+    /// Get the llama_context handle for a loaded local model.
+    /// Returns nullptr if not loaded or not a local model.
+    llama_context *getLlamaContext(const std::string &model) const;
+
+    /// Get the ModelInfo for a loaded model (for maxOutputTokens, etc.).
+    std::optional<ModelInfo> getLoadedModelInfo(const std::string &model) const;
+
+private:
+    // ...existing private members...
+    bool m_llamaInitialized=false;
+
+    /// Initialize the llama.cpp backend (called once on first local model load).
+    void initLlamaBackend();
+
+    /// Actually load a GGUF file into llama.cpp.
+    ErrorCode loadLlamaModel(const std::string &model, const std::string &filePath,
+        int contextSize, const std::vector<int> &gpuIndices);
+
+    /// Free llama.cpp resources for a model.
+    void freeLlamaModel(LoadedModel &entry);
+};
+```
+
+The key changes to `ModelRuntime::loadModel()`:
+1. After hardware-fit checks and download verification, call `loadLlamaModel()` which calls `llama_model_load_from_file()` and `llama_init_from_model()`.
+2. Store the `llama_model*` and `llama_context*` in the `LoadedModel` entry.
+3. Set GPU layers via `llama_model_default_params().n_gpu_layers` based on `gpuIndices`.
+
+The key changes to `ModelRuntime::unloadModel()`:
+1. Call `freeLlamaModel()` to `llama_free()` / `llama_model_free()` the handles.
+2. For pinned → Ready transition: free the context but keep the model weights.
+
+### 7.3 Delete `LlamaInterface`
+
+Remove `llamaInterface.h` and `llamaInterface.cpp` entirely. All their responsibilities are absorbed:
+
+| `LlamaInterface` Responsibility | New Owner |
+|---------------------------------|-----------|
+| `llama_backend_init/free` | `ModelRuntime` (init on first local load, free in destructor) |
+| `llama_model_load_from_file` / `llama_model_free` | `ModelRuntime::loadLlamaModel()` / `freeLlamaModel()` |
+| `llama_init_from_model` / `llama_free` | `ModelRuntime::loadLlamaModel()` / `freeLlamaModel()` |
+| `completion()` / `streamingCompletion()` | `Llama` provider (using handles from `ModelRuntime`) |
+| `getEmbeddings()` | `Llama` provider (using handles from `ModelRuntime`) |
+| `loadModel()` / `isLoaded()` | `ModelRuntime::loadModel()` / `getModelState()` |
+| `setModels()` | Removed — `ModelManager` already tracks all model configs |
+| `downloadModel()` / `getDownloadStatus()` | `ModelRuntime` (already has download tracking) |
+| `getAvailableModels()` | `ModelManager::getModelsByProvider("llama")` |
+
+### 7.4 Rewrite `Llama` Provider
+
+The `Llama` provider becomes a thin wrapper that:
+1. Gets llama.cpp handles from `ModelRuntime` (instead of `LlamaInterface`).
+2. Performs tokenization, sampling, and decoding directly.
+3. Applies proper chat template formatting.
+4. Records telemetry via `TelemetryCollector`.
+
+```cpp
+class Llama : public BaseProvider {
+public:
+    Llama();
+    ~Llama();
+
+    ErrorCode completion(const CompletionRequest &request,
+        const ModelInfo &model,
+        CompletionResponse &response) override;
+
+    ErrorCode streamingCompletion(const CompletionRequest &request,
+        std::function<void(const std::string &)> callback) override;
+
+    ErrorCode getEmbeddings(const EmbeddingRequest &request,
+        EmbeddingResponse &response) override;
+
+    DownloadStatus getDownloadStatus(const std::string &modelName,
+        std::string &error) override;
+
+    ErrorCode getAvailableModels(std::vector<std::string> &models) override;
+
+private:
+    /// Format messages into a prompt string using the model's chat template.
+    std::string applyTemplate(llama_model *model,
+        const std::vector<Message> &messages) const;
+
+    /// Run the inference loop (shared by completion and streaming).
+    ErrorCode runInference(llama_model *model, llama_context *ctx,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        std::string &result,
+        std::function<void(const std::string &)> streamCallback);
+};
+```
+
+**Key design points:**
+- `completion()` calls `ModelRuntime::instance().loadModel()` if not loaded, then gets handles via `getLlamaModel()` / `getLlamaContext()`.
+- Calls `ModelRuntime::beginInference()` / `endInference()` to protect against swap-during-inference.
+- Records `InferenceStats` to `TelemetryCollector` after each completion.
+- Uses `ModelRuntime::getLoadedModelInfo()` to get `maxOutputTokens`, `contextWindow`, etc.
+
+### 7.5 Chat Template Support
+
+The current `LlamaInterface` concatenates all message contents into a flat string, ignoring roles. This produces garbage output from instruction-tuned models like Qwen2.5.
+
+**Solution:** Use llama.cpp's built-in `llama_chat_apply_template()` function. This reads the chat template from the GGUF file's metadata and formats messages correctly. For Qwen2.5, this produces ChatML format:
+
+```
+<|im_start|>system
+{system_prompt}<|im_end|>
+<|im_start|>user
+{prompt}<|im_end|>
+<|im_start|>assistant
+```
+
+Implementation in `Llama::applyTemplate()`:
+```cpp
+std::string Llama::applyTemplate(llama_model *model,
+    const std::vector<Message> &messages) const
+{
+    // Build llama_chat_message array
+    std::vector<llama_chat_message> chatMessages;
+    for(const Message &msg:messages)
+    {
+        chatMessages.push_back({msg.role.c_str(), msg.content.c_str()});
+    }
+
+    // First call to get required buffer size
+    int len=llama_chat_apply_template(
+        llama_model_get_vocab(model),
+        nullptr, // use model's built-in template
+        chatMessages.data(), chatMessages.size(),
+        true, // add generation prompt
+        nullptr, 0);
+
+    std::string result(len, '\0');
+
+    // Second call to fill the buffer
+    llama_chat_apply_template(
+        llama_model_get_vocab(model),
+        nullptr,
+        chatMessages.data(), chatMessages.size(),
+        true,
+        result.data(), result.size());
+
+    return result;
+}
+```
+
+If `llama_chat_apply_template()` returns an error (template not found in GGUF metadata), fall back to a generic ChatML formatter.
+
+### 7.6 Re-enable Provider Registration
+
+**`arbiterAI.cpp`:**
+```cpp
+#include "arbiterAI/providers/llama.h"  // Uncomment
+
+// In createProvider():
+else if(provider=="llama")
+{
+    return std::make_unique<Llama>();
+}
+```
+
+### 7.7 Update `arbiterAI_config`
+
+The config repo entry at `arbiterAI_config/configs/defaults/models/llama.json` has already been updated (in the previous session) with Qwen2.5-7B-Instruct using the v1.1.0 schema with `variants`, `hardware_requirements`, and `context_scaling`. SHA256 hashes are placeholders — they must be computed from the actual downloaded files before the first real download test.
+
+### 7.8 Test with Qwen2.5-7B-Instruct Q4_K_M
+
+Add an integration test that verifies end-to-end llama.cpp inference. This test requires the GGUF file to be present on disk (skip if not available).
+
+**Test model:** [bartowski/Qwen2.5-7B-Instruct-GGUF](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF) — Q4_K_M variant (4.68 GB).
+
+| Property | Value |
+|----------|-------|
+| Model | Qwen2.5-7B-Instruct |
+| Quantization | Q4_K_M |
+| File | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` |
+| File size | 4.68 GB |
+| License | Apache 2.0 |
+| Min VRAM | ~5 GB |
+| Test device | NVIDIA RTX 3060 12 GB |
+| Context | 4096 (conservative for testing) |
+
+**Test file:** `tests/llamaProviderTests.cpp`
+
+```cpp
+// Skip if model file is not present
+class LlamaProviderTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        modelPath="/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf";
+        if(!std::filesystem::exists(modelPath))
+        {
+            GTEST_SKIP() << "Qwen2.5-7B-Instruct Q4_K_M not found at " << modelPath;
+        }
+        // Initialize ArbiterAI with config that includes the llama model
+    }
+};
+
+TEST_F(LlamaProviderTest, BasicCompletion) { /* ... */ }
+TEST_F(LlamaProviderTest, StreamingCompletion) { /* ... */ }
+TEST_F(LlamaProviderTest, ChatTemplateApplied) { /* ... */ }
+TEST_F(LlamaProviderTest, TokenUsageReported) { /* ... */ }
+TEST_F(LlamaProviderTest, ModelRuntimeTracksState) { /* ... */ }
+TEST_F(LlamaProviderTest, TelemetryRecorded) { /* ... */ }
+```
+
+Tests use `GTEST_SKIP()` when the model file is absent so CI passes without a GPU and without a 5 GB download.
+
+### Files affected
+- `vcpkg.json` — add `llama-cpp` dependency
+- `CMakeLists.txt` — re-enable llama sources, `find_package`, link target; add test file
+- `src/arbiterAI/providers/llamaInterface.h` — **DELETE**
+- `src/arbiterAI/providers/llamaInterface.cpp` — **DELETE**
+- `src/arbiterAI/providers/llama.h` — **REWRITE** — thin provider delegating to `ModelRuntime`
+- `src/arbiterAI/providers/llama.cpp` — **REWRITE** — inference, chat template, telemetry
+- `src/arbiterAI/modelRuntime.h` — add `llama_model*`/`llama_context*` to `LoadedModel`, add accessor/loader methods
+- `src/arbiterAI/modelRuntime.cpp` — implement `loadLlamaModel()`, `freeLlamaModel()`, `initLlamaBackend()`
+- `src/arbiterAI/arbiterAI.cpp` — uncomment llama include and `createProvider` case
+- `tests/llamaProviderTests.cpp` — **NEW** — integration tests (skip if model absent)
+- `arbiterAI_config/configs/defaults/models/llama.json` — already updated with Qwen2.5-7B-Instruct
+
+---
+
 ## Implementation Order
 
 | Order | Phase | Task | Estimated Effort | Dependencies |
@@ -561,13 +836,17 @@ docker run -d -it $GPU_FLAG --name $CONTAINER_NAME ...
 | 4 | 2.1/2.2 | `HardwareDetector` (NVML + Vulkan via `dlopen`) | Medium | None |
 | 5 | 2.3 | Model fit calculation (multi-GPU aware) | Small | 1, 4 |
 | 6 | 6.1/6.2 | Docker GPU support (Dockerfile + runDocker.sh) | Small | None |
-| 7 | — | Re-enable llama.cpp in CMake | Small | None |
-| 8 | 3.1/3.2 | `ModelRuntime` refactor (multi-model, multi-GPU) | Large | 4, 5, 7 |
-| 9 | 3.3/3.4 | Ready model strategy + swap queueing | Medium | 8 |
-| 10 | 3.5 | Public API additions (load/unload/pin/switch) | Medium | 8 |
-| 11 | 4.1 | `TelemetryCollector` | Medium | 8 |
-| 12 | 4.2/4.3 | Instrument inference + library telemetry API | Small | 8, 11 |
-| 13 | 5.1–5.4 | Standalone server (routes, dashboard, config) | Large | 10, 12 |
+| 7 | 3.1/3.2 | `ModelRuntime` (multi-model state tracking, swap queueing) | Large | 4, 5 |
+| 8 | 3.3/3.4 | Ready model strategy + swap queueing | Medium | 7 |
+| 9 | 3.5 | Public API additions (load/unload/pin/switch) | Medium | 7 |
+| 10 | 4.1 | `TelemetryCollector` | Medium | 7 |
+| 11 | 4.2/4.3 | Instrument inference + library telemetry API | Small | 7, 10 |
+| 12 | 5.1–5.4 | Standalone server (routes, dashboard, config) | Large | 9, 11 |
+| 13 | 7.1 | Re-enable llama.cpp build (`vcpkg.json`, `CMakeLists.txt`) | Small | None |
+| 14 | 7.2/7.3 | Move llama.cpp handles into `ModelRuntime`, delete `LlamaInterface` | Large | 7, 13 |
+| 15 | 7.4/7.5 | Rewrite `Llama` provider + chat template support | Medium | 14 |
+| 16 | 7.6 | Re-enable provider registration in `arbiterAI.cpp` | Small | 15 |
+| 17 | 7.7/7.8 | Update config, add Qwen2.5-7B-Instruct Q4_K_M tests | Medium | 15, 16 |
 
 ---
 
@@ -581,16 +860,19 @@ arbiterAI/
 │   │   ├── hardwareDetector.h/cpp  # NEW — GPU/RAM/CPU detection
 │   │   ├── telemetryCollector.h/cpp# NEW — inference stats collection
 │   │   ├── modelManager.h/cpp      # MODIFIED — variants, hardware reqs, model fit
+│   │   ├── modelRuntime.h/cpp      # MODIFIED — llama.cpp handle ownership
 │   │   ├── configDownloader.h/cpp  # MODIFIED — full git clone/pull implementation
-│   │   ├── arbiterAI.h/cpp         # MODIFIED — model management + telemetry API
+│   │   ├── arbiterAI.h/cpp         # MODIFIED — model management + telemetry API + llama registration
 │   │   ├── chatClient.h/cpp        # MODIFIED — switchModel()
 │   │   └── providers/
-│   │       ├── llamaInterface.h/cpp# MAJOR REFACTOR → ModelRuntime
-│   │       └── llama.h/cpp         # MODIFIED — delegate to ModelRuntime
+│   │       ├── llamaInterface.h/cpp# DELETE — absorbed by ModelRuntime + Llama provider
+│   │       └── llama.h/cpp         # REWRITE — thin provider delegating to ModelRuntime
 │   └── server/                     # NEW — standalone server application
 │       ├── main.cpp                # Server entry point
 │       ├── routes.h/cpp            # HTTP route handlers
 │       └── dashboard.h             # Embedded HTML/JS dashboard
+├── tests/
+│   └── llamaProviderTests.cpp      # NEW — integration tests (skip if model absent)
 ├── schemas/
 │   └── model_config.schema.json    # MODIFIED — variants, hardware reqs
 ├── docker/

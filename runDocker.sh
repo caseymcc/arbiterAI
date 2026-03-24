@@ -8,6 +8,7 @@ REBUILD=false
 STOP=false
 RESTART=false
 CI_MODE=false
+MODELS_DIR=""
 COMMAND_ARGS=()
 STOPPED=false
 
@@ -28,6 +29,10 @@ while [[ "$#" -gt 0 ]]; do
         --ci)
             CI_MODE=true
             shift
+            ;;
+        --models-dir)
+            MODELS_DIR="$2"
+            shift 2
             ;;
         *)
             COMMAND_ARGS=("$@")
@@ -68,6 +73,13 @@ if [ ! "$(docker ps -q -f name=$CONTAINER_NAME)" ] || [ "$REBUILD" = true ]; the
         echo "Starting new container..."
         VCPKG_CACHE_DIR=${VCPKG_CACHE_PATH:-"$HOME/vcpkg_cache"}
 
+        # Determine models directory — default to model_cache/ in the repo directory
+        if [ -z "$MODELS_DIR" ]; then
+            MODELS_DIR="$(pwd)/model_cache"
+        fi
+        mkdir -p "$MODELS_DIR"
+        echo "Using models directory: $MODELS_DIR"
+
         # Detect GPU support — pass GPUs through when NVIDIA Container Toolkit is available.
         # Builds and tests still work without a GPU; llama.cpp inference falls back to CPU-only.
         GPU_FLAG=""
@@ -77,10 +89,12 @@ if [ ! "$(docker ps -q -f name=$CONTAINER_NAME)" ] || [ "$REBUILD" = true ]; the
         fi
 
         if [ "$CI_MODE" = true ]; then
-            # In CI, we run non-interactively and mount the workspace directly
-            docker run -d $GPU_FLAG --name $CONTAINER_NAME -v "${GITHUB_WORKSPACE}":/app -v "${GITHUB_WORKSPACE}/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+            # In CI, use models dir from env or default
+            CI_MODELS_DIR="${MODELS_DIR:-${GITHUB_WORKSPACE}/model_cache}"
+            mkdir -p "$CI_MODELS_DIR"
+            docker run -d $GPU_FLAG --name $CONTAINER_NAME -v "${GITHUB_WORKSPACE}":/app -v "$CI_MODELS_DIR":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
         else
-            docker run -d -it $GPU_FLAG --name $CONTAINER_NAME -v "$(pwd)":/app -v "$(pwd)/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+            docker run -d -it $GPU_FLAG --name $CONTAINER_NAME -v "$(pwd)":/app -v "$MODELS_DIR":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
         fi
     else
         echo "Restarting existing container..."

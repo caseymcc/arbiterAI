@@ -11,6 +11,7 @@
         "spdlog",
         "picosha2",
         "libgit2",
-        "cxxopts"
+        "cxxopts",
+        "llama-cpp"
     ]
 }

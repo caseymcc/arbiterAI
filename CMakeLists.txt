@@ -31,7 +31,7 @@ find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
-#find_package(llama CONFIG REQUIRED)
+find_package(llama CONFIG REQUIRED)
 find_package(libgit2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -74,10 +74,8 @@ set(arbiterai_src
     ./src/arbiterAI/providers/deepseek.cpp
     ./src/arbiterAI/providers/mock.h
     ./src/arbiterAI/providers/mock.cpp
-#    ./src/arbiterAI/providers/llama.h
-#    ./src/arbiterAI/providers/llama.cpp
-#    ./src/arbiterAI/providers/llamaInterface.h
-#    ./src/arbiterAI/providers/llamaInterface.cpp
+    ./src/arbiterAI/providers/llama.h
+    ./src/arbiterAI/providers/llama.cpp
    ./src/arbiterAI/providers/openrouter.h
    ./src/arbiterAI/providers/openrouter.cpp
 )
@@ -94,7 +92,7 @@ target_include_directories(arbiterai
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<INSTALL_INTERFACE:include>
-#        ${LLAMA_INCLUDE_DIRS}
+        ${LLAMA_INCLUDE_DIRS}
     PRIVATE
         ${PICOSHA2_INCLUDE_DIRS}
 )
@@ -103,7 +101,7 @@ target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
         nlohmann_json::nlohmann_json
-#        llama
+        llama
         libgit2::libgit2package
     PRIVATE
         spdlog::spdlog
@@ -129,6 +127,7 @@ target_link_libraries(arbiterai
         tests/hardwareDetectorTests.cpp
         tests/modelRuntimeTests.cpp
         tests/telemetryCollectorTests.cpp
+        tests/llamaProviderTests.cpp
     )
     
     target_link_libraries(arbiterai_tests

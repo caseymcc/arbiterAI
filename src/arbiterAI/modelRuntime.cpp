@@ -2,9 +2,11 @@
 #include "arbiterAI/hardwareDetector.h"
 #include "arbiterAI/telemetryCollector.h"
 
+#include <llama.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <filesystem>
+#include <thread>
 
 namespace arbiterAI
 {
@@ -19,6 +21,13 @@ void ModelRuntime::reset()
 {
     ModelRuntime &rt=instance();
     std::lock_guard<std::mutex> lock(rt.m_mutex);
+
+    // Free all llama.cpp resources
+    for(auto &pair:rt.m_models)
+    {
+        rt.freeLlamaModel(pair.second);
+    }
+
     rt.m_models.clear();
     rt.m_inferenceActive=false;
     rt.m_inferenceModel.clear();
@@ -62,6 +71,21 @@ ErrorCode ModelRuntime::loadModel(
         if(it->second.state==ModelState::Ready)
         {
             // Promote from Ready to Loaded
+            // If llama model is in RAM but context was freed, recreate context
+            if(it->second.llamaModel&&!it->second.llamaCtx)
+            {
+                llama_context_params cparams=llama_context_default_params();
+                cparams.n_ctx=it->second.contextSize;
+                cparams.n_threads=std::thread::hardware_concurrency();
+                cparams.n_threads_batch=std::thread::hardware_concurrency();
+
+                it->second.llamaCtx=llama_init_from_model(it->second.llamaModel, cparams);
+                if(!it->second.llamaCtx)
+                {
+                    spdlog::error("Failed to recreate llama context for model: {}", model);
+                    return ErrorCode::ModelLoadError;
+                }
+            }
             it->second.state=ModelState::Loaded;
             it->second.lastUsed=std::chrono::steady_clock::now();
             spdlog::info("Promoted model '{}' from Ready to Loaded", model);
@@ -125,14 +149,28 @@ ErrorCode ModelRuntime::loadModel(
                 std::string filePath="/models/"+selectedVar->download.filename;
                 if(!std::filesystem::exists(filePath)&&!selectedVar->download.url.empty())
                 {
-                    // Start download
-                    LoadedModel &entry=m_models[model];
-                    entry.modelName=model;
-                    entry.variant=selectedVariant;
-                    entry.state=ModelState::Downloading;
-                    entry.lastUsed=std::chrono::steady_clock::now();
+                    // Mark as downloading
+                    LoadedModel &dlEntry=m_models[model];
+                    dlEntry.modelName=model;
+                    dlEntry.variant=selectedVariant;
+                    dlEntry.state=ModelState::Downloading;
+                    dlEntry.lastUsed=std::chrono::steady_clock::now();
                     spdlog::info("Downloading model '{}' variant '{}'", model, selectedVariant);
-                    return ErrorCode::ModelDownloading;
+
+                    // Release the lock during download (can be very large)
+                    m_mutex.unlock();
+                    bool downloadOk=downloadModelFile(
+                        selectedVar->download.url,
+                        filePath,
+                        selectedVar->download.sha256,
+                        model);
+                    m_mutex.lock();
+
+                    if(!downloadOk)
+                    {
+                        m_models.erase(model);
+                        return ErrorCode::ModelDownloadFailed;
+                    }
                 }
             }
 
@@ -140,11 +178,24 @@ ErrorCode ModelRuntime::loadModel(
             LoadedModel &entry=m_models[model];
             entry.modelName=model;
             entry.variant=selectedVariant;
-            entry.state=ModelState::Loaded;
             entry.contextSize=std::min(resolvedContext, fit.maxContextSize);
             entry.estimatedVramUsageMb=fit.estimatedVramUsageMb;
             entry.gpuIndices=fit.gpuIndices;
             entry.lastUsed=std::chrono::steady_clock::now();
+
+            // Actually load llama.cpp model for local providers
+            if(modelInfo->provider=="llama")
+            {
+                std::string filePath="/models/"+selectedVar->download.filename;
+                ErrorCode loadResult=loadLlamaModel(model, filePath, entry.contextSize, entry.gpuIndices);
+                if(loadResult!=ErrorCode::Success)
+                {
+                    m_models.erase(model);
+                    return loadResult;
+                }
+            }
+
+            entry.state=ModelState::Loaded;
 
             spdlog::info("Loaded model '{}' variant '{}' (context={}, vram={}MB, gpus={})",
                 model, selectedVariant, entry.contextSize, entry.estimatedVramUsageMb,
@@ -189,6 +240,12 @@ ErrorCode ModelRuntime::unloadModel(const std::string &model)
     if(entry.pinned)
     {
         // Move pinned model to Ready (keep in RAM)
+        // Free context but keep model weights
+        if(entry.llamaCtx)
+        {
+            llama_free(entry.llamaCtx);
+            entry.llamaCtx=nullptr;
+        }
         entry.state=ModelState::Ready;
         entry.ramUsageMb=entry.estimatedVramUsageMb; // approximate
         entry.vramUsageMb=0;
@@ -198,6 +255,7 @@ ErrorCode ModelRuntime::unloadModel(const std::string &model)
     }
     else
     {
+        freeLlamaModel(entry);
         entry.state=ModelState::Unloaded;
         entry.vramUsageMb=0;
         entry.ramUsageMb=0;
@@ -400,6 +458,7 @@ void ModelRuntime::evictIfNeeded(int requiredVramMb)
         auto it=m_models.find(candidate.model);
         if(it!=m_models.end())
         {
+            freeLlamaModel(it->second);
             it->second.state=ModelState::Unloaded;
             it->second.vramUsageMb=0;
             it->second.ramUsageMb=0;
@@ -557,12 +616,162 @@ void ModelRuntime::evictReadyModels()
         auto it=m_models.find(candidate.model);
         if(it!=m_models.end())
         {
+            freeLlamaModel(it->second);
             it->second.state=ModelState::Unloaded;
             it->second.ramUsageMb=0;
             currentUsage-=candidate.ramMb;
             spdlog::info("Evicted Ready model '{}' to free {}MB RAM", candidate.model, candidate.ramMb);
         }
     }
+}
+
+void ModelRuntime::initLlamaBackend()
+{
+    if(!m_llamaInitialized)
+    {
+        llama_backend_init();
+        m_llamaInitialized=true;
+        spdlog::info("llama.cpp backend initialized");
+    }
+}
+
+ErrorCode ModelRuntime::loadLlamaModel(
+    const std::string &model,
+    const std::string &filePath,
+    int contextSize,
+    const std::vector<int> &gpuIndices)
+{
+    initLlamaBackend();
+
+    llama_model_params mparams=llama_model_default_params();
+    mparams.n_gpu_layers=99; // offload all layers to GPU by default
+
+    llama_model *llamaModel=llama_model_load_from_file(filePath.c_str(), mparams);
+    if(!llamaModel)
+    {
+        spdlog::error("Failed to load llama model from: {}", filePath);
+        return ErrorCode::ModelLoadError;
+    }
+
+    llama_context_params cparams=llama_context_default_params();
+    cparams.n_ctx=contextSize;
+    cparams.n_threads=std::thread::hardware_concurrency();
+    cparams.n_threads_batch=std::thread::hardware_concurrency();
+
+    llama_context *llamaCtx=llama_init_from_model(llamaModel, cparams);
+    if(!llamaCtx)
+    {
+        spdlog::error("Failed to create llama context for model: {}", model);
+        llama_model_free(llamaModel);
+        return ErrorCode::ModelLoadError;
+    }
+
+    LoadedModel &entry=m_models[model];
+    entry.llamaModel=llamaModel;
+    entry.llamaCtx=llamaCtx;
+
+    spdlog::info("llama.cpp model loaded: {} (context={})", model, contextSize);
+    return ErrorCode::Success;
+}
+
+void ModelRuntime::freeLlamaModel(LoadedModel &entry)
+{
+    if(entry.llamaCtx)
+    {
+        llama_free(entry.llamaCtx);
+        entry.llamaCtx=nullptr;
+    }
+    if(entry.llamaModel)
+    {
+        llama_model_free(entry.llamaModel);
+        entry.llamaModel=nullptr;
+    }
+}
+
+llama_model *ModelRuntime::getLlamaModel(const std::string &model) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
+    {
+        return it->second.llamaModel;
+    }
+    return nullptr;
+}
+
+llama_context *ModelRuntime::getLlamaContext(const std::string &model) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
+    {
+        return it->second.llamaCtx;
+    }
+    return nullptr;
+}
+
+std::optional<ModelInfo> ModelRuntime::getLoadedModelInfo(const std::string &model) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it==m_models.end())
+    {
+        return std::nullopt;
+    }
+    return ModelManager::instance().getModelInfo(model);
+}
+
+bool ModelRuntime::downloadModelFile(
+    const std::string &url,
+    const std::string &filePath,
+    const std::string &sha256,
+    const std::string &modelName)
+{
+    std::optional<std::string> hash=std::nullopt;
+    if(!sha256.empty())
+    {
+        hash=sha256;
+    }
+
+    spdlog::info("Starting synchronous download: {} -> {}", url, filePath);
+
+    auto lastLogTime=std::chrono::steady_clock::now();
+
+    std::future<bool> result=m_downloader.downloadModelWithProgress(
+        url, filePath, hash,
+        [&modelName, &lastLogTime](int64_t bytesDownloaded, int64_t totalBytes, float percent)
+        {
+            auto now=std::chrono::steady_clock::now();
+            double elapsed=std::chrono::duration<double>(now-lastLogTime).count();
+            if(elapsed>=5.0||percent>=100.0f)
+            {
+                lastLogTime=now;
+                if(totalBytes>0)
+                {
+                    spdlog::info("Downloading '{}': {:.1f}% ({}/{} MB)",
+                        modelName, percent,
+                        bytesDownloaded/(1024*1024),
+                        totalBytes/(1024*1024));
+                }
+            }
+        },
+        modelName);
+
+    bool success=result.get();
+
+    if(success)
+    {
+        spdlog::info("Download complete: {}", filePath);
+    }
+    else
+    {
+        spdlog::error("Download failed: {}", filePath);
+    }
+
+    return success;
 }
 
 } // namespace arbiterAI
