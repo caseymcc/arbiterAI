@@ -3,6 +3,7 @@
 #include "arbiterAI/cacheManager.h"
 #include "arbiterAI/costManager.h"
 #include "arbiterAI/modelManager.h"
+#include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
@@ -503,6 +504,38 @@ ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
         models.push_back(m.model);
     }
     return ErrorCode::Success;
+}
+
+// ========== Local Model Management ==========
+
+ErrorCode ArbiterAI::loadModel(const std::string &model, const std::string &variant, int contextSize)
+{
+    return ModelRuntime::instance().loadModel(model, variant, contextSize);
+}
+
+ErrorCode ArbiterAI::unloadModel(const std::string &model)
+{
+    return ModelRuntime::instance().unloadModel(model);
+}
+
+ErrorCode ArbiterAI::pinModel(const std::string &model)
+{
+    return ModelRuntime::instance().pinModel(model);
+}
+
+ErrorCode ArbiterAI::unpinModel(const std::string &model)
+{
+    return ModelRuntime::instance().unpinModel(model);
+}
+
+std::vector<ModelFit> ArbiterAI::getLocalModelCapabilities()
+{
+    return ModelRuntime::instance().getLocalModelCapabilities();
+}
+
+std::vector<LoadedModel> ArbiterAI::getLoadedModels()
+{
+    return ModelRuntime::instance().getModelStates();
 }
 
 ErrorCode ArbiterAI::shutdown()

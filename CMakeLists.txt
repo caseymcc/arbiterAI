@@ -60,6 +60,8 @@ set(arbiterai_src
     ./src/arbiterAI/hardwareDetector.cpp
     ./src/arbiterAI/modelFitCalculator.h
     ./src/arbiterAI/modelFitCalculator.cpp
+    ./src/arbiterAI/modelRuntime.h
+    ./src/arbiterAI/modelRuntime.cpp
     ./src/arbiterAI/providers/baseProvider.h
     ./src/arbiterAI/providers/baseProvider.cpp
     ./src/arbiterAI/providers/openai.h
@@ -123,6 +125,7 @@ target_link_libraries(arbiterai
         tests/providerTests.cpp
         tests/mockProviderTests.cpp
         tests/hardwareDetectorTests.cpp
+        tests/modelRuntimeTests.cpp
     )
     
     target_link_libraries(arbiterai_tests

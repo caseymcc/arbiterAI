@@ -243,6 +243,16 @@ public:
      */
     std::string getProvider() const;
 
+    /**
+     * @brief Switch to a different model mid-session
+     * @param newModel Model identifier to switch to
+     * @return ErrorCode::Success, UnknownModel, or UnsupportedProvider
+     *
+     * Conversation history and tools are preserved.
+     * Statistics are reset for the new model.
+     */
+    ErrorCode switchModel(const std::string &newModel);
+
     // ========== Download Status ==========
 
     /**
