@@ -55,7 +55,9 @@ jobs:
       id: meta
       uses: docker/metadata-action@v4
       with:
-        images: ghcr.io/${{ github.repository }}
+        images: |
+          ghcr.io/${{ github.repository }}
+          arbiterai-dev
         tags: |
           type=raw,value=${{ steps.docker_version.outputs.DOCKER_VERSION }}
 
@@ -64,10 +66,11 @@ jobs:
       with:
         context: .
         file: ./docker/Dockerfile
-        push: ${{ github.ref == 'refs/heads/main' }}
+        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        load: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=registry,ref=${{ steps.meta.outputs.tags }}
+        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:${{ steps.docker_version.outputs.DOCKER_VERSION }}
         cache-to: type=inline
 
     - name: Create cache directories
