@@ -159,6 +159,26 @@ target_link_libraries(arbiterAI-proxy
         httplib::httplib
 )
 
+add_executable(arbiterAI-server
+    src/server/main.cpp
+    src/server/routes.h
+    src/server/routes.cpp
+    src/server/dashboard.h
+)
+
+target_include_directories(arbiterAI-server
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/server
+)
+
+target_link_libraries(arbiterAI-server
+    PRIVATE
+        arbiterai
+        httplib::httplib
+        cxxopts::cxxopts
+        spdlog::spdlog
+)
+
 install(
     TARGETS arbiterai
     EXPORT arbiterAITargets
