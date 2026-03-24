@@ -67,11 +67,20 @@ if [ ! "$(docker ps -q -f name=$CONTAINER_NAME)" ] || [ "$REBUILD" = true ]; the
         fi
         echo "Starting new container..."
         VCPKG_CACHE_DIR=${VCPKG_CACHE_PATH:-"$HOME/vcpkg_cache"}
+
+        # Detect GPU support — pass GPUs through when NVIDIA Container Toolkit is available.
+        # Builds and tests still work without a GPU; llama.cpp inference falls back to CPU-only.
+        GPU_FLAG=""
+        if command -v nvidia-smi &> /dev/null && docker info 2>/dev/null | grep -q "nvidia"; then
+            GPU_FLAG="--gpus all"
+            echo "NVIDIA GPU support detected, enabling GPU passthrough."
+        fi
+
         if [ "$CI_MODE" = true ]; then
             # In CI, we run non-interactively and mount the workspace directly
-            docker run -d --name $CONTAINER_NAME -v "${GITHUB_WORKSPACE}":/app -v "${GITHUB_WORKSPACE}/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+            docker run -d $GPU_FLAG --name $CONTAINER_NAME -v "${GITHUB_WORKSPACE}":/app -v "${GITHUB_WORKSPACE}/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
         else
-            docker run -d -it --name $CONTAINER_NAME -v "$(pwd)":/app -v "$(pwd)/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
+            docker run -d -it $GPU_FLAG --name $CONTAINER_NAME -v "$(pwd)":/app -v "$(pwd)/models":/models -v "$VCPKG_CACHE_DIR":/vcpkg_cache -e VCPKG_OVERLAY_TRIPLETS=/app/triplets $IMAGE_NAME
         fi
     else
         echo "Restarting existing container..."
