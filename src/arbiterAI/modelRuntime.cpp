@@ -1,5 +1,6 @@
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/hardwareDetector.h"
+#include "arbiterAI/telemetryCollector.h"
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -254,6 +255,11 @@ ErrorCode ModelRuntime::swapModel(
         return ErrorCode::ModelDownloading; // "queued" status
     }
 
+    std::chrono::steady_clock::time_point swapStart=std::chrono::steady_clock::now();
+
+    // Identify current loaded model for telemetry
+    std::string fromModel;
+
     // Unload all currently Loaded models
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -261,6 +267,11 @@ ErrorCode ModelRuntime::swapModel(
         {
             if(pair.second.state==ModelState::Loaded)
             {
+                if(fromModel.empty())
+                {
+                    fromModel=pair.first;
+                }
+
                 if(pair.second.pinned)
                 {
                     pair.second.state=ModelState::Ready;
@@ -277,7 +288,14 @@ ErrorCode ModelRuntime::swapModel(
         }
     }
 
-    return loadModel(newModel, variant, contextSize);
+    ErrorCode result=loadModel(newModel, variant, contextSize);
+
+    // Record swap telemetry
+    std::chrono::steady_clock::time_point swapEnd=std::chrono::steady_clock::now();
+    double swapTimeMs=std::chrono::duration<double, std::milli>(swapEnd-swapStart).count();
+    TelemetryCollector::instance().recordModelSwap(fromModel, newModel, swapTimeMs);
+
+    return result;
 }
 
 std::vector<LoadedModel> ModelRuntime::getModelStates() const

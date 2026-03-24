@@ -32,6 +32,8 @@ class BaseProvider;
 struct ModelInfo;
 struct ModelFit;
 struct LoadedModel;
+struct SystemSnapshot;
+struct InferenceStats;
 
 /**
  * @enum ErrorCode
@@ -597,6 +599,21 @@ public:
      * @return Vector of LoadedModel states
      */
     std::vector<LoadedModel> getLoadedModels();
+
+    // ========== Telemetry ==========
+
+    /**
+     * @brief Get a current system snapshot including hardware, loaded models, and performance
+     * @return SystemSnapshot with current state
+     */
+    SystemSnapshot getTelemetrySnapshot() const;
+
+    /**
+     * @brief Get inference history within a time window
+     * @param window Time window to query (e.g., 5 minutes)
+     * @return Vector of InferenceStats entries within the window
+     */
+    std::vector<InferenceStats> getInferenceHistory(std::chrono::minutes window) const;
 
     /**
      * @brief Shutdown the library and clean up resources

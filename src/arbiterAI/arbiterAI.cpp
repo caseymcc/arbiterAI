@@ -4,6 +4,7 @@
 #include "arbiterAI/costManager.h"
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelRuntime.h"
+#include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
@@ -536,6 +537,18 @@ std::vector<ModelFit> ArbiterAI::getLocalModelCapabilities()
 std::vector<LoadedModel> ArbiterAI::getLoadedModels()
 {
     return ModelRuntime::instance().getModelStates();
+}
+
+// ========== Telemetry ==========
+
+SystemSnapshot ArbiterAI::getTelemetrySnapshot() const
+{
+    return TelemetryCollector::instance().getSnapshot();
+}
+
+std::vector<InferenceStats> ArbiterAI::getInferenceHistory(std::chrono::minutes window) const
+{
+    return TelemetryCollector::instance().getHistory(window);
 }
 
 ErrorCode ArbiterAI::shutdown()
