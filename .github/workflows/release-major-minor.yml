@@ -135,37 +135,124 @@ jobs:
       env:
         VCPKG_CACHE_PATH: ${{ github.workspace }}/vcpkg_cache
 
-    # --- Package artifacts ---
+    # --- Package library ---
 
-    - name: Package release artifacts
-      id: package
+    - name: Package library
+      id: package_lib
       run: |
         VERSION="${{ steps.version.outputs.new_version }}"
-        ARTIFACT_DIR="arbiterAI-v${VERSION}-linux-x64"
+        LIB_DIR="arbiterAI-lib-v${VERSION}-linux-x64"
 
-        mkdir -p "${ARTIFACT_DIR}/lib"
-        mkdir -p "${ARTIFACT_DIR}/bin"
-        mkdir -p "${ARTIFACT_DIR}/include/arbiterAI"
+        mkdir -p "${LIB_DIR}/lib"
+        mkdir -p "${LIB_DIR}/include/arbiterAI"
+        mkdir -p "${LIB_DIR}/lib/cmake/arbiterAI"
+        mkdir -p "${LIB_DIR}/share/arbiterAI/schemas"
 
-        # Copy library
-        cp build/linux_x64_debug/libarbiterai.a "${ARTIFACT_DIR}/lib/" 2>/dev/null || true
-        cp build/linux_x64_debug/libarbiterai.so "${ARTIFACT_DIR}/lib/" 2>/dev/null || true
+        # Static library
+        cp build/linux_x64_debug/libarbiterai.a "${LIB_DIR}/lib/"
 
-        # Copy binaries
-        cp build/linux_x64_debug/arbiterAI-server "${ARTIFACT_DIR}/bin/" 2>/dev/null || true
-        cp build/linux_x64_debug/arbiterAI-cli "${ARTIFACT_DIR}/bin/" 2>/dev/null || true
+        # Public headers
+        for header in src/arbiterAI/*.h; do
+          cp "$header" "${LIB_DIR}/include/arbiterAI/"
+        done
+        cp build/linux_x64_debug/generated/arbiterAI/version.h "${LIB_DIR}/include/arbiterAI/"
 
-        # Copy headers
-        cp src/arbiterAI/*.h "${ARTIFACT_DIR}/include/arbiterAI/" 2>/dev/null || true
-        cp build/linux_x64_debug/generated/arbiterAI/version.h "${ARTIFACT_DIR}/include/arbiterAI/" 2>/dev/null || true
+        # CMake package config
+        cp build/linux_x64_debug/cmake/arbiterAIConfig.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
+        cp build/linux_x64_debug/cmake/arbiterAIConfigVersion.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
 
-        # Copy license
-        cp LICENSE "${ARTIFACT_DIR}/"
+        # JSON schema
+        cp schemas/model_config.schema.json "${LIB_DIR}/share/arbiterAI/schemas/"
 
-        # Create tarball
-        TARBALL="arbiterAI-v${VERSION}-linux-x64.tar.gz"
-        tar -czf "${TARBALL}" "${ARTIFACT_DIR}"
-        echo "tarball=${TARBALL}" >> $GITHUB_OUTPUT
+        cp LICENSE "${LIB_DIR}/"
+
+        LIB_TARBALL="arbiterAI-lib-v${VERSION}-linux-x64.tar.gz"
+        tar -czf "${LIB_TARBALL}" "${LIB_DIR}"
+        echo "tarball=${LIB_TARBALL}" >> $GITHUB_OUTPUT
+
+    # --- Package server ---
+
+    - name: Package server
+      id: package_server
+      run: |
+        VERSION="${{ steps.version.outputs.new_version }}"
+        SRV_DIR="arbiterAI-server-v${VERSION}-linux-x64"
+
+        mkdir -p "${SRV_DIR}/bin"
+        mkdir -p "${SRV_DIR}/share/arbiterAI/schemas"
+
+        # Server binary
+        cp build/linux_x64_debug/arbiterAI-server "${SRV_DIR}/bin/"
+
+        # JSON schema for config validation
+        cp schemas/model_config.schema.json "${SRV_DIR}/share/arbiterAI/schemas/"
+
+        cp LICENSE "${SRV_DIR}/"
+
+        # README with config instructions
+        cat > "${SRV_DIR}/README.md" << 'READMEEOF'
+        # ArbiterAI Server
+
+        ## Quick Start
+
+        ```bash
+        ./bin/arbiterAI-server --port 8080 --config ./config
+        ```
+
+        ## Configuration
+
+        The server loads model configurations from the path(s) given via `--config`.
+
+        ### Downloading Model Configurations
+
+        Default model configurations are maintained in the
+        [arbiterAI_config](https://github.com/caseymcc/arbiterAI_config) repository.
+        Clone it to get started:
+
+        ```bash
+        git clone https://github.com/caseymcc/arbiterAI_config.git config
+        ```
+
+        The server will automatically discover model definitions from the cloned
+        directory. To update configurations later:
+
+        ```bash
+        cd config && git pull
+        ```
+
+        ### Environment Variables
+
+        Set API keys for cloud providers as environment variables:
+
+        | Variable             | Provider   |
+        |----------------------|------------|
+        | `OPENAI_API_KEY`     | OpenAI     |
+        | `ANTHROPIC_API_KEY`  | Anthropic  |
+        | `DEEPSEEK_API_KEY`   | DeepSeek   |
+        | `OPENROUTER_API_KEY` | OpenRouter |
+
+        ## Command-Line Options
+
+        ```
+        --port, -p        HTTP port (default: 8080)
+        --host, -H        Bind address (default: 0.0.0.0)
+        --config, -c      Model config path(s) (default: config)
+        --model, -m       Default model to load on startup
+        --variant, -v     Default variant (e.g., Q4_K_M)
+        --ram-budget      Ready model RAM budget in MB (default: auto)
+        --log-level       Log level: trace, debug, info, warn, error (default: info)
+        ```
+
+        ## Dashboard
+
+        Open `http://localhost:8080/dashboard` in a browser for the live monitoring dashboard.
+        READMEEOF
+
+        SRV_TARBALL="arbiterAI-server-v${VERSION}-linux-x64.tar.gz"
+        tar -czf "${SRV_TARBALL}" "${SRV_DIR}"
+        echo "tarball=${SRV_TARBALL}" >> $GITHUB_OUTPUT
+
+    # --- Create release ---
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -173,9 +260,25 @@ jobs:
         tag_name: "v${{ steps.version.outputs.new_version }}"
         name: "v${{ steps.version.outputs.new_version }}"
         generate_release_notes: true
+        body: |
+          ### Packages
+
+          | Package | Description |
+          |---------|-------------|
+          | `arbiterAI-lib-v${{ steps.version.outputs.new_version }}-linux-x64.tar.gz` | Library, headers, and CMake config for linking |
+          | `arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64.tar.gz` | Standalone server binary |
+
+          ### Server Configuration
+
+          Download model configurations from [arbiterAI_config](https://github.com/caseymcc/arbiterAI_config):
+          ```bash
+          git clone https://github.com/caseymcc/arbiterAI_config.git config
+          ./bin/arbiterAI-server --config ./config
+          ```
         draft: false
         prerelease: false
         files: |
-          ${{ steps.package.outputs.tarball }}
+          ${{ steps.package_lib.outputs.tarball }}
+          ${{ steps.package_server.outputs.tarball }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

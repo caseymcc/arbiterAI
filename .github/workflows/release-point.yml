@@ -13,6 +13,7 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     permissions:
       contents: write
+      packages: write
       pull-requests: read
 
     steps:
@@ -78,6 +79,191 @@ jobs:
       run: |
         git push origin HEAD --follow-tags
 
+    # --- Build ---
+
+    - name: Extract Docker version
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      id: docker_version
+      run: |
+        VERSION=$(grep -oP '(?<=^ARG DOCKER_VERSION=)[0-9]+\.[0-9]+\.[0-9]+' docker/Dockerfile)
+        echo "DOCKER_VERSION=$VERSION" >> $GITHUB_OUTPUT
+        REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+        echo "REPO_LC=$REPO_LC" >> $GITHUB_OUTPUT
+
+    - name: Log in to GitHub Container Registry
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Docker meta
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: |
+          ghcr.io/${{ steps.docker_version.outputs.REPO_LC }}
+          arbiterai-dev
+        tags: |
+          type=raw,value=${{ steps.docker_version.outputs.DOCKER_VERSION }}
+
+    - name: Build and cache Docker image
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        push: false
+        load: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=registry,ref=ghcr.io/${{ steps.docker_version.outputs.REPO_LC }}:${{ steps.docker_version.outputs.DOCKER_VERSION }}
+        cache-to: type=inline
+
+    - name: Create cache directories
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      run: |
+        mkdir -p models
+        mkdir -p vcpkg_cache
+
+    - name: Cache vcpkg
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      uses: actions/cache@v3
+      with:
+        path: vcpkg_cache
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-
+
+    - name: Build project
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      run: ./runDocker.sh --ci ./build.sh
+      env:
+        VCPKG_CACHE_PATH: ${{ github.workspace }}/vcpkg_cache
+
+    # --- Package library ---
+
+    - name: Package library
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      id: package_lib
+      run: |
+        VERSION="${{ steps.bump.outputs.new_version }}"
+        LIB_DIR="arbiterAI-lib-v${VERSION}-linux-x64"
+
+        mkdir -p "${LIB_DIR}/lib"
+        mkdir -p "${LIB_DIR}/include/arbiterAI"
+        mkdir -p "${LIB_DIR}/lib/cmake/arbiterAI"
+        mkdir -p "${LIB_DIR}/share/arbiterAI/schemas"
+
+        # Static library
+        cp build/linux_x64_debug/libarbiterai.a "${LIB_DIR}/lib/"
+
+        # Public headers
+        for header in src/arbiterAI/*.h; do
+          cp "$header" "${LIB_DIR}/include/arbiterAI/"
+        done
+        cp build/linux_x64_debug/generated/arbiterAI/version.h "${LIB_DIR}/include/arbiterAI/"
+
+        # CMake package config
+        cp build/linux_x64_debug/cmake/arbiterAIConfig.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
+        cp build/linux_x64_debug/cmake/arbiterAIConfigVersion.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
+
+        # JSON schema
+        cp schemas/model_config.schema.json "${LIB_DIR}/share/arbiterAI/schemas/"
+
+        cp LICENSE "${LIB_DIR}/"
+
+        LIB_TARBALL="arbiterAI-lib-v${VERSION}-linux-x64.tar.gz"
+        tar -czf "${LIB_TARBALL}" "${LIB_DIR}"
+        echo "tarball=${LIB_TARBALL}" >> $GITHUB_OUTPUT
+
+    # --- Package server ---
+
+    - name: Package server
+      if: steps.check_pr.outputs.is_pr_merge == 'true'
+      id: package_server
+      run: |
+        VERSION="${{ steps.bump.outputs.new_version }}"
+        SRV_DIR="arbiterAI-server-v${VERSION}-linux-x64"
+
+        mkdir -p "${SRV_DIR}/bin"
+        mkdir -p "${SRV_DIR}/share/arbiterAI/schemas"
+
+        # Server binary
+        cp build/linux_x64_debug/arbiterAI-server "${SRV_DIR}/bin/"
+
+        # JSON schema for config validation
+        cp schemas/model_config.schema.json "${SRV_DIR}/share/arbiterAI/schemas/"
+
+        cp LICENSE "${SRV_DIR}/"
+
+        # README with config instructions
+        cat > "${SRV_DIR}/README.md" << 'READMEEOF'
+        # ArbiterAI Server
+
+        ## Quick Start
+
+        ```bash
+        ./bin/arbiterAI-server --port 8080 --config ./config
+        ```
+
+        ## Configuration
+
+        The server loads model configurations from the path(s) given via `--config`.
+
+        ### Downloading Model Configurations
+
+        Default model configurations are maintained in the
+        [arbiterAI_config](https://github.com/caseymcc/arbiterAI_config) repository.
+        Clone it to get started:
+
+        ```bash
+        git clone https://github.com/caseymcc/arbiterAI_config.git config
+        ```
+
+        The server will automatically discover model definitions from the cloned
+        directory. To update configurations later:
+
+        ```bash
+        cd config && git pull
+        ```
+
+        ### Environment Variables
+
+        Set API keys for cloud providers as environment variables:
+
+        | Variable             | Provider   |
+        |----------------------|------------|
+        | `OPENAI_API_KEY`     | OpenAI     |
+        | `ANTHROPIC_API_KEY`  | Anthropic  |
+        | `DEEPSEEK_API_KEY`   | DeepSeek   |
+        | `OPENROUTER_API_KEY` | OpenRouter |
+
+        ## Command-Line Options
+
+        ```
+        --port, -p        HTTP port (default: 8080)
+        --host, -H        Bind address (default: 0.0.0.0)
+        --config, -c      Model config path(s) (default: config)
+        --model, -m       Default model to load on startup
+        --variant, -v     Default variant (e.g., Q4_K_M)
+        --ram-budget      Ready model RAM budget in MB (default: auto)
+        --log-level       Log level: trace, debug, info, warn, error (default: info)
+        ```
+
+        ## Dashboard
+
+        Open `http://localhost:8080/dashboard` in a browser for the live monitoring dashboard.
+        READMEEOF
+
+        SRV_TARBALL="arbiterAI-server-v${VERSION}-linux-x64.tar.gz"
+        tar -czf "${SRV_TARBALL}" "${SRV_DIR}"
+        echo "tarball=${SRV_TARBALL}" >> $GITHUB_OUTPUT
+
+    # --- Create release ---
+
     - name: Create GitHub Release
       if: steps.check_pr.outputs.is_pr_merge == 'true'
       uses: softprops/action-gh-release@v2
@@ -88,7 +274,25 @@ jobs:
           Point release from PR #${{ steps.check_pr.outputs.pr_number }}: ${{ steps.check_pr.outputs.pr_title }}
 
           ${{ steps.check_pr.outputs.pr_url }}
+
+          ### Packages
+
+          | Package | Description |
+          |---------|-------------|
+          | `arbiterAI-lib-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz` | Library, headers, and CMake config for linking |
+          | `arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz` | Standalone server binary |
+
+          ### Server Configuration
+
+          Download model configurations from [arbiterAI_config](https://github.com/caseymcc/arbiterAI_config):
+          ```bash
+          git clone https://github.com/caseymcc/arbiterAI_config.git config
+          ./bin/arbiterAI-server --config ./config
+          ```
         draft: false
         prerelease: false
+        files: |
+          ${{ steps.package_lib.outputs.tarball }}
+          ${{ steps.package_server.outputs.tarball }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
