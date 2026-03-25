@@ -26,6 +26,47 @@ Build output is located in `build/linux_x64_debug/`.
 ./build/linux_x64_debug/arbiterai_tests
 ```
 
+## Releases
+
+### Version Management
+
+The project version lives in `CMakeLists.txt` (`project(arbiterAI VERSION X.Y.Z)`). **Do not change the version manually in PRs** — it is managed exclusively by the release workflows.
+
+The version is embedded into the compiled library at build time via a CMake-generated header. Applications can query it at runtime:
+
+```cpp
+auto ver = arbiterAI::getVersion();
+// ver.major, ver.minor, ver.patch, ver.toString()
+```
+
+### Point Releases (Automatic)
+
+Every PR merge into `main` or a `release/**` branch automatically:
+
+1. Increments the patch version (`X.Y.Z` → `X.Y.Z+1`)
+2. Commits the version bump with `[skip ci]`
+3. Creates a `vX.Y.Z` tag
+4. Publishes a GitHub Release with the PR title and link
+
+### Major/Minor Releases (Manual)
+
+Triggered from the GitHub Actions page → **Release Major/Minor** → **Run workflow**:
+
+1. Select `major` or `minor` release type
+2. Select the source branch (e.g., `main`)
+3. The workflow creates a `release/X.Y` branch, sets the version to `X.Y.0`, builds the project, and publishes a GitHub Release with build artifacts
+
+### Release Branch Convention
+
+- `release/0.2` — minor release branch for 0.2.x
+- `release/1.0` — major release branch for 1.0.x
+
+PRs can be opened against release branches for hotfixes. Each merge triggers a point release on that branch.
+
+### Tag Format
+
+All tags follow the format `vX.Y.Z` (e.g., `v0.1.3`, `v0.2.0`, `v1.0.0`).
+
 ## Task Tracking
 
 Tasks are maintained as markdown files in the `docs/` directory structure.

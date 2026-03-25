@@ -1,0 +1,18 @@
+/**
+ * @file version.h.in
+ * @brief CMake template for ArbiterAI version header
+ *
+ * This file is processed by CMake's configure_file() to generate
+ * version.h in the build directory with the project version from
+ * CMakeLists.txt. The generated header should NOT be committed.
+ */
+
+#ifndef _arbiterAI_version_h_
+#define _arbiterAI_version_h_
+
+#define ARBITERAI_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define ARBITERAI_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define ARBITERAI_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define ARBITERAI_VERSION_STRING "@PROJECT_VERSION@"
+
+#endif//_arbiterAI_version_h_

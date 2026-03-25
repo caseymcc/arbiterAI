@@ -1,4 +1,5 @@
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/version.h"
 #include "arbiterAI/chatClient.h"
 #include "arbiterAI/cacheManager.h"
 #include "arbiterAI/costManager.h"
@@ -17,6 +18,23 @@
 
 namespace arbiterAI
 {
+
+// ========== Version ==========
+
+std::string VersionInfo::toString() const
+{
+    return std::to_string(major)+"."+std::to_string(minor)+"."+std::to_string(patch);
+}
+
+VersionInfo getVersion()
+{
+    return {ARBITERAI_VERSION_MAJOR, ARBITERAI_VERSION_MINOR, ARBITERAI_VERSION_PATCH};
+}
+
+VersionInfo ArbiterAI::getVersion()
+{
+    return arbiterAI::getVersion();
+}
 
 // Forward declaration
 static std::unique_ptr<BaseProvider> createProvider(const std::string &provider);

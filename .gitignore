@@ -38,6 +38,9 @@ vcpkg_installed/
 # Cloned config repository
 arbiterAI_config/
 
+# Generated at build time by CMake
+**/generated/
+
 # Downloaded model cache
 model_cache/
 models/

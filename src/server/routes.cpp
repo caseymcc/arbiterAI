@@ -213,6 +213,9 @@ void registerRoutes(httplib::Server &server)
     server.Get("/health", handleHealth);
     server.Get("/v1/health", handleHealth);
 
+    // Version
+    server.Get("/api/version", handleGetVersion);
+
     // Chat completions (OpenAI-compatible)
     server.Post("/v1/chat/completions", handleChatCompletions);
     server.Get("/v1/models", handleListModelsV1);
@@ -702,10 +705,26 @@ void handleEmbeddings(const httplib::Request &req, httplib::Response &res)
 
 void handleHealth(const httplib::Request &, httplib::Response &res)
 {
+    auto ver=arbiterAI::getVersion();
     nlohmann::json response={
-        {"status", "ok"}
+        {"status", "ok"},
+        {"version", ver.toString()}
     };
     res.set_content(response.dump(), "application/json");
+}
+
+// ========== Version ==========
+
+void handleGetVersion(const httplib::Request &, httplib::Response &res)
+{
+    auto ver=arbiterAI::getVersion();
+    nlohmann::json j={
+        {"version", ver.toString()},
+        {"major", ver.major},
+        {"minor", ver.minor},
+        {"patch", ver.patch}
+    };
+    res.set_content(j.dump(), "application/json");
 }
 
 // ========== Model Management ==========
