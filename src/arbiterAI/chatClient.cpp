@@ -306,8 +306,7 @@ ErrorCode ChatClient::addToolResult(const std::string& toolCallId, const std::st
     Message toolResultMsg;
     toolResultMsg.role = "tool";
     toolResultMsg.content = result;
-    // Note: Some APIs require tool_call_id in the message
-    // This could be extended to support that via Message struct
+    toolResultMsg.toolCallId = toolCallId;
 
     m_history.push_back(toolResultMsg);
     return ErrorCode::Success;

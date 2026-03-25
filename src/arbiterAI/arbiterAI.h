@@ -214,22 +214,40 @@ inline void from_json(const nlohmann::json &j, ToolCall &t)
 /**
  * @struct Message
  * @brief Represents a single message in a conversation
+ *
+ * Supports all OpenAI message roles:
+ * - "system"/"user": standard messages with content
+ * - "assistant": may include tool_calls when the model invokes tools
+ * - "tool": includes tool_call_id linking the result back to a specific tool call
  */
 struct Message
 {
     std::string role;
     std::string content;
+    std::optional<std::string> toolCallId;
+    std::optional<std::vector<ToolCall>> toolCalls;
+    std::optional<std::string> name;
 };
 
 inline void to_json(nlohmann::json &j, const Message &m)
 {
-    j=nlohmann::json{ {"role", m.role}, {"content", m.content} };
+    j=nlohmann::json{{"role", m.role}, {"content", m.content}};
+    if(m.toolCallId.has_value()) j["tool_call_id"]=m.toolCallId.value();
+    if(m.toolCalls.has_value()) j["tool_calls"]=m.toolCalls.value();
+    if(m.name.has_value()) j["name"]=m.name.value();
 }
 
 inline void from_json(const nlohmann::json &j, Message &m)
 {
     j.at("role").get_to(m.role);
-    j.at("content").get_to(m.content);
+    if(j.contains("content") && !j.at("content").is_null())
+        j.at("content").get_to(m.content);
+    if(j.contains("tool_call_id"))
+        m.toolCallId=j.at("tool_call_id").get<std::string>();
+    if(j.contains("tool_calls"))
+        m.toolCalls=j.at("tool_calls").get<std::vector<ToolCall>>();
+    if(j.contains("name"))
+        m.name=j.at("name").get<std::string>();
 }
 
 /**
