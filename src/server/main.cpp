@@ -22,6 +22,7 @@ int main(int argc, char *argv[])
         ("c,config", "Model config path(s)", cxxopts::value<std::vector<std::string>>()->default_value("config"))
         ("m,model", "Default model to load on startup", cxxopts::value<std::string>()->default_value(""))
         ("v,variant", "Default variant (e.g., Q4_K_M)", cxxopts::value<std::string>()->default_value(""))
+        ("override-path", "Path to write runtime model config overrides (enables persistence)", cxxopts::value<std::string>()->default_value(""))
         ("ram-budget", "Ready model RAM budget in MB (0 = auto 50%)", cxxopts::value<int>()->default_value("0"))
         ("log-level", "Log level (trace, debug, info, warn, error)", cxxopts::value<std::string>()->default_value("info"))
         ("h,help", "Print usage");
@@ -59,6 +60,7 @@ int main(int argc, char *argv[])
     std::vector<std::string> configStrs=result["config"].as<std::vector<std::string>>();
     std::string defaultModel=result["model"].as<std::string>();
     std::string defaultVariant=result["variant"].as<std::string>();
+    std::string overridePath=result["override-path"].as<std::string>();
     int ramBudget=result["ram-budget"].as<int>();
 
     // Convert config paths
@@ -115,6 +117,13 @@ int main(int argc, char *argv[])
     // Register routes
     arbiterAI::server::registerRoutes(server);
 
+    // Set override path for runtime model config persistence
+    if(!overridePath.empty())
+    {
+        arbiterAI::server::setOverridePath(overridePath);
+        spdlog::info("Runtime model config overrides will be saved to: {}", overridePath);
+    }
+
     // Log available endpoints
     spdlog::info("Server endpoints:");
     spdlog::info("  GET  /health                - Health check");
@@ -128,6 +137,10 @@ int main(int argc, char *argv[])
     spdlog::info("  POST /api/models/:name/unload - Unload a model");
     spdlog::info("  POST /api/models/:name/pin     - Pin a model");
     spdlog::info("  POST /api/models/:name/unpin   - Unpin a model");
+    spdlog::info("  POST /api/models/config        - Add model config(s)");
+    spdlog::info("  PUT  /api/models/config        - Add/update model config(s)");
+    spdlog::info("  GET  /api/models/config/:name  - Get model config");
+    spdlog::info("  DEL  /api/models/config/:name  - Remove model config");
     spdlog::info("  GET  /api/stats             - System snapshot");
     spdlog::info("  GET  /api/stats/history      - Inference history");
     spdlog::info("  GET  /api/stats/swaps        - Swap history");

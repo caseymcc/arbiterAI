@@ -23,6 +23,8 @@ namespace server
 namespace
 {
 
+std::string g_overridePath;
+
 /// Generate a unique ID with the given prefix (e.g., "chatcmpl-").
 std::string generateId(const std::string &prefix="chatcmpl-")
 {
@@ -187,6 +189,13 @@ std::string errorCodeToString(ErrorCode code)
 
 } // anonymous namespace
 
+// ========== Override Path ==========
+
+void setOverridePath(const std::string &path)
+{
+    g_overridePath=path;
+}
+
 // ========== Route Registration ==========
 
 void registerRoutes(httplib::Server &server)
@@ -233,6 +242,12 @@ void registerRoutes(httplib::Server &server)
     server.Post(R"(/api/models/([^/]+)/unpin)", handleUnpinModel);
     server.Post(R"(/api/models/([^/]+)/download)", handleDownloadModel);
     server.Get(R"(/api/models/([^/]+)/download)", handleGetDownloadStatus);
+
+    // Model config injection
+    server.Post("/api/models/config", handleAddModelConfig);
+    server.Put("/api/models/config", handleUpdateModelConfig);
+    server.Get(R"(/api/models/config/([^/]+))", handleGetModelConfig);
+    server.Delete(R"(/api/models/config/([^/]+))", handleDeleteModelConfig);
 
     // Telemetry
     server.Get("/api/stats", handleGetStats);
@@ -909,6 +924,188 @@ void handleGetDownloadStatus(const httplib::Request &req, httplib::Response &res
     }
 
     res.set_content(response.dump(), "application/json");
+}
+
+// ========== Model Config Injection ==========
+
+void handleAddModelConfig(const httplib::Request &req, httplib::Response &res)
+{
+    nlohmann::json requestJson;
+
+    try
+    {
+        requestJson=nlohmann::json::parse(req.body);
+    }
+    catch(const nlohmann::json::parse_error &e)
+    {
+        res.status=400;
+        res.set_content(errorJson("Invalid JSON: "+std::string(e.what()), "invalid_request_error").dump(), "application/json");
+        return;
+    }
+
+    // Normalize: single model or array
+    std::vector<nlohmann::json> modelJsons;
+    if(requestJson.contains("models")&&requestJson["models"].is_array())
+    {
+        for(const nlohmann::json &m:requestJson["models"])
+        {
+            modelJsons.push_back(m);
+        }
+    }
+    else if(requestJson.contains("model"))
+    {
+        modelJsons.push_back(requestJson);
+    }
+    else
+    {
+        res.status=400;
+        res.set_content(errorJson("Request must contain 'model' field or 'models' array", "invalid_request_error").dump(), "application/json");
+        return;
+    }
+
+    ModelManager &mm=ModelManager::instance();
+    std::vector<std::string> added;
+
+    for(const nlohmann::json &modelJson:modelJsons)
+    {
+        std::string error;
+        if(!mm.addModelFromJson(modelJson, error))
+        {
+            // Rollback models added in this request
+            for(const std::string &name:added)
+            {
+                mm.removeModel(name);
+            }
+
+            int status=400;
+            if(error.find("already exists")!=std::string::npos)
+                status=409;
+
+            res.status=status;
+            res.set_content(errorJson(error, "invalid_request_error").dump(), "application/json");
+            return;
+        }
+        added.push_back(modelJson["model"].get<std::string>());
+    }
+
+    // Persist if override path is set
+    if(!g_overridePath.empty())
+    {
+        mm.saveOverrides(g_overridePath);
+    }
+
+    res.status=201;
+    res.set_content(nlohmann::json{{"added", added}}.dump(), "application/json");
+}
+
+void handleUpdateModelConfig(const httplib::Request &req, httplib::Response &res)
+{
+    nlohmann::json requestJson;
+
+    try
+    {
+        requestJson=nlohmann::json::parse(req.body);
+    }
+    catch(const nlohmann::json::parse_error &e)
+    {
+        res.status=400;
+        res.set_content(errorJson("Invalid JSON: "+std::string(e.what()), "invalid_request_error").dump(), "application/json");
+        return;
+    }
+
+    // Normalize: single model or array
+    std::vector<nlohmann::json> modelJsons;
+    if(requestJson.contains("models")&&requestJson["models"].is_array())
+    {
+        for(const nlohmann::json &m:requestJson["models"])
+        {
+            modelJsons.push_back(m);
+        }
+    }
+    else if(requestJson.contains("model"))
+    {
+        modelJsons.push_back(requestJson);
+    }
+    else
+    {
+        res.status=400;
+        res.set_content(errorJson("Request must contain 'model' field or 'models' array", "invalid_request_error").dump(), "application/json");
+        return;
+    }
+
+    ModelManager &mm=ModelManager::instance();
+    std::vector<std::string> updated;
+    std::vector<std::string> created;
+
+    for(const nlohmann::json &modelJson:modelJsons)
+    {
+        std::string modelName=modelJson["model"].get<std::string>();
+        bool existed=mm.getModelInfo(modelName).has_value();
+
+        std::string error;
+        if(!mm.updateModelFromJson(modelJson, error))
+        {
+            res.status=400;
+            res.set_content(errorJson(error, "invalid_request_error").dump(), "application/json");
+            return;
+        }
+
+        if(existed)
+            updated.push_back(modelName);
+        else
+            created.push_back(modelName);
+    }
+
+    // Persist if override path is set
+    if(!g_overridePath.empty())
+    {
+        mm.saveOverrides(g_overridePath);
+    }
+
+    res.set_content(nlohmann::json{{"updated", updated}, {"added", created}}.dump(), "application/json");
+}
+
+void handleGetModelConfig(const httplib::Request &req, httplib::Response &res)
+{
+    std::string modelName=req.matches[1];
+
+    std::optional<ModelInfo> info=ModelManager::instance().getModelInfo(modelName);
+    if(!info.has_value())
+    {
+        res.status=404;
+        res.set_content(errorJson("Model not found: "+modelName, "not_found_error").dump(), "application/json");
+        return;
+    }
+
+    res.set_content(ModelManager::modelInfoToJson(info.value()).dump(), "application/json");
+}
+
+void handleDeleteModelConfig(const httplib::Request &req, httplib::Response &res)
+{
+    std::string modelName=req.matches[1];
+
+    // Unload from ModelRuntime if loaded
+    std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(modelName);
+    if(state.has_value()&&state->state!=ModelState::Unloaded)
+    {
+        ArbiterAI::instance().unloadModel(modelName);
+    }
+
+    ModelManager &mm=ModelManager::instance();
+    if(!mm.removeModel(modelName))
+    {
+        res.status=404;
+        res.set_content(errorJson("Model not found: "+modelName, "not_found_error").dump(), "application/json");
+        return;
+    }
+
+    // Persist if override path is set
+    if(!g_overridePath.empty())
+    {
+        mm.saveOverrides(g_overridePath);
+    }
+
+    res.set_content(nlohmann::json{{"status", "removed"}, {"model", modelName}}.dump(), "application/json");
 }
 
 // ========== Telemetry ==========
