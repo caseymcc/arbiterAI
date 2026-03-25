@@ -117,19 +117,22 @@ int main(int argc, char *argv[])
 
     // Log available endpoints
     spdlog::info("Server endpoints:");
-    spdlog::info("  POST /v1/chat/completions  - Chat completions (OpenAI-compatible)");
-    spdlog::info("  GET  /v1/models            - List models (OpenAI-compatible)");
-    spdlog::info("  GET  /api/models           - Available models + hardware fit");
-    spdlog::info("  GET  /api/models/loaded     - Currently loaded models");
-    spdlog::info("  POST /api/models/:name/load - Load a model");
+    spdlog::info("  GET  /health                - Health check");
+    spdlog::info("  POST /v1/chat/completions   - Chat completions (OpenAI-compatible)");
+    spdlog::info("  GET  /v1/models             - List models (OpenAI-compatible)");
+    spdlog::info("  GET  /v1/models/:id         - Get model info (OpenAI-compatible)");
+    spdlog::info("  POST /v1/embeddings         - Embeddings (OpenAI-compatible)");
+    spdlog::info("  GET  /api/models            - Available models + hardware fit");
+    spdlog::info("  GET  /api/models/loaded      - Currently loaded models");
+    spdlog::info("  POST /api/models/:name/load  - Load a model");
     spdlog::info("  POST /api/models/:name/unload - Unload a model");
-    spdlog::info("  POST /api/models/:name/pin    - Pin a model");
-    spdlog::info("  POST /api/models/:name/unpin  - Unpin a model");
-    spdlog::info("  GET  /api/stats            - System snapshot");
-    spdlog::info("  GET  /api/stats/history     - Inference history");
-    spdlog::info("  GET  /api/stats/swaps       - Swap history");
-    spdlog::info("  GET  /api/hardware          - Hardware info");
-    spdlog::info("  GET  /dashboard             - Live dashboard");
+    spdlog::info("  POST /api/models/:name/pin     - Pin a model");
+    spdlog::info("  POST /api/models/:name/unpin   - Unpin a model");
+    spdlog::info("  GET  /api/stats             - System snapshot");
+    spdlog::info("  GET  /api/stats/history      - Inference history");
+    spdlog::info("  GET  /api/stats/swaps        - Swap history");
+    spdlog::info("  GET  /api/hardware           - Hardware info");
+    spdlog::info("  GET  /dashboard              - Live dashboard");
 
     spdlog::info("Starting server on {}:{}", host, port);
     spdlog::info("Dashboard: http://{}:{}/dashboard", host=="0.0.0.0"?"localhost":host, port);

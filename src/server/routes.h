@@ -15,6 +15,15 @@ void registerRoutes(httplib::Server &server);
 
 void handleChatCompletions(const httplib::Request &req, httplib::Response &res);
 void handleListModelsV1(const httplib::Request &req, httplib::Response &res);
+void handleGetModelV1(const httplib::Request &req, httplib::Response &res);
+
+// ========== Embeddings (OpenAI-compatible) ==========
+
+void handleEmbeddings(const httplib::Request &req, httplib::Response &res);
+
+// ========== Health ==========
+
+void handleHealth(const httplib::Request &req, httplib::Response &res);
 
 // ========== Model Management ==========
 
