@@ -57,6 +57,17 @@ body
     margin-right: 6px;
     vertical-align: middle;
 }
+.version-badge
+{
+    font-size: 12px;
+    color: #888;
+    background: #2a2d3a;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 8px;
+    font-weight: normal;
+    vertical-align: middle;
+}
 .container
 {
     max-width: 1400px;
@@ -252,7 +263,7 @@ td
 </head>
 <body>
 <div class="header">
-    <h1>ArbiterAI Dashboard</h1>
+    <h1>ArbiterAI Dashboard <span id="versionBadge" class="version-badge"></span></h1>
     <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connected</span></div>
 </div>
 <div class="container">
@@ -574,6 +585,16 @@ async function refresh()
     if(swaps) renderSwaps(swaps);
 }
 
+async function loadVersion()
+{
+    const data=await fetchJson("/api/version");
+    if(data)
+    {
+        document.getElementById("versionBadge").textContent="v"+data.version;
+    }
+}
+
+loadVersion();
 refresh();
 setInterval(refresh, POLL_INTERVAL);
 </script>

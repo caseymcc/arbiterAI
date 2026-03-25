@@ -36,6 +36,25 @@ struct SystemSnapshot;
 struct InferenceStats;
 
 /**
+ * @struct VersionInfo
+ * @brief Version information for the ArbiterAI library
+ */
+struct VersionInfo {
+    int major;
+    int minor;
+    int patch;
+
+    /// Returns the version as "major.minor.patch".
+    std::string toString() const;
+};
+
+/**
+ * @brief Get the compiled-in library version (does not require initialization)
+ * @return VersionInfo with major, minor, patch fields
+ */
+VersionInfo getVersion();
+
+/**
  * @enum ErrorCode
  * @brief Error codes returned by ArbiterAI operations
  */
@@ -457,6 +476,9 @@ class ArbiterAI
 {
 public:
     static ArbiterAI &instance();
+
+    /// Get the library version.
+    static VersionInfo getVersion();
 
     ArbiterAI(
         bool enableCache = false,

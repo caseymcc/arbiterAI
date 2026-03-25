@@ -1,0 +1,5 @@
+- Have the api respond with the hardware support, type, memory, etc...
+- Allow for configurable devices that can be used and well as vram limits
+- Add support to just unload a model or all models
+- Need configuration for listening host/port, default 9010
+- Allow model config to be inject through the api, add support to the server so a client can add a model config.

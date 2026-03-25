@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
 project(arbiterAI VERSION 0.1.0 LANGUAGES C CXX)
 
+# Generate version header from template
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/arbiterAI/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/arbiterAI/version.h"
+    @ONLY
+)
+
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
@@ -91,6 +98,7 @@ set_property(TARGET arbiterai PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_include_directories(arbiterai
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
         $<INSTALL_INTERFACE:include>
         ${LLAMA_INCLUDE_DIRS}
     PRIVATE
@@ -191,6 +199,11 @@ install(
     DIRECTORY src/arbiterAI/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.h"
+)
+
+install(
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/arbiterAI/version.h"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/arbiterAI"
 )
 
 install(

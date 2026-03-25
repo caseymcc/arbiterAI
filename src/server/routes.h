@@ -25,6 +25,10 @@ void handleEmbeddings(const httplib::Request &req, httplib::Response &res);
 
 void handleHealth(const httplib::Request &req, httplib::Response &res);
 
+// ========== Version ==========
+
+void handleGetVersion(const httplib::Request &req, httplib::Response &res);
+
 // ========== Model Management ==========
 
 void handleGetModels(const httplib::Request &req, httplib::Response &res);
