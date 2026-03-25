@@ -11,6 +11,9 @@ namespace server
 /// Register all route handlers on the given HTTP server.
 void registerRoutes(httplib::Server &server);
 
+/// Set the override path for persisting runtime model configs.
+void setOverridePath(const std::string &path);
+
 // ========== Chat Completions (OpenAI-compatible) ==========
 
 void handleChatCompletions(const httplib::Request &req, httplib::Response &res);
@@ -39,6 +42,13 @@ void handlePinModel(const httplib::Request &req, httplib::Response &res);
 void handleUnpinModel(const httplib::Request &req, httplib::Response &res);
 void handleDownloadModel(const httplib::Request &req, httplib::Response &res);
 void handleGetDownloadStatus(const httplib::Request &req, httplib::Response &res);
+
+// ========== Model Config Injection ==========
+
+void handleAddModelConfig(const httplib::Request &req, httplib::Response &res);
+void handleUpdateModelConfig(const httplib::Request &req, httplib::Response &res);
+void handleGetModelConfig(const httplib::Request &req, httplib::Response &res);
+void handleDeleteModelConfig(const httplib::Request &req, httplib::Response &res);
 
 // ========== Telemetry ==========
 

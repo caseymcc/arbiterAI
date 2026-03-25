@@ -417,61 +417,7 @@ bool ModelManager::loadModelFile(const std::filesystem::path &filePath)
 
             if(it!=m_models.end())
             {
-                // Update existing model settings
-                it->provider = info.provider;
-                it->ranking = info.ranking;
-                if(modelJson.contains("mode"))
-                {
-                    it->mode=info.mode;
-                }
-                if(modelJson.contains("api_base"))
-                {
-                    it->apiBase=info.apiBase;
-                }
-                if(modelJson.contains("file_path"))
-                {
-                    it->filePath=info.filePath;
-                }
-                if(modelJson.contains("api_key"))
-                {
-                    it->apiKey=info.apiKey;
-                }
-                if(modelJson.contains("examples_as_sys_msg"))
-                {
-                    it->examplesAsSysMsg=info.examplesAsSysMsg;
-                }
-                if(modelJson.contains("context_window"))
-                {
-                    it->contextWindow=info.contextWindow;
-                }
-                if(modelJson.contains("max_tokens"))
-                {
-                    it->maxTokens=info.maxTokens;
-                }
-                if(modelJson.contains("max_input_tokens"))
-                {
-                    it->maxInputTokens=info.maxInputTokens;
-                }
-                if(modelJson.contains("max_output_tokens"))
-                {
-                    it->maxOutputTokens=info.maxOutputTokens;
-                }
-                if(modelJson.contains("pricing"))
-                {
-                    it->pricing=info.pricing;
-                }
-                if(modelJson.contains("hardware_requirements"))
-                {
-                    it->hardwareRequirements=info.hardwareRequirements;
-                }
-                if(modelJson.contains("context_scaling"))
-                {
-                    it->contextScaling=info.contextScaling;
-                }
-                if(modelJson.contains("variants"))
-                {
-                    it->variants=info.variants;
-                }
+                mergeModelInfo(*it, info, modelJson);
             }
             else
             {
@@ -532,8 +478,315 @@ void ModelManager::addModel(const ModelInfo &modelInfo)
     if(it==m_models.end())
     {
         m_models.push_back(modelInfo);
-        m_modelProviderMap[modelInfo.model]=modelInfo.provider;
     }
+    m_modelProviderMap[modelInfo.model]=modelInfo.provider;
+}
+
+bool ModelManager::validateModelJson(const nlohmann::json &modelJson, std::string &error) const
+{
+    // Required fields check (independent of schema file)
+    if(!modelJson.contains("model")||!modelJson.contains("provider"))
+    {
+        error="Missing required field: 'model' and 'provider' are required";
+        return false;
+    }
+
+    // Schema validation (best-effort — skipped if schema file not available)
+    nlohmann::json envelope={
+        {"schema_version", "1.1.0"},
+        {"models", nlohmann::json::array({modelJson})}
+    };
+
+    validateSchema(envelope);
+    return true;
+}
+
+void ModelManager::mergeModelInfo(ModelInfo &existing, const ModelInfo &source, const nlohmann::json &sourceJson) const
+{
+    existing.provider=source.provider;
+    existing.ranking=source.ranking;
+
+    if(sourceJson.contains("mode"))
+        existing.mode=source.mode;
+    if(sourceJson.contains("api_base"))
+        existing.apiBase=source.apiBase;
+    if(sourceJson.contains("file_path"))
+        existing.filePath=source.filePath;
+    if(sourceJson.contains("api_key"))
+        existing.apiKey=source.apiKey;
+    if(sourceJson.contains("examples_as_sys_msg"))
+        existing.examplesAsSysMsg=source.examplesAsSysMsg;
+    if(sourceJson.contains("context_window"))
+        existing.contextWindow=source.contextWindow;
+    if(sourceJson.contains("max_tokens"))
+        existing.maxTokens=source.maxTokens;
+    if(sourceJson.contains("max_input_tokens"))
+        existing.maxInputTokens=source.maxInputTokens;
+    if(sourceJson.contains("max_output_tokens"))
+        existing.maxOutputTokens=source.maxOutputTokens;
+    if(sourceJson.contains("pricing"))
+        existing.pricing=source.pricing;
+    if(sourceJson.contains("hardware_requirements"))
+        existing.hardwareRequirements=source.hardwareRequirements;
+    if(sourceJson.contains("context_scaling"))
+        existing.contextScaling=source.contextScaling;
+    if(sourceJson.contains("variants"))
+        existing.variants=source.variants;
+    if(sourceJson.contains("download"))
+        existing.download=source.download;
+    if(sourceJson.contains("version"))
+        existing.configVersion=source.configVersion;
+}
+
+bool ModelManager::addModelFromJson(const nlohmann::json &modelJson, std::string &error)
+{
+    if(!validateModelJson(modelJson, error))
+        return false;
+
+    ModelInfo info;
+    if(!parseModelInfo(modelJson, info))
+    {
+        error="Failed to parse model info";
+        return false;
+    }
+
+    // Parse optional fields that parseModelInfo doesn't cover
+    if(modelJson.contains("mode"))
+        info.mode=modelJson["mode"].get<std::string>();
+    if(modelJson.contains("api_base"))
+        info.apiBase=modelJson["api_base"].get<std::string>();
+    if(modelJson.contains("file_path"))
+        info.filePath=modelJson["file_path"].get<std::string>();
+    if(modelJson.contains("api_key"))
+        info.apiKey=modelJson["api_key"].get<std::string>();
+    if(modelJson.contains("examples_as_sys_msg"))
+        info.examplesAsSysMsg=modelJson["examples_as_sys_msg"].get<bool>();
+    if(modelJson.contains("context_window"))
+        info.contextWindow=modelJson["context_window"].get<int>();
+    if(modelJson.contains("max_tokens"))
+        info.maxTokens=modelJson["max_tokens"].get<int>();
+    if(modelJson.contains("max_input_tokens"))
+        info.maxInputTokens=modelJson["max_input_tokens"].get<int>();
+    if(modelJson.contains("max_output_tokens"))
+        info.maxOutputTokens=modelJson["max_output_tokens"].get<int>();
+    if(modelJson.contains("pricing"))
+        info.pricing=modelJson["pricing"].get<Pricing>();
+
+    // Check for duplicate
+    auto it=std::find_if(m_models.begin(), m_models.end(),
+        [&info](const ModelInfo &existing) { return existing.model==info.model; });
+
+    if(it!=m_models.end())
+    {
+        error="Model already exists: "+info.model;
+        return false;
+    }
+
+    m_models.push_back(info);
+    m_modelProviderMap[info.model]=info.provider;
+    m_runtimeModels.insert(info.model);
+    return true;
+}
+
+bool ModelManager::updateModelFromJson(const nlohmann::json &modelJson, std::string &error)
+{
+    if(!validateModelJson(modelJson, error))
+        return false;
+
+    ModelInfo info;
+    if(!parseModelInfo(modelJson, info))
+    {
+        error="Failed to parse model info";
+        return false;
+    }
+
+    // Parse optional fields that parseModelInfo doesn't cover
+    if(modelJson.contains("mode"))
+        info.mode=modelJson["mode"].get<std::string>();
+    if(modelJson.contains("api_base"))
+        info.apiBase=modelJson["api_base"].get<std::string>();
+    if(modelJson.contains("file_path"))
+        info.filePath=modelJson["file_path"].get<std::string>();
+    if(modelJson.contains("api_key"))
+        info.apiKey=modelJson["api_key"].get<std::string>();
+    if(modelJson.contains("examples_as_sys_msg"))
+        info.examplesAsSysMsg=modelJson["examples_as_sys_msg"].get<bool>();
+    if(modelJson.contains("context_window"))
+        info.contextWindow=modelJson["context_window"].get<int>();
+    if(modelJson.contains("max_tokens"))
+        info.maxTokens=modelJson["max_tokens"].get<int>();
+    if(modelJson.contains("max_input_tokens"))
+        info.maxInputTokens=modelJson["max_input_tokens"].get<int>();
+    if(modelJson.contains("max_output_tokens"))
+        info.maxOutputTokens=modelJson["max_output_tokens"].get<int>();
+    if(modelJson.contains("pricing"))
+        info.pricing=modelJson["pricing"].get<Pricing>();
+
+    auto it=std::find_if(m_models.begin(), m_models.end(),
+        [&info](const ModelInfo &existing) { return existing.model==info.model; });
+
+    if(it!=m_models.end())
+    {
+        mergeModelInfo(*it, info, modelJson);
+    }
+    else
+    {
+        m_models.push_back(info);
+    }
+
+    m_modelProviderMap[info.model]=info.provider;
+    m_runtimeModels.insert(info.model);
+    return true;
+}
+
+bool ModelManager::removeModel(const std::string &modelName)
+{
+    auto it=std::find_if(m_models.begin(), m_models.end(),
+        [&modelName](const ModelInfo &info) { return info.model==modelName; });
+
+    if(it==m_models.end())
+        return false;
+
+    m_models.erase(it);
+    m_modelProviderMap.erase(modelName);
+    m_runtimeModels.erase(modelName);
+    return true;
+}
+
+nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
+{
+    nlohmann::json j;
+    j["model"]=info.model;
+    j["provider"]=info.provider;
+    j["mode"]=info.mode;
+    j["ranking"]=info.ranking;
+    j["context_window"]=info.contextWindow;
+    j["max_tokens"]=info.maxTokens;
+    j["max_input_tokens"]=info.maxInputTokens;
+    j["max_output_tokens"]=info.maxOutputTokens;
+
+    if(info.apiBase.has_value())
+        j["api_base"]=info.apiBase.value();
+    if(info.filePath.has_value())
+        j["file_path"]=info.filePath.value();
+    if(info.apiKey.has_value())
+        j["api_key"]=info.apiKey.value();
+
+    if(info.pricing.prompt_token_cost>0.0||info.pricing.completion_token_cost>0.0)
+    {
+        j["pricing"]={
+            {"prompt_token_cost", info.pricing.prompt_token_cost},
+            {"completion_token_cost", info.pricing.completion_token_cost}
+        };
+    }
+
+    if(info.download.has_value())
+    {
+        nlohmann::json dl;
+        dl["url"]=info.download->url;
+        dl["sha256"]=info.download->sha256;
+        if(!info.download->cachePath.empty())
+            dl["cachePath"]=info.download->cachePath;
+        j["download"]=dl;
+    }
+
+    if(info.minClientVersion.has_value()||info.maxClientVersion.has_value())
+    {
+        nlohmann::json compat;
+        if(info.minClientVersion.has_value())
+            compat["min_client_version"]=info.minClientVersion.value();
+        if(info.maxClientVersion.has_value())
+            compat["max_client_version"]=info.maxClientVersion.value();
+        j["compatibility"]=compat;
+    }
+
+    if(info.hardwareRequirements.has_value())
+    {
+        nlohmann::json hw;
+        hw["min_system_ram_mb"]=info.hardwareRequirements->minSystemRamMb;
+        if(!info.hardwareRequirements->parameterCount.empty())
+            hw["parameter_count"]=info.hardwareRequirements->parameterCount;
+        j["hardware_requirements"]=hw;
+    }
+
+    if(info.contextScaling.has_value())
+    {
+        j["context_scaling"]={
+            {"base_context", info.contextScaling->baseContext},
+            {"max_context", info.contextScaling->maxContext},
+            {"vram_per_1k_context_mb", info.contextScaling->vramPer1kContextMb}
+        };
+    }
+
+    if(!info.variants.empty())
+    {
+        nlohmann::json variants=nlohmann::json::array();
+        for(const ModelVariant &v:info.variants)
+        {
+            nlohmann::json vj;
+            vj["quantization"]=v.quantization;
+            vj["file_size_mb"]=v.fileSizeMb;
+            vj["min_vram_mb"]=v.minVramMb;
+            vj["recommended_vram_mb"]=v.recommendedVramMb;
+
+            if(!v.download.url.empty())
+            {
+                vj["download"]={
+                    {"url", v.download.url},
+                    {"sha256", v.download.sha256},
+                    {"filename", v.download.filename}
+                };
+            }
+            variants.push_back(vj);
+        }
+        j["variants"]=variants;
+    }
+
+    return j;
+}
+
+bool ModelManager::saveOverrides(const std::filesystem::path &overridePath) const
+{
+    if(m_runtimeModels.empty())
+        return true;
+
+    nlohmann::json models=nlohmann::json::array();
+    for(const ModelInfo &info:m_models)
+    {
+        if(m_runtimeModels.count(info.model))
+        {
+            models.push_back(modelInfoToJson(info));
+        }
+    }
+
+    nlohmann::json config={
+        {"schema_version", "1.1.0"},
+        {"models", models}
+    };
+
+    // Atomic write: write to temp file, then rename
+    std::filesystem::path tempPath=overridePath.string()+".tmp";
+
+    std::ofstream file(tempPath);
+    if(!file.is_open())
+    {
+        spdlog::error("Failed to open override file for writing: {}", tempPath.string());
+        return false;
+    }
+
+    file<<config.dump(4);
+    file.close();
+
+    std::error_code ec;
+    std::filesystem::rename(tempPath, overridePath, ec);
+    if(ec)
+    {
+        spdlog::error("Failed to rename override file: {}", ec.message());
+        std::filesystem::remove(tempPath, ec);
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace arbiterAI

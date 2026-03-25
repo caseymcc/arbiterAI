@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <optional>
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -109,6 +110,13 @@ public:
     void addModel(const ModelInfo &modelInfo);
     const std::map<std::string, std::string> &getModelProviderMap() const { return m_modelProviderMap; }
 
+    // Runtime model config injection
+    bool addModelFromJson(const nlohmann::json &modelJson, std::string &error);
+    bool updateModelFromJson(const nlohmann::json &modelJson, std::string &error);
+    bool removeModel(const std::string &modelName);
+    static nlohmann::json modelInfoToJson(const ModelInfo &info);
+    bool saveOverrides(const std::filesystem::path &overridePath) const;
+
 public:
     static int compareVersions(const std::string &v1, const std::string &v2);
 
@@ -117,9 +125,12 @@ private:
     bool loadModelFile(const std::filesystem::path &filePath);
     bool parseModelInfo(const nlohmann::json &jsonData, ModelInfo &info) const;
     bool validateSchema(const nlohmann::json &config) const;
+    bool validateModelJson(const nlohmann::json &modelJson, std::string &error) const;
+    void mergeModelInfo(ModelInfo &existing, const ModelInfo &source, const nlohmann::json &sourceJson) const;
 
     std::vector<ModelInfo> m_models;
     std::map<std::string, std::string> m_modelProviderMap;
+    std::set<std::string> m_runtimeModels;
     ConfigDownloader m_configDownloader;
     bool m_initialized{ false };
 };
