@@ -22,6 +22,9 @@ struct GpuInfo {
     int vramFreeMb=0;
     float computeCapability=0.0f; // CUDA only, 0.0 for Vulkan
     float utilizationPercent=0.0f;
+    bool unifiedMemory=false;     // true for APUs/iGPUs sharing system RAM
+    int gpuAccessibleRamMb=0;     // total RAM the GPU can access (GTT+VRAM on APUs, 0 for discrete)
+    int gpuAccessibleRamFreeMb=0; // free RAM the GPU can access
 };
 
 struct SystemInfo {
@@ -69,6 +72,7 @@ private:
     void detectCpuUtilization();
     void detectNvmlGpus();
     void detectVulkanGpus();
+    void detectUnifiedMemory();
 
     // NVML dlopen handles
     bool loadNvml();

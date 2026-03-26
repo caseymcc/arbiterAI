@@ -59,6 +59,15 @@ typedef enum
 
 typedef enum
 {
+    VK_PHYSICAL_DEVICE_TYPE_OTHER=0,
+    VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU=1,
+    VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU=2,
+    VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU=3,
+    VK_PHYSICAL_DEVICE_TYPE_CPU=4
+} VkPhysicalDeviceType;
+
+typedef enum
+{
     VK_MEMORY_HEAP_DEVICE_LOCAL_BIT=0x00000001
 } VkMemoryHeapFlagBits;
 
@@ -174,6 +183,7 @@ void HardwareDetector::refresh()
     detectCpuUtilization();
     detectNvmlGpus();
     detectVulkanGpus();
+    detectUnifiedMemory();
 }
 
 SystemInfo HardwareDetector::getSystemInfo() const
@@ -583,13 +593,147 @@ void HardwareDetector::detectVulkanGpus()
         gpu.backend=GpuBackend::Vulkan;
         gpu.vramTotalMb=vramTotalMb;
         gpu.vramFreeMb=vramTotalMb; // Vulkan doesn't provide free VRAM — approximate as total
+        gpu.unifiedMemory=(props.deviceType==VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
 
-        spdlog::info("Vulkan GPU {}: {} ({}MB VRAM)", gpu.index, gpu.name, gpu.vramTotalMb);
+        spdlog::info("Vulkan GPU {}: {} ({}MB VRAM, integrated={})",
+            gpu.index, gpu.name, gpu.vramTotalMb, gpu.unifiedMemory);
 
         m_systemInfo.gpus.push_back(gpu);
     }
 
     destroyInstance(vkInstance, nullptr);
+}
+
+// --- Unified memory detection via sysfs (amdgpu) ---
+
+void HardwareDetector::detectUnifiedMemory()
+{
+#ifdef __linux__
+    // For each GPU flagged as integrated, attempt to read amdgpu sysfs
+    // to get the actual GPU-accessible memory pool (GTT + VRAM).
+    //
+    // amdgpu exposes per-device files under /sys/class/drm/card*/device/:
+    //   mem_info_vram_total  — dedicated VRAM in bytes
+    //   mem_info_vram_used   — used VRAM in bytes
+    //   mem_info_gtt_total   — system RAM accessible to GPU (GTT) in bytes
+    //   mem_info_gtt_used    — used GTT in bytes
+    //
+    // On unified memory APUs (e.g. Ryzen AI Max+), the GPU can address
+    // GTT + VRAM as its working memory pool. The GTT size is typically
+    // most of system RAM minus a kernel reservation.
+
+    for(GpuInfo &gpu:m_systemInfo.gpus)
+    {
+        if(!gpu.unifiedMemory)
+        {
+            continue;
+        }
+
+        // Find the matching DRM card by scanning /sys/class/drm/card*
+        std::string matchedCardPath;
+
+        for(int card=0; card<16; ++card)
+        {
+            std::string cardPath="/sys/class/drm/card"+std::to_string(card)+"/device";
+            std::string vramTotalPath=cardPath+"/mem_info_vram_total";
+
+            std::ifstream testFile(vramTotalPath);
+            if(!testFile.is_open())
+            {
+                continue;
+            }
+
+            // Verify this card's VRAM matches what Vulkan reported
+            // (to handle multi-GPU systems correctly)
+            long long vramBytes=0;
+            testFile >> vramBytes;
+            int vramMb=static_cast<int>(vramBytes/(1024LL*1024LL));
+
+            // Allow 1% tolerance for rounding
+            int diff=vramMb-gpu.vramTotalMb;
+            if(diff<0)
+            {
+                diff=-diff;
+            }
+
+            if(diff<=gpu.vramTotalMb/100+1)
+            {
+                matchedCardPath=cardPath;
+                break;
+            }
+        }
+
+        if(matchedCardPath.empty())
+        {
+            spdlog::debug("No amdgpu sysfs match for integrated GPU {}: {}",
+                gpu.index, gpu.name);
+            continue;
+        }
+
+        // Read VRAM used (better than Vulkan's "assume all free")
+        {
+            std::ifstream file(matchedCardPath+"/mem_info_vram_used");
+            if(file.is_open())
+            {
+                long long usedBytes=0;
+                file >> usedBytes;
+
+                int usedMb=static_cast<int>(usedBytes/(1024LL*1024LL));
+                gpu.vramFreeMb=gpu.vramTotalMb-usedMb;
+                if(gpu.vramFreeMb<0)
+                {
+                    gpu.vramFreeMb=0;
+                }
+            }
+        }
+
+        // Read GTT total and used
+        long long gttTotalBytes=0;
+        long long gttUsedBytes=0;
+
+        {
+            std::ifstream file(matchedCardPath+"/mem_info_gtt_total");
+            if(file.is_open())
+            {
+                file >> gttTotalBytes;
+            }
+        }
+        {
+            std::ifstream file(matchedCardPath+"/mem_info_gtt_used");
+            if(file.is_open())
+            {
+                file >> gttUsedBytes;
+            }
+        }
+
+        if(gttTotalBytes>0)
+        {
+            int gttTotalMb=static_cast<int>(gttTotalBytes/(1024LL*1024LL));
+            int gttUsedMb=static_cast<int>(gttUsedBytes/(1024LL*1024LL));
+            int gttFreeMb=gttTotalMb-gttUsedMb;
+
+            if(gttFreeMb<0)
+            {
+                gttFreeMb=0;
+            }
+
+            // GPU-accessible memory = VRAM + GTT (system RAM mapped to GPU)
+            gpu.gpuAccessibleRamMb=gpu.vramTotalMb+gttTotalMb;
+            gpu.gpuAccessibleRamFreeMb=gpu.vramFreeMb+gttFreeMb;
+
+            spdlog::info("Unified memory GPU {}: {} — VRAM {}MB ({}MB free), "
+                "GTT {}MB ({}MB free), total accessible {}MB ({}MB free)",
+                gpu.index, gpu.name,
+                gpu.vramTotalMb, gpu.vramFreeMb,
+                gttTotalMb, gttFreeMb,
+                gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
+        }
+        else
+        {
+            spdlog::debug("No GTT info for integrated GPU {}: {}", gpu.index, gpu.name);
+        }
+    }
+#endif
 }
 
 } // namespace arbiterAI

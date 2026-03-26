@@ -435,9 +435,23 @@ function renderGpus(gpus)
         const vramPct=gpu.vram_total_mb>0?(usedVram/gpu.vram_total_mb*100):0;
         const utilPct=gpu.utilization_percent||0;
 
+        let memLabel="VRAM";
+        let memTotal=gpu.vram_total_mb;
+        let memUsed=usedVram;
+        let memPct=vramPct;
+
+        if(gpu.unified_memory&&gpu.gpu_accessible_ram_mb>0)
+        {
+            memLabel="GPU Memory (unified)";
+            memTotal=gpu.gpu_accessible_ram_mb;
+            const memFree=gpu.gpu_accessible_ram_free_mb||0;
+            memUsed=memTotal-memFree;
+            memPct=memTotal>0?(memUsed/memTotal*100):0;
+        }
+
         html+=`<div class="gpu-row">
-            <div class="gpu-label"><span>${gpu.name} (${gpu.backend})</span><span>${formatMb(usedVram)} / ${formatMb(gpu.vram_total_mb)}</span></div>
-            <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-vram" style="width:${vramPct.toFixed(1)}%"></div></div>
+            <div class="gpu-label"><span>${gpu.name} (${gpu.backend})${gpu.unified_memory?" ⚡ Unified":"" }</span><span>${memLabel}: ${formatMb(memUsed)} / ${formatMb(memTotal)}</span></div>
+            <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-vram" style="width:${memPct.toFixed(1)}%"></div></div>
             <div class="gpu-label"><span>Utilization</span><span>${utilPct.toFixed(0)}%</span></div>
             <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-util" style="width:${utilPct.toFixed(1)}%"></div></div>
         </div>`;

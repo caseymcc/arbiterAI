@@ -207,9 +207,16 @@ ErrorCode ModelRuntime::loadModel(
             return ErrorCode::ModelNotFound;
         }
     }
+    else if(modelInfo->provider=="llama")
+    {
+        // Local llama models require variants for download/VRAM info
+        spdlog::error("Model '{}' is a llama provider model but has no variants defined. "
+            "Add a 'variants' array with quantization, download, and VRAM requirements.", model);
+        return ErrorCode::InvalidRequest;
+    }
     else
     {
-        // Cloud model or model without variants — just track it
+        // Cloud model without variants — just track it
         LoadedModel &entry=m_models[model];
         entry.modelName=model;
         entry.state=ModelState::Loaded;
