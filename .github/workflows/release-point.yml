@@ -44,7 +44,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+        ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
     - name: Configure Git
       if: steps.check_pr.outputs.is_pr_merge == 'true'
