@@ -808,30 +808,39 @@ void handleGetLoadedModels(const httplib::Request &, httplib::Response &res)
 
 void handleLoadModel(const httplib::Request &req, httplib::Response &res)
 {
-    std::string modelName=req.matches[1];
-    std::string variant;
-    int contextSize=0;
-
-    if(req.has_param("variant"))
-        variant=req.get_param_value("variant");
-    if(req.has_param("context"))
-        contextSize=std::stoi(req.get_param_value("context"));
-
-    ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize);
-
-    if(err==ErrorCode::Success)
+    try
     {
-        res.set_content(nlohmann::json{{"status", "loaded"}, {"model", modelName}}.dump(), "application/json");
+        std::string modelName=req.matches[1];
+        std::string variant;
+        int contextSize=0;
+
+        if(req.has_param("variant"))
+            variant=req.get_param_value("variant");
+        if(req.has_param("context"))
+            contextSize=std::stoi(req.get_param_value("context"));
+
+        ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize);
+
+        if(err==ErrorCode::Success)
+        {
+            res.set_content(nlohmann::json{{"status", "loaded"}, {"model", modelName}}.dump(), "application/json");
+        }
+        else if(err==ErrorCode::ModelDownloading)
+        {
+            res.status=202;
+            res.set_content(nlohmann::json{{"status", "downloading"}, {"model", modelName}}.dump(), "application/json");
+        }
+        else
+        {
+            res.status=400;
+            res.set_content(errorJson("Failed to load model: "+errorCodeToString(err), "invalid_request_error", "model", errorCodeToString(err)).dump(), "application/json");
+        }
     }
-    else if(err==ErrorCode::ModelDownloading)
+    catch(const std::exception &e)
     {
-        res.status=202;
-        res.set_content(nlohmann::json{{"status", "downloading"}, {"model", modelName}}.dump(), "application/json");
-    }
-    else
-    {
-        res.status=400;
-        res.set_content(errorJson("Failed to load model: "+errorCodeToString(err), "invalid_request_error", "model", errorCodeToString(err)).dump(), "application/json");
+        spdlog::error("Exception in handleLoadModel: {}", e.what());
+        res.status=500;
+        res.set_content(errorJson(std::string("Internal error: ")+e.what(), "server_error").dump(), "application/json");
     }
 }
 

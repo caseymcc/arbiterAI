@@ -559,6 +559,14 @@ void HardwareDetector::detectVulkanGpus()
         VkPhysicalDeviceProperties props{};
         getProperties(devices[i], &props);
 
+        // Skip CPU-based software renderers (e.g. llvmpipe) — they report
+        // system RAM as VRAM and are not useful for model inference.
+        if(props.deviceType==VK_PHYSICAL_DEVICE_TYPE_CPU)
+        {
+            spdlog::debug("Skipping Vulkan software renderer: {}", props.deviceName);
+            continue;
+        }
+
         // Skip devices already detected via NVML (match by name)
         bool alreadyDetected=false;
         for(const GpuInfo &existing:m_systemInfo.gpus)
@@ -665,8 +673,16 @@ void HardwareDetector::detectUnifiedMemory()
 
         if(matchedCardPath.empty())
         {
-            spdlog::debug("No amdgpu sysfs match for integrated GPU {}: {}",
-                gpu.index, gpu.name);
+            // No sysfs match — fall back to system RAM as GPU-accessible pool.
+            // Unified memory GPUs share system RAM, so the GPU can access most of it.
+            // Use total system RAM as the accessible pool estimate.
+            gpu.gpuAccessibleRamMb=m_systemInfo.totalRamMb;
+            gpu.gpuAccessibleRamFreeMb=m_systemInfo.freeRamMb;
+
+            spdlog::info("Unified memory GPU {}: {} — no sysfs match, "
+                "falling back to system RAM ({}MB total, {}MB free) as GPU-accessible pool",
+                gpu.index, gpu.name,
+                gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
             continue;
         }
 
@@ -730,7 +746,14 @@ void HardwareDetector::detectUnifiedMemory()
         }
         else
         {
-            spdlog::debug("No GTT info for integrated GPU {}: {}", gpu.index, gpu.name);
+            // sysfs card matched but no GTT info — fall back to system RAM
+            gpu.gpuAccessibleRamMb=m_systemInfo.totalRamMb;
+            gpu.gpuAccessibleRamFreeMb=m_systemInfo.freeRamMb;
+
+            spdlog::info("Unified memory GPU {}: {} — no GTT info, "
+                "falling back to system RAM ({}MB total, {}MB free) as GPU-accessible pool",
+                gpu.index, gpu.name,
+                gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
         }
     }
 #endif
