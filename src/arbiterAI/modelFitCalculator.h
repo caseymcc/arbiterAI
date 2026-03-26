@@ -35,7 +35,12 @@ public:
 
 private:
     /// Sum free VRAM across a set of GPU indices.
+    /// For unified memory GPUs, uses gpuAccessibleRamFreeMb when available.
     static int sumFreeVram(const SystemInfo &hw, const std::vector<int> &gpuIndices);
+
+    /// Sum total VRAM across a set of GPU indices.
+    /// For unified memory GPUs, uses gpuAccessibleRamMb when available.
+    static int sumTotalVram(const SystemInfo &hw, const std::vector<int> &gpuIndices);
 
     /// Get all GPU indices from the system info.
     static std::vector<int> allGpuIndices(const SystemInfo &hw);

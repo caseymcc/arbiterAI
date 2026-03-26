@@ -13,7 +13,40 @@ int ModelFitCalculator::sumFreeVram(const SystemInfo &hw, const std::vector<int>
     {
         if(idx>=0&&idx<static_cast<int>(hw.gpus.size()))
         {
-            total+=hw.gpus[idx].vramFreeMb;
+            const GpuInfo &gpu=hw.gpus[idx];
+
+            // For unified memory GPUs, the effective free memory is
+            // GTT + VRAM (gpuAccessibleRamFreeMb), not just VRAM alone
+            if(gpu.unifiedMemory&&gpu.gpuAccessibleRamFreeMb>0)
+            {
+                total+=gpu.gpuAccessibleRamFreeMb;
+            }
+            else
+            {
+                total+=gpu.vramFreeMb;
+            }
+        }
+    }
+    return total;
+}
+
+int ModelFitCalculator::sumTotalVram(const SystemInfo &hw, const std::vector<int> &gpuIndices)
+{
+    int total=0;
+    for(int idx:gpuIndices)
+    {
+        if(idx>=0&&idx<static_cast<int>(hw.gpus.size()))
+        {
+            const GpuInfo &gpu=hw.gpus[idx];
+
+            if(gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0)
+            {
+                total+=gpu.gpuAccessibleRamMb;
+            }
+            else
+            {
+                total+=gpu.vramTotalMb;
+            }
         }
     }
     return total;
@@ -114,19 +147,42 @@ ModelFit ModelFitCalculator::calculateModelFit(
     std::vector<int> selectedGpus;
     if(!gpuIndices.empty())
     {
-        // Sort GPUs by free VRAM descending to prefer the most capable GPU
+        // Sort GPUs by effective free memory descending to prefer the most capable GPU.
+        // For unified memory GPUs, use gpuAccessibleRamFreeMb when available.
         std::vector<int> sortedGpus=gpuIndices;
         std::sort(sortedGpus.begin(), sortedGpus.end(),
             [&hw](int a, int b)
             {
-                return hw.gpus[a].vramFreeMb>hw.gpus[b].vramFreeMb;
+                int freeA=hw.gpus[a].vramFreeMb;
+                int freeB=hw.gpus[b].vramFreeMb;
+
+                if(hw.gpus[a].unifiedMemory&&hw.gpus[a].gpuAccessibleRamFreeMb>0)
+                {
+                    freeA=hw.gpus[a].gpuAccessibleRamFreeMb;
+                }
+                if(hw.gpus[b].unifiedMemory&&hw.gpus[b].gpuAccessibleRamFreeMb>0)
+                {
+                    freeB=hw.gpus[b].gpuAccessibleRamFreeMb;
+                }
+
+                return freeA>freeB;
             });
 
         int accumulated=0;
         for(int idx:sortedGpus)
         {
             selectedGpus.push_back(idx);
-            accumulated+=hw.gpus[idx].vramFreeMb;
+
+            const GpuInfo &gpu=hw.gpus[idx];
+            if(gpu.unifiedMemory&&gpu.gpuAccessibleRamFreeMb>0)
+            {
+                accumulated+=gpu.gpuAccessibleRamFreeMb;
+            }
+            else
+            {
+                accumulated+=gpu.vramFreeMb;
+            }
+
             if(accumulated>=variant.minVramMb)
             {
                 break;

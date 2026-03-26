@@ -95,6 +95,14 @@ TEST_F(HardwareDetectorTest, GpuInfoFieldsValid)
         EXPECT_LE(gpu.vramFreeMb, gpu.vramTotalMb);
         EXPECT_GE(gpu.utilizationPercent, 0.0f);
         EXPECT_LE(gpu.utilizationPercent, 100.0f);
+
+        if(gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0)
+        {
+            // Accessible RAM should be larger than VRAM alone on APUs
+            EXPECT_GE(gpu.gpuAccessibleRamMb, gpu.vramTotalMb);
+            EXPECT_GE(gpu.gpuAccessibleRamFreeMb, 0);
+            EXPECT_LE(gpu.gpuAccessibleRamFreeMb, gpu.gpuAccessibleRamMb);
+        }
     }
 }
 
@@ -123,6 +131,21 @@ protected:
         gpu.vramTotalMb=totalMb;
         gpu.vramFreeMb=freeMb;
         gpu.computeCapability=8.6f;
+        return gpu;
+    }
+
+    GpuInfo makeUnifiedGpu(int index, int vramMb, int vramFreeMb,
+        int accessibleMb, int accessibleFreeMb)
+    {
+        GpuInfo gpu;
+        gpu.index=index;
+        gpu.name="APU GPU "+std::to_string(index);
+        gpu.backend=GpuBackend::Vulkan;
+        gpu.vramTotalMb=vramMb;
+        gpu.vramFreeMb=vramFreeMb;
+        gpu.unifiedMemory=true;
+        gpu.gpuAccessibleRamMb=accessibleMb;
+        gpu.gpuAccessibleRamFreeMb=accessibleFreeMb;
         return gpu;
     }
 
@@ -319,6 +342,66 @@ TEST_F(ModelFitCalculatorTest, PreferFewerGpus)
     // Should only use one GPU since the first has 20000MB free
     EXPECT_EQ(static_cast<int>(fit.gpuIndices.size()), 1);
     EXPECT_EQ(fit.gpuIndices[0], 0);
+}
+
+// --- Unified memory (APU) tests ---
+
+TEST_F(ModelFitCalculatorTest, UnifiedMemoryUsesAccessibleRam)
+{
+    // Simulate a Ryzen AI Max+ 395: 42GB VRAM (device-local), but ~120GB accessible
+    GpuInfo gpu=makeUnifiedGpu(0, 42739, 40000, 122880, 110000);
+    SystemInfo hw=makeSystemInfo(131072, 115000, {gpu});
+
+    ModelInfo model=makeLocalModel("llama-70b", 32768, "70B", 4096, 131072, 256);
+    ModelVariant variant=makeVariant("Q4_K_M", 40000, 40000, 48000);
+
+    ModelFit fit=ModelFitCalculator::calculateModelFit(model, variant, hw);
+
+    // Without unified memory awareness, 40000MB free VRAM barely fits the model
+    // With unified memory, 110000MB free accessible RAM easily fits + allows more context
+    EXPECT_TRUE(fit.canRun);
+    EXPECT_GT(fit.maxContextSize, 4096);
+}
+
+TEST_F(ModelFitCalculatorTest, UnifiedMemoryLargerContextThanVramAlone)
+{
+    // APU with 42GB VRAM but 120GB accessible
+    GpuInfo gpu=makeUnifiedGpu(0, 42739, 40000, 122880, 110000);
+    SystemInfo hw=makeSystemInfo(131072, 115000, {gpu});
+
+    ModelInfo model=makeLocalModel("llama-7b", 8192, "7B", 4096, 131072, 64);
+    ModelVariant variant=makeVariant("Q4_K_M", 4370, 4096, 8192);
+
+    ModelFit fit=ModelFitCalculator::calculateModelFit(model, variant, hw);
+
+    EXPECT_TRUE(fit.canRun);
+    // With 110000MB accessible, context should scale to max
+    EXPECT_EQ(fit.maxContextSize, 131072);
+}
+
+TEST_F(ModelFitCalculatorTest, UnifiedMemoryFallbackToVramWhenNoAccessibleInfo)
+{
+    // Unified flag set but no accessible RAM info (sysfs unavailable)
+    GpuInfo gpu;
+    gpu.index=0;
+    gpu.name="Unknown APU";
+    gpu.backend=GpuBackend::Vulkan;
+    gpu.vramTotalMb=42739;
+    gpu.vramFreeMb=40000;
+    gpu.unifiedMemory=true;
+    gpu.gpuAccessibleRamMb=0;
+    gpu.gpuAccessibleRamFreeMb=0;
+
+    SystemInfo hw=makeSystemInfo(131072, 115000, {gpu});
+
+    ModelInfo model=makeLocalModel("llama-7b", 8192, "7B", 4096, 131072, 64);
+    ModelVariant variant=makeVariant("Q4_K_M", 4370, 4096, 8192);
+
+    ModelFit fit=ModelFitCalculator::calculateModelFit(model, variant, hw);
+
+    EXPECT_TRUE(fit.canRun);
+    // Should fall back to vramFreeMb (40000) since gpuAccessibleRamFreeMb is 0
+    EXPECT_GT(fit.maxContextSize, 4096);
 }
 
 } // namespace arbiterAI

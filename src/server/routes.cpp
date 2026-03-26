@@ -62,15 +62,24 @@ std::string gpuBackendToString(GpuBackend backend)
 
 nlohmann::json gpuInfoToJson(const GpuInfo &gpu)
 {
-    return {
+    nlohmann::json j={
         {"index", gpu.index},
         {"name", gpu.name},
         {"backend", gpuBackendToString(gpu.backend)},
         {"vram_total_mb", gpu.vramTotalMb},
         {"vram_free_mb", gpu.vramFreeMb},
         {"compute_capability", gpu.computeCapability},
-        {"utilization_percent", gpu.utilizationPercent}
+        {"utilization_percent", gpu.utilizationPercent},
+        {"unified_memory", gpu.unifiedMemory}
     };
+
+    if(gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0)
+    {
+        j["gpu_accessible_ram_mb"]=gpu.gpuAccessibleRamMb;
+        j["gpu_accessible_ram_free_mb"]=gpu.gpuAccessibleRamFreeMb;
+    }
+
+    return j;
 }
 
 nlohmann::json systemInfoToJson(const SystemInfo &hw)
