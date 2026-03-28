@@ -1,6 +1,7 @@
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/hardwareDetector.h"
 #include "arbiterAI/telemetryCollector.h"
+#include "arbiterAI/storageManager.h"
 
 #include <llama.h>
 #include <spdlog/spdlog.h>
@@ -149,6 +150,20 @@ ErrorCode ModelRuntime::loadModel(
                 std::string filePath="/models/"+selectedVar->download.filename;
                 if(!std::filesystem::exists(filePath)&&!selectedVar->download.url.empty())
                 {
+                    // Check storage quota before downloading
+                    int64_t fileSizeBytes=static_cast<int64_t>(selectedVar->fileSizeMb)*1024*1024;
+                    if(!StorageManager::instance().canDownload(fileSizeBytes))
+                    {
+                        // Try cleanup first
+                        StorageManager::instance().runCleanup();
+                        if(!StorageManager::instance().canDownload(fileSizeBytes))
+                        {
+                            spdlog::error("Insufficient storage to download '{}' variant '{}' ({} MB)",
+                                model, selectedVariant, selectedVar->fileSizeMb);
+                            return ErrorCode::InsufficientStorage;
+                        }
+                    }
+
                     // Mark as downloading
                     LoadedModel &dlEntry=m_models[model];
                     dlEntry.modelName=model;
@@ -163,7 +178,8 @@ ErrorCode ModelRuntime::loadModel(
                         selectedVar->download.url,
                         filePath,
                         selectedVar->download.sha256,
-                        model);
+                        model,
+                        selectedVariant);
                     m_mutex.lock();
 
                     if(!downloadOk)
@@ -171,6 +187,16 @@ ErrorCode ModelRuntime::loadModel(
                         m_models.erase(model);
                         return ErrorCode::ModelDownloadFailed;
                     }
+
+                    // Register the download with StorageManager
+                    int64_t actualSize=0;
+                    std::error_code ec;
+                    if(std::filesystem::exists(filePath, ec))
+                    {
+                        actualSize=static_cast<int64_t>(std::filesystem::file_size(filePath, ec));
+                    }
+                    StorageManager::instance().registerDownload(
+                        model, selectedVariant, selectedVar->download.filename, actualSize);
                 }
             }
 
@@ -395,6 +421,16 @@ std::vector<ModelFit> ModelRuntime::getLocalModelCapabilities() const
     return ModelFitCalculator::calculateFittableModels(allModels, hw);
 }
 
+std::vector<DownloadProgressSnapshot> ModelRuntime::getActiveDownloadSnapshots()
+{
+    return m_downloader.getActiveSnapshots();
+}
+
+std::optional<DownloadProgressSnapshot> ModelRuntime::getDownloadSnapshot(const std::string &modelName)
+{
+    return m_downloader.getProgressSnapshot(modelName);
+}
+
 void ModelRuntime::setReadyRamBudget(int mb)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -490,6 +526,17 @@ void ModelRuntime::beginInference(const std::string &model)
 
 void ModelRuntime::endInference()
 {
+    // Record usage for storage tracking
+    if(!m_inferenceModel.empty())
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it=m_models.find(m_inferenceModel);
+        if(it!=m_models.end())
+        {
+            StorageManager::instance().recordUsage(m_inferenceModel, it->second.variant);
+        }
+    }
+
     m_inferenceActive=false;
     m_inferenceModel.clear();
     drainPendingSwaps();
@@ -735,7 +782,8 @@ bool ModelRuntime::downloadModelFile(
     const std::string &url,
     const std::string &filePath,
     const std::string &sha256,
-    const std::string &modelName)
+    const std::string &modelName,
+    const std::string &variant)
 {
     std::optional<std::string> hash=std::nullopt;
     if(!sha256.empty())
@@ -765,7 +813,8 @@ bool ModelRuntime::downloadModelFile(
                 }
             }
         },
-        modelName);
+        modelName,
+        variant);
 
     bool success=result.get();
 

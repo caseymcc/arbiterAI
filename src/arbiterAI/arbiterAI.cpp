@@ -6,6 +6,7 @@
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/telemetryCollector.h"
+#include "arbiterAI/storageManager.h"
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
@@ -85,6 +86,10 @@ ErrorCode ArbiterAI::initialize(const std::vector<std::filesystem::path> &config
 
     // Mark global singleton initialized so subsequent operations succeed
     ArbiterAI::instance().initialized = true;
+
+    // Initialize StorageManager with default models directory
+    StorageManager::instance().initialize("/models");
+
     return ErrorCode::Success;
 }
 
@@ -570,6 +575,7 @@ std::vector<InferenceStats> ArbiterAI::getInferenceHistory(std::chrono::minutes 
 
 ErrorCode ArbiterAI::shutdown()
 {
+    StorageManager::instance().shutdown();
     providers.clear();
     initialized = false;
     return ErrorCode::Success;

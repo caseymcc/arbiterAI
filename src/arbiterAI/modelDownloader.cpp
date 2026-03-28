@@ -184,12 +184,15 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
     const std::string &filePathStr,
     const std::optional<std::string> &fileHash,
     DownloadProgressCallback progressCallback,
-    const std::string &modelName)
+    const std::string &modelName,
+    const std::string &variant)
 {
     // Create tracking state
     auto downloadState = std::make_shared<ActiveDownload>();
     downloadState->modelName = modelName.empty() ? filePathStr : modelName;
+    downloadState->variant = variant;
     downloadState->status = DownloadStatus::Pending;
+    downloadState->startTime = std::chrono::steady_clock::now();
 
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
@@ -258,6 +261,21 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
                     percent = (static_cast<float>(downloadNow) / downloadTotal) * 100.0f;
                 }
                 downloadState->percentComplete = percent;
+
+                // Record speed sample
+                {
+                    std::lock_guard<std::mutex> lock(downloadState->speedMutex);
+                    auto now = std::chrono::steady_clock::now();
+
+                    downloadState->speedSamples.push_back({now, downloadNow});
+
+                    // Keep only last 10 seconds of samples
+                    auto cutoff = now - std::chrono::seconds(10);
+                    while(!downloadState->speedSamples.empty() && downloadState->speedSamples.front().first < cutoff)
+                    {
+                        downloadState->speedSamples.pop_front();
+                    }
+                }
                 
                 if (progressCallback)
                 {
@@ -339,6 +357,83 @@ int64_t ModelDownloader::getPartialDownloadSize(const std::string &filePath)
         return std::filesystem::file_size(partialPath);
     }
     return 0;
+}
+
+DownloadProgressSnapshot ModelDownloader::buildSnapshot(const std::shared_ptr<ActiveDownload> &download)
+{
+    DownloadProgressSnapshot snap;
+
+    snap.bytesDownloaded=download->bytesDownloaded.load();
+    snap.totalBytes=download->totalBytes.load();
+    snap.percentComplete=download->percentComplete.load();
+    snap.modelName=download->modelName;
+    snap.variant=download->variant;
+
+    // Calculate speed from rolling window
+    {
+        std::lock_guard<std::mutex> lock(download->speedMutex);
+
+        if(download->speedSamples.size()>=2)
+        {
+            const std::pair<std::chrono::steady_clock::time_point, int64_t> &oldest=download->speedSamples.front();
+            const std::pair<std::chrono::steady_clock::time_point, int64_t> &newest=download->speedSamples.back();
+
+            double elapsedSec=std::chrono::duration<double>(newest.first-oldest.first).count();
+            int64_t byteDelta=newest.second-oldest.second;
+
+            if(elapsedSec>0.0 && byteDelta>0)
+            {
+                double bytesPerSec=static_cast<double>(byteDelta)/elapsedSec;
+                snap.speedMbps=bytesPerSec/(1024.0*1024.0);
+
+                // ETA from remaining bytes and current speed
+                int64_t remaining=snap.totalBytes-snap.bytesDownloaded;
+                if(remaining>0 && bytesPerSec>0.0)
+                {
+                    snap.etaSeconds=static_cast<int>(static_cast<double>(remaining)/bytesPerSec);
+                }
+            }
+        }
+    }
+
+    return snap;
+}
+
+std::optional<DownloadProgressSnapshot> ModelDownloader::getProgressSnapshot(const std::string &modelName)
+{
+    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+
+    auto it=m_activeDownloads.find(modelName);
+    if(it==m_activeDownloads.end())
+    {
+        return std::nullopt;
+    }
+
+    DownloadStatus status=it->second->status.load();
+    if(status!=DownloadStatus::InProgress && status!=DownloadStatus::Pending)
+    {
+        return std::nullopt;
+    }
+
+    return buildSnapshot(it->second);
+}
+
+std::vector<DownloadProgressSnapshot> ModelDownloader::getActiveSnapshots()
+{
+    std::lock_guard<std::mutex> lock(m_downloadsMutex);
+
+    std::vector<DownloadProgressSnapshot> result;
+
+    for(const std::pair<const std::string, std::shared_ptr<ActiveDownload>> &entry:m_activeDownloads)
+    {
+        DownloadStatus status=entry.second->status.load();
+        if(status==DownloadStatus::InProgress || status==DownloadStatus::Pending)
+        {
+            result.push_back(buildSnapshot(entry.second));
+        }
+    }
+
+    return result;
 }
 
 } // namespace arbiterAI

@@ -73,7 +73,8 @@ enum class ErrorCode
     ModelNotLoaded,
     ModelLoadError,
     ModelDownloading,
-    ModelDownloadFailed
+    ModelDownloadFailed,
+    InsufficientStorage
 };
 
 /**

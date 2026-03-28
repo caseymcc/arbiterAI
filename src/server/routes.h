@@ -57,6 +57,24 @@ void handleGetStatsHistory(const httplib::Request &req, httplib::Response &res);
 void handleGetStatsSwaps(const httplib::Request &req, httplib::Response &res);
 void handleGetHardware(const httplib::Request &req, httplib::Response &res);
 
+// ========== Storage Management ==========
+
+void handleGetStorage(const httplib::Request &req, httplib::Response &res);
+void handleGetStorageModels(const httplib::Request &req, httplib::Response &res);
+void handleGetStorageModel(const httplib::Request &req, httplib::Response &res);
+void handleGetStorageModelVariant(const httplib::Request &req, httplib::Response &res);
+void handleSetStorageLimit(const httplib::Request &req, httplib::Response &res);
+void handleDeleteModelFiles(const httplib::Request &req, httplib::Response &res);
+void handleSetHotReady(const httplib::Request &req, httplib::Response &res);
+void handleClearHotReady(const httplib::Request &req, httplib::Response &res);
+void handleSetProtected(const httplib::Request &req, httplib::Response &res);
+void handleClearProtected(const httplib::Request &req, httplib::Response &res);
+void handleGetCleanupPreview(const httplib::Request &req, httplib::Response &res);
+void handleRunCleanup(const httplib::Request &req, httplib::Response &res);
+void handleGetCleanupConfig(const httplib::Request &req, httplib::Response &res);
+void handleSetCleanupConfig(const httplib::Request &req, httplib::Response &res);
+void handleGetActiveDownloads(const httplib::Request &req, httplib::Response &res);
+
 // ========== Dashboard ==========
 
 void handleDashboard(const httplib::Request &req, httplib::Response &res);

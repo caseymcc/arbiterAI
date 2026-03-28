@@ -71,6 +71,8 @@ set(arbiterai_src
     ./src/arbiterAI/modelRuntime.cpp
     ./src/arbiterAI/telemetryCollector.h
     ./src/arbiterAI/telemetryCollector.cpp
+    ./src/arbiterAI/storageManager.h
+    ./src/arbiterAI/storageManager.cpp
     ./src/arbiterAI/providers/baseProvider.h
     ./src/arbiterAI/providers/baseProvider.cpp
     ./src/arbiterAI/providers/openai.h
@@ -136,6 +138,7 @@ target_link_libraries(arbiterai
         tests/modelRuntimeTests.cpp
         tests/telemetryCollectorTests.cpp
         tests/llamaProviderTests.cpp
+        tests/storageManagerTests.cpp
     )
     
     target_link_libraries(arbiterai_tests
