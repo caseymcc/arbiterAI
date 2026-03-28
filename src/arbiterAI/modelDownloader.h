@@ -12,6 +12,9 @@
 #include <memory>
 #include <functional>
 #include <atomic>
+#include <chrono>
+#include <deque>
+#include <mutex>
 
 namespace arbiterAI
 {
@@ -27,17 +30,36 @@ using DownloadProgressCallback = std::function<void(int64_t bytesDownloaded,
                                                       float percentComplete)>;
 
 /**
- * @struct DownloadState
+ * @struct ActiveDownload
  * @brief Tracks the state of an active download
  */
-struct ActiveDownload
-{
+struct ActiveDownload {
     std::atomic<int64_t> bytesDownloaded{0};
     std::atomic<int64_t> totalBytes{0};
     std::atomic<float> percentComplete{0.0f};
     std::atomic<DownloadStatus> status{DownloadStatus::NotStarted};
     std::string error;
     std::string modelName;
+    std::string variant;
+
+    // Speed tracking (guarded by speedMutex)
+    mutable std::mutex speedMutex;
+    std::deque<std::pair<std::chrono::steady_clock::time_point, int64_t>> speedSamples;
+    std::chrono::steady_clock::time_point startTime;
+};
+
+/**
+ * @struct DownloadProgressSnapshot
+ * @brief Point-in-time snapshot of a download's progress including speed and ETA
+ */
+struct DownloadProgressSnapshot {
+    int64_t bytesDownloaded=0;
+    int64_t totalBytes=0;
+    float percentComplete=0.0f;
+    double speedMbps=0.0;       // rolling average MB/s
+    int etaSeconds=0;           // estimated time remaining
+    std::string modelName;
+    std::string variant;
 };
 
 /**
@@ -78,13 +100,15 @@ public:
      * @param fileHash Expected SHA256 hash (optional)
      * @param progressCallback Callback for progress updates
      * @param modelName Name for tracking in active downloads
+     * @param variant Quantization variant name for tracking
      * @return Future that resolves to true on success
      */
     std::future<bool> downloadModelWithProgress(const std::string &downloadUrl,
                                                   const std::string &filePath,
                                                   const std::optional<std::string> &fileHash,
                                                   DownloadProgressCallback progressCallback,
-                                                  const std::string &modelName = "");
+                                                  const std::string &modelName = "",
+                                                  const std::string &variant = "");
 
     /**
      * @brief Get the current download state for a model
@@ -92,6 +116,19 @@ public:
      * @return Active download state, or nullptr if not downloading
      */
     std::shared_ptr<ActiveDownload> getDownloadState(const std::string &modelName);
+
+    /**
+     * @brief Get a progress snapshot with speed and ETA for a model
+     * @param modelName Name of the model
+     * @return Snapshot with speed/ETA, or nullopt if not downloading
+     */
+    std::optional<DownloadProgressSnapshot> getProgressSnapshot(const std::string &modelName);
+
+    /**
+     * @brief Get progress snapshots for all active downloads
+     * @return Vector of snapshots for all in-progress or pending downloads
+     */
+    std::vector<DownloadProgressSnapshot> getActiveSnapshots();
 
     /**
      * @brief Check if a download can be resumed
@@ -111,6 +148,7 @@ private:
     std::string getCachePath(const std::string &key);
     std::optional<nlohmann::json> loadFromCache(const std::string &key);
     void saveToCache(const std::string &key, const nlohmann::json &config);
+    DownloadProgressSnapshot buildSnapshot(const std::shared_ptr<ActiveDownload> &download);
 
     std::filesystem::path m_cacheDir;
     std::shared_ptr<IFileVerifier> m_fileVerifier;

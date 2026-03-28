@@ -11,8 +11,9 @@ Standalone HTTP server that wraps the ArbiterAI library, providing an OpenAI-com
    - [Model Management](#32-model-management)
    - [Model Config Injection](#33-model-config-injection)
    - [Telemetry](#34-telemetry)
-   - [Health & Version](#35-health--version)
-   - [Dashboard](#36-dashboard)
+   - [Storage Management](#35-storage-management)
+   - [Health & Version](#36-health--version)
+   - [Dashboard](#37-dashboard)
 4. [Configuration Persistence](#4-configuration-persistence)
 5. [Error Format](#5-error-format)
 
@@ -28,8 +29,9 @@ The server supports:
 - **Streaming** — Server-Sent Events (SSE) for real-time token delivery
 - **Model lifecycle management** — Load, unload, pin, and download models at runtime
 - **Runtime model config injection** — Add, update, or remove model configurations via REST without restarting
+- **Storage management** — Track downloaded model files, set hot ready / protected flags, configure automated cleanup, monitor disk usage and download progress with speed and ETA
 - **Telemetry** — System snapshots, inference history, swap history, and hardware info
-- **Live dashboard** — Browser-based UI at `/dashboard`
+- **Live dashboard** — Browser-based UI at `/dashboard` with storage bar, download progress, and model management
 - **CORS** — All responses include permissive CORS headers
 
 ---
@@ -52,6 +54,11 @@ The server supports:
 | `-v, --variant` | *(none)* | Default quantization variant (e.g., `Q4_K_M`) |
 | `--override-path` | *(none)* | Path to write runtime model config overrides (enables persistence) |
 | `--ram-budget` | `0` (auto 50%) | Ready-model RAM budget in MB |
+| `--models-dir` | `/models` | Directory where downloaded model files are stored |
+| `--storage-limit` | `0` (unlimited) | Maximum storage for model files (e.g., `50G`, `500M`). `0` = use all free disk space. |
+| `--cleanup-enabled` | `true` | Enable automated storage cleanup |
+| `--cleanup-max-age` | `720` | Max age in hours before a variant becomes a cleanup candidate (default: 30 days) |
+| `--cleanup-interval` | `24` | Hours between automated cleanup runs |
 | `--log-level` | `info` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
 | `-h, --help` | | Print usage |
 
@@ -69,6 +76,9 @@ The server supports:
 
 # Load a local model with a specific variant
 ./arbiterAI-server -m qwen2.5-7b-instruct -v Q4_K_M --ram-budget 8192
+
+# Limit model storage to 50 GB with cleanup every 12 hours
+./arbiterAI-server --models-dir /data/models --storage-limit 50G --cleanup-interval 12
 ```
 
 ---
@@ -328,6 +338,8 @@ Load a model into VRAM for inference.
 
 **Response (202):** `{"status": "downloading", "model": "qwen2.5-7b-instruct"}` — model file is being downloaded.
 
+**Response (507):** Insufficient storage — the model file won't fit within the configured storage limit. Includes `available_bytes`, `required_bytes`, and `storage_limit_bytes` for programmatic decision-making.
+
 #### `POST /api/models/:name/unload`
 
 Unload a model from VRAM. Pinned models move to `Ready` state instead.
@@ -354,16 +366,32 @@ Initiate a model download. Query parameter `variant` selects the quantization va
 
 **Response (202):** `{"status": "downloading", "model": "..."}` — download started.
 
+**Response (507):** Insufficient storage. Same format as the load endpoint.
+
 #### `GET /api/models/:name/download`
 
-Get download status for a model.
+Get download status for a model. Includes speed and ETA when download is active.
 
 **Response:**
 
 ```json
 {
   "model": "qwen2.5-7b-instruct",
-  "state": "Downloading"
+  "state": "Downloading",
+  "bytes_downloaded": 1250000000,
+  "total_bytes": 4680000000,
+  "percent_complete": 26.7,
+  "speed_mbps": 85.3,
+  "eta_seconds": 38
+}
+```
+
+When not downloading:
+
+```json
+{
+  "model": "qwen2.5-7b-instruct",
+  "state": "Loaded"
 }
 ```
 
@@ -650,7 +678,273 @@ Current hardware information (refreshed on each call).
 
 ---
 
-### 3.5 Health & Version
+### 3.5 Storage Management
+
+Manage downloaded model files on disk — track usage, set protection flags, configure automated cleanup, and monitor active downloads.
+
+#### Concepts
+
+- **Hot Ready** — Per-variant flag. Keeps model weights in system RAM after VRAM eviction for fast reload. Hot ready variants are protected from deletion.
+- **Protected** — Per-variant flag. Prevents deletion by both manual delete requests and automated cleanup. Must be cleared before the file can be removed.
+- **Guarded** — A variant is "guarded" if either hot ready or protected is set.
+
+#### `GET /api/storage`
+
+Current storage overview.
+
+**Response:**
+
+```json
+{
+  "models_directory": "/models",
+  "total_disk_bytes": 500107862016,
+  "free_disk_bytes": 350000000000,
+  "used_by_models_bytes": 12500000000,
+  "storage_limit_bytes": 53687091200,
+  "available_for_models_bytes": 41187091200,
+  "model_count": 3,
+  "cleanup_enabled": true
+}
+```
+
+#### `GET /api/storage/models`
+
+List all downloaded model files with usage statistics and flags.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `sort` | `last_used` | Sort by: `last_used`, `size`, `name`, `downloads` |
+
+**Response:**
+
+```json
+{
+  "models": [
+    {
+      "model": "qwen2.5-7b-instruct",
+      "variant": "Q4_K_M",
+      "filename": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "file_path": "/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "file_size_bytes": 4680000000,
+      "file_size_display": "4.4 GB",
+      "downloaded_at": "2025-01-15T10:30:00Z",
+      "last_used_at": "2025-01-20T14:22:00Z",
+      "usage_count": 47,
+      "hot_ready": true,
+      "protected": false,
+      "runtime_state": "Loaded"
+    }
+  ],
+  "total_count": 1,
+  "total_size_bytes": 4680000000
+}
+```
+
+#### `GET /api/storage/models/:name`
+
+Get storage stats for all variants of a model.
+
+**Response:**
+
+```json
+{
+  "model": "qwen2.5-7b-instruct",
+  "variants": [
+    {
+      "variant": "Q4_K_M",
+      "filename": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "file_size_bytes": 4680000000,
+      "usage_count": 47,
+      "hot_ready": true,
+      "protected": false
+    }
+  ]
+}
+```
+
+#### `GET /api/storage/models/:name/variants/:variant`
+
+Get storage stats for a specific variant.
+
+**Response (200):** Single variant object (same fields as above).
+
+**Response (404):** Variant not found.
+
+#### `PUT /api/storage/limit`
+
+Set the storage limit.
+
+**Request body:**
+
+```json
+{
+  "limit_bytes": 53687091200
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "storage_limit_bytes": 53687091200,
+  "available_for_models_bytes": 41187091200
+}
+```
+
+#### `DELETE /api/models/:name/files`
+
+Delete downloaded files for a model. Specify `variant` query parameter to delete a single variant, or omit to delete all variants.
+
+**Query parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `variant` | Specific variant to delete. Omit to delete all. |
+
+**Response (200):**
+
+```json
+{
+  "status": "deleted",
+  "model": "qwen2.5-7b-instruct",
+  "freed_bytes": 4680000000
+}
+```
+
+**Response (409):** Variant is guarded (hot ready or protected). Clear the flag first.
+
+```json
+{
+  "error": {
+    "message": "Cannot delete: variant is guarded (hot_ready or protected). Clear flags first.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": null
+  },
+  "hot_ready": true,
+  "protected": false
+}
+```
+
+**Response (404):** Model or variant not found.
+
+#### `POST /api/models/:name/variants/:variant/hot-ready`
+
+Enable hot ready for a variant.
+
+**Response (200):** `{"status": "hot_ready_set", "model": "...", "variant": "..."}`
+
+**Response (404):** Variant not found.
+
+#### `DELETE /api/models/:name/variants/:variant/hot-ready`
+
+Disable hot ready for a variant.
+
+**Response (200):** `{"status": "hot_ready_cleared", "model": "...", "variant": "..."}`
+
+#### `POST /api/models/:name/variants/:variant/protected`
+
+Enable protection for a variant.
+
+**Response (200):** `{"status": "protected_set", "model": "...", "variant": "..."}`
+
+**Response (404):** Variant not found.
+
+#### `DELETE /api/models/:name/variants/:variant/protected`
+
+Disable protection for a variant.
+
+**Response (200):** `{"status": "protected_cleared", "model": "...", "variant": "..."}`
+
+#### `GET /api/storage/cleanup/preview`
+
+Preview what automated cleanup would delete without actually deleting anything.
+
+**Response:**
+
+```json
+{
+  "candidate_count": 2,
+  "total_reclaimable_bytes": 12500000000,
+  "candidates": [
+    {
+      "model": "old-model",
+      "variant": "Q8_0",
+      "filename": "old-model-q8.gguf",
+      "file_size_bytes": 8100000000,
+      "last_used_at": "2024-12-01T00:00:00Z",
+      "usage_count": 3
+    }
+  ]
+}
+```
+
+#### `POST /api/storage/cleanup/run`
+
+Execute cleanup immediately. Deletes unguarded, unloaded variants that exceed the configured max age.
+
+**Response:**
+
+```json
+{
+  "freed_bytes": 8100000000,
+  "deleted_count": 1
+}
+```
+
+#### `GET /api/storage/cleanup/config`
+
+Get the current cleanup policy.
+
+**Response:**
+
+```json
+{
+  "enabled": true,
+  "max_age_hours": 720,
+  "check_interval_hours": 24,
+  "target_free_percent": 20.0,
+  "respect_hot_ready": true,
+  "respect_protected": true
+}
+```
+
+#### `PUT /api/storage/cleanup/config`
+
+Update the cleanup policy.
+
+**Request body:** Same format as the GET response. All fields are optional — only provided fields are updated.
+
+**Response (200):** Updated policy (same format as GET).
+
+#### `GET /api/downloads`
+
+List all active downloads with progress, speed, and ETA.
+
+**Response:**
+
+```json
+{
+  "downloads": [
+    {
+      "model": "qwen2.5-7b-instruct",
+      "variant": "Q4_K_M",
+      "state": "Downloading",
+      "bytes_downloaded": 1250000000,
+      "total_bytes": 4680000000,
+      "percent_complete": 26.7,
+      "speed_mbps": 85.3,
+      "eta_seconds": 38
+    }
+  ]
+}
+```
+
+---
+
+### 3.6 Health & Version
 
 #### `GET /health` (or `/v1/health`)
 
@@ -675,7 +969,7 @@ Library version.
 
 ---
 
-### 3.6 Dashboard
+### 3.7 Dashboard
 
 #### `GET /dashboard`
 
@@ -685,6 +979,10 @@ Returns an HTML page with a live-updating dashboard showing:
 - Loaded models with state, variant, context size, GPU assignment
 - Performance charts (tokens/sec, memory usage)
 - Model management controls (load/unload/pin)
+- **Downloaded models** — Storage bar (used/limit), table of all downloaded GGUF files with size, download date, last used, usage count, runtime state, and toggle buttons for hot ready / protected flags
+- **Download progress** — Active downloads with progress bar, bytes transferred, speed (MB/s), and ETA
+- **Row age coloring** — Fresh (green, <14 days), stale (yellow, 14–30 days), old (red, >30 days)
+- Model deletion (guarded variants show disabled delete button with tooltip)
 
 Open in a browser: `http://localhost:8080/dashboard`
 
@@ -760,8 +1058,9 @@ HTTP status codes:
 | `202` | Accepted (model downloading) |
 | `400` | Bad request / validation error |
 | `404` | Not found |
-| `409` | Conflict (model already exists on POST) |
+| `409` | Conflict (model already exists on POST, or variant is guarded on DELETE) |
 | `500` | Internal server error |
+| `507` | Insufficient storage (download or load rejected) |
 
 ---
 

@@ -87,6 +87,12 @@ public:
     /// Get model fit capabilities for all local models given current hardware.
     std::vector<ModelFit> getLocalModelCapabilities() const;
 
+    /// Get progress snapshots for all active downloads (with speed and ETA).
+    std::vector<DownloadProgressSnapshot> getActiveDownloadSnapshots();
+
+    /// Get a download progress snapshot for a specific model.
+    std::optional<DownloadProgressSnapshot> getDownloadSnapshot(const std::string &modelName);
+
     /// Set the RAM budget for "Ready" tier models (MB).
     void setReadyRamBudget(int mb);
 
@@ -153,7 +159,8 @@ private:
         const std::string &url,
         const std::string &filePath,
         const std::string &sha256,
-        const std::string &modelName);
+        const std::string &modelName,
+        const std::string &variant);
 
     std::map<std::string, LoadedModel> m_models;
     mutable std::mutex m_mutex;
