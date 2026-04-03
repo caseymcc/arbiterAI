@@ -104,11 +104,16 @@ ErrorCode ChatClient::completion(const CompletionRequest& request, CompletionRes
         }
 
         // Add assistant response to history
-        if (!response.text.empty())
+        // Must include tool_calls when present so tool results can reference them
+        if (!response.text.empty() || !response.toolCalls.empty())
         {
             Message assistantMsg;
             assistantMsg.role = "assistant";
             assistantMsg.content = response.text;
+            if (!response.toolCalls.empty())
+            {
+                assistantMsg.toolCalls = response.toolCalls;
+            }
             m_history.push_back(assistantMsg);
         }
 
