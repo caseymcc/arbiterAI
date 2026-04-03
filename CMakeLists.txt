@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(arbiterAI VERSION 0.1.7 LANGUAGES C CXX)
+project(arbiterAI VERSION 0.1.8 LANGUAGES C CXX)
 
 # Read llama-cpp build number from our custom vcpkg port
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/custom_ports/llama-cpp/vcpkg.json" LLAMA_PORT_JSON)
