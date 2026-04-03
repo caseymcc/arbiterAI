@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(arbiterAI VERSION 0.1.5 LANGUAGES C CXX)
+project(arbiterAI VERSION 0.1.6 LANGUAGES C CXX)
 
 # Generate version header from template
 configure_file(
