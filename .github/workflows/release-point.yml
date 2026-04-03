@@ -22,12 +22,43 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const commits = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+          // Method 1: Ask GitHub for PRs associated with this commit SHA.
+          // Works for regular merge commits and sometimes squash merges
+          // (the API can take a few seconds to index the association).
+          const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
             owner: context.repo.owner,
             repo: context.repo.repo,
             commit_sha: context.sha
           });
-          const merged = commits.data.filter(pr => pr.merged_at !== null);
+          let merged = assoc.data.filter(pr => pr.merged_at !== null);
+
+          // Method 2: Squash merges put "(#N)" in the commit message.
+          // If method 1 found nothing, parse the commit message and look up the PR directly.
+          if (merged.length === 0) {
+            const { data: commit } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha
+            });
+            const match = commit.commit.message.match(/\(#(\d+)\)/);
+            if (match) {
+              const prNumber = parseInt(match[1], 10);
+              core.info(`Commit message references PR #${prNumber} — checking if merged.`);
+              try {
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber
+                });
+                if (pr.merged_at !== null) {
+                  merged = [pr];
+                }
+              } catch (e) {
+                core.info(`Could not fetch PR #${prNumber}: ${e.message}`);
+              }
+            }
+          }
+
           if (merged.length === 0) {
             core.setOutput('is_pr_merge', 'false');
             core.info('Push is not from a merged PR — skipping release.');
