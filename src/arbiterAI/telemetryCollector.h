@@ -17,10 +17,14 @@ struct InferenceStats {
     std::string model;
     std::string variant;
     double tokensPerSecond=0.0;
+    double promptTokensPerSecond=0.0;     // prompt processing speed (tokens in / sec)
+    double generationTokensPerSecond=0.0; // generation speed (tokens out / sec)
     int promptTokens=0;
     int completionTokens=0;
     double latencyMs=0.0;      // time to first token
     double totalTimeMs=0.0;    // total request time
+    double promptTimeMs=0.0;   // time spent processing prompt
+    double generationTimeMs=0.0; // time spent generating tokens
     std::chrono::system_clock::time_point timestamp;
 };
 
@@ -35,6 +39,8 @@ struct SystemSnapshot {
     SystemInfo hardware;
     std::vector<LoadedModel> models;
     double avgTokensPerSecond=0.0;
+    double avgPromptTokensPerSecond=0.0;
+    double avgGenerationTokensPerSecond=0.0;
     int activeRequests=0;
 };
 

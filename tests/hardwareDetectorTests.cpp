@@ -404,4 +404,199 @@ TEST_F(ModelFitCalculatorTest, UnifiedMemoryFallbackToVramWhenNoAccessibleInfo)
     EXPECT_GT(fit.maxContextSize, 4096);
 }
 
+// --- VRAM Override tests ---
+
+class VramOverrideTest : public ::testing::Test
+{
+protected:
+    void TearDown() override
+    {
+        HardwareDetector::instance().clearAllVramOverrides();
+    }
+};
+
+TEST_F(VramOverrideTest, SetAndQueryOverride)
+{
+    HardwareDetector &hw=HardwareDetector::instance();
+
+    EXPECT_FALSE(hw.hasVramOverride(0));
+    EXPECT_EQ(hw.getVramOverride(0), 0);
+
+    hw.setVramOverride(0, 32000);
+
+    EXPECT_TRUE(hw.hasVramOverride(0));
+    EXPECT_EQ(hw.getVramOverride(0), 32000);
+}
+
+TEST_F(VramOverrideTest, ClearOverride)
+{
+    HardwareDetector &hw=HardwareDetector::instance();
+
+    hw.setVramOverride(0, 32000);
+    EXPECT_TRUE(hw.hasVramOverride(0));
+
+    hw.clearVramOverride(0);
+    EXPECT_FALSE(hw.hasVramOverride(0));
+    EXPECT_EQ(hw.getVramOverride(0), 0);
+}
+
+TEST_F(VramOverrideTest, ClearAllOverrides)
+{
+    HardwareDetector &hw=HardwareDetector::instance();
+
+    hw.setVramOverride(0, 32000);
+    hw.setVramOverride(1, 16000);
+    EXPECT_TRUE(hw.hasVramOverride(0));
+    EXPECT_TRUE(hw.hasVramOverride(1));
+
+    hw.clearAllVramOverrides();
+    EXPECT_FALSE(hw.hasVramOverride(0));
+    EXPECT_FALSE(hw.hasVramOverride(1));
+}
+
+TEST_F(VramOverrideTest, OverridePersistsAcrossRefresh)
+{
+    HardwareDetector &hw=HardwareDetector::instance();
+    std::vector<GpuInfo> gpus=hw.getGpus();
+
+    if(gpus.empty())
+    {
+        GTEST_SKIP()<<"No GPUs detected, cannot test override persistence";
+    }
+
+    int gpuIdx=gpus[0].index;
+    int overrideValue=12345;
+
+    hw.setVramOverride(gpuIdx, overrideValue);
+    hw.refresh();
+
+    SystemInfo info=hw.getSystemInfo();
+    ASSERT_FALSE(info.gpus.empty());
+
+    bool found=false;
+    for(const GpuInfo &gpu:info.gpus)
+    {
+        if(gpu.index==gpuIdx)
+        {
+            EXPECT_EQ(gpu.vramTotalMb, overrideValue);
+            EXPECT_LE(gpu.vramFreeMb, overrideValue);
+            EXPECT_TRUE(gpu.vramOverridden);
+            found=true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(VramOverrideTest, OverrideAppliedToGpuInfo)
+{
+    HardwareDetector &hw=HardwareDetector::instance();
+    std::vector<GpuInfo> gpus=hw.getGpus();
+
+    if(gpus.empty())
+    {
+        GTEST_SKIP()<<"No GPUs detected, cannot test override application";
+    }
+
+    int gpuIdx=gpus[0].index;
+    int originalTotal=gpus[0].vramTotalMb;
+    int overrideValue=originalTotal/2;
+
+    if(overrideValue<=0) overrideValue=1024;
+
+    hw.setVramOverride(gpuIdx, overrideValue);
+
+    SystemInfo info=hw.getSystemInfo();
+
+    for(const GpuInfo &gpu:info.gpus)
+    {
+        if(gpu.index==gpuIdx)
+        {
+            EXPECT_EQ(gpu.vramTotalMb, overrideValue);
+            EXPECT_TRUE(gpu.vramOverridden);
+            break;
+        }
+    }
+}
+
+TEST_F(VramOverrideTest, NonOverriddenGpuUnaffected)
+{
+    HardwareDetector &hw=HardwareDetector::instance();
+    std::vector<GpuInfo> gpus=hw.getGpus();
+
+    if(gpus.empty())
+    {
+        GTEST_SKIP()<<"No GPUs detected";
+    }
+
+    int gpuIdx=gpus[0].index;
+    int originalTotal=gpus[0].vramTotalMb;
+
+    // Override a non-existent GPU index
+    hw.setVramOverride(999, 99999);
+    hw.refresh();
+
+    SystemInfo info=hw.getSystemInfo();
+    for(const GpuInfo &gpu:info.gpus)
+    {
+        if(gpu.index==gpuIdx)
+        {
+            // Original GPU should be unaffected
+            EXPECT_FALSE(gpu.vramOverridden);
+            break;
+        }
+    }
+}
+
+TEST_F(VramOverrideTest, OverrideAffectsModelFitCalculation)
+{
+    GpuInfo gpu;
+    gpu.index=0;
+    gpu.name="Test GPU";
+    gpu.backend=GpuBackend::CUDA;
+    gpu.vramTotalMb=2000;
+    gpu.vramFreeMb=2000;
+
+    SystemInfo hw;
+    hw.totalRamMb=32000;
+    hw.freeRamMb=24000;
+    hw.cpuCores=8;
+    hw.gpus={gpu};
+
+    ModelInfo model;
+    model.model="test-model";
+    model.provider="llama";
+
+    HardwareRequirements hwReqs;
+    hwReqs.minSystemRamMb=8192;
+    hwReqs.parameterCount="7B";
+    model.hardwareRequirements=hwReqs;
+
+    ContextScaling scaling;
+    scaling.baseContext=4096;
+    scaling.maxContext=131072;
+    scaling.vramPer1kContextMb=64;
+    model.contextScaling=scaling;
+
+    ModelVariant variant;
+    variant.quantization="Q4_K_M";
+    variant.fileSizeMb=4370;
+    variant.minVramMb=4096;
+    variant.recommendedVramMb=8192;
+
+    // Without override: 2000 MB VRAM cannot fit 4096 minVram, CPU fallback gives base context
+    ModelFit fitBefore=ModelFitCalculator::calculateModelFit(model, variant, hw);
+    EXPECT_EQ(fitBefore.maxContextSize, 4096);
+
+    // Apply override: 16000 MB VRAM now fits model + allows extra context
+    hw.gpus[0].vramTotalMb=16000;
+    hw.gpus[0].vramFreeMb=16000;
+    hw.gpus[0].vramOverridden=true;
+
+    ModelFit fitAfter=ModelFitCalculator::calculateModelFit(model, variant, hw);
+
+    EXPECT_TRUE(fitAfter.canRun);
+    EXPECT_GT(fitAfter.maxContextSize, fitBefore.maxContextSize);
+}
+
 } // namespace arbiterAI

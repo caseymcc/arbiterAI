@@ -35,6 +35,33 @@ bool ModelInfo::isSchemaCompatible(const std::string &schemaVersion) const
            ModelManager::compareVersions(schemaVersion, configVersion) <= 0;
 }
 
+std::vector<VariantDownload> ModelVariant::getAllFiles() const
+{
+    if(!files.empty())
+    {
+        return files;
+    }
+    if(!download.filename.empty())
+    {
+        return {download};
+    }
+    return {};
+}
+
+std::string ModelVariant::getPrimaryFilename() const
+{
+    if(!files.empty())
+    {
+        return files.front().filename;
+    }
+    return download.filename;
+}
+
+bool ModelVariant::isSplit() const
+{
+    return files.size()>1;
+}
+
 ModelManager &ModelManager::instance()
 {
     static ModelManager instance;
@@ -297,6 +324,26 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
                 if(dl.contains("filename"))
                 {
                     variant.download.filename=dl["filename"].get<std::string>();
+                }
+            }
+            if(variantJson.contains("files")&&variantJson["files"].is_array())
+            {
+                for(const auto &fileJson:variantJson["files"])
+                {
+                    VariantDownload vd;
+                    if(fileJson.contains("url"))
+                    {
+                        vd.url=fileJson["url"].get<std::string>();
+                    }
+                    if(fileJson.contains("sha256"))
+                    {
+                        vd.sha256=fileJson["sha256"].get<std::string>();
+                    }
+                    if(fileJson.contains("filename"))
+                    {
+                        vd.filename=fileJson["filename"].get<std::string>();
+                    }
+                    variant.files.push_back(vd);
                 }
             }
             info.variants.push_back(variant);
@@ -736,6 +783,19 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
                     {"sha256", v.download.sha256},
                     {"filename", v.download.filename}
                 };
+            }
+            if(!v.files.empty())
+            {
+                nlohmann::json filesArr=nlohmann::json::array();
+                for(const VariantDownload &f:v.files)
+                {
+                    nlohmann::json fj;
+                    fj["url"]=f.url;
+                    fj["sha256"]=f.sha256;
+                    fj["filename"]=f.filename;
+                    filesArr.push_back(fj);
+                }
+                vj["files"]=filesArr;
             }
             variants.push_back(vj);
         }

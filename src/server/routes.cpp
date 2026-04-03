@@ -1,5 +1,6 @@
 #include "routes.h"
 #include "dashboard.h"
+#include "logBuffer.h"
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/modelManager.h"
@@ -71,13 +72,35 @@ nlohmann::json gpuInfoToJson(const GpuInfo &gpu)
         {"vram_free_mb", gpu.vramFreeMb},
         {"compute_capability", gpu.computeCapability},
         {"utilization_percent", gpu.utilizationPercent},
-        {"unified_memory", gpu.unifiedMemory}
+        {"unified_memory", gpu.unifiedMemory},
+        {"vram_overridden", gpu.vramOverridden}
     };
 
     if(gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0)
     {
         j["gpu_accessible_ram_mb"]=gpu.gpuAccessibleRamMb;
         j["gpu_accessible_ram_free_mb"]=gpu.gpuAccessibleRamFreeMb;
+    }
+
+    if(!gpu.memoryHeaps.empty())
+    {
+        nlohmann::json heaps=nlohmann::json::array();
+        for(const MemoryHeapInfo &heap:gpu.memoryHeaps)
+        {
+            nlohmann::json h={
+                {"index", heap.index},
+                {"device_local", heap.deviceLocal},
+                {"size_mb", heap.sizeMb}
+            };
+            if(gpu.hasMemoryBudget)
+            {
+                h["budget_mb"]=heap.budgetMb;
+                h["usage_mb"]=heap.usageMb;
+            }
+            heaps.push_back(h);
+        }
+        j["memory_heaps"]=heaps;
+        j["has_memory_budget"]=gpu.hasMemoryBudget;
     }
 
     return j;
@@ -129,6 +152,7 @@ nlohmann::json loadedModelToJson(const LoadedModel &m)
         {"ram_usage_mb", m.ramUsageMb},
         {"estimated_vram_mb", m.estimatedVramUsageMb},
         {"context_size", m.contextSize},
+        {"max_context_size", m.maxContextSize},
         {"gpu_indices", gpuIndices},
         {"pinned", m.pinned}
     };
@@ -140,10 +164,14 @@ nlohmann::json inferenceStatsToJson(const InferenceStats &s)
         {"model", s.model},
         {"variant", s.variant},
         {"tokens_per_second", s.tokensPerSecond},
+        {"prompt_tokens_per_second", s.promptTokensPerSecond},
+        {"generation_tokens_per_second", s.generationTokensPerSecond},
         {"prompt_tokens", s.promptTokens},
         {"completion_tokens", s.completionTokens},
         {"latency_ms", s.latencyMs},
-        {"total_time_ms", s.totalTimeMs}
+        {"total_time_ms", s.totalTimeMs},
+        {"prompt_time_ms", s.promptTimeMs},
+        {"generation_time_ms", s.generationTimeMs}
     };
 }
 
@@ -278,6 +306,11 @@ void registerRoutes(httplib::Server &server)
     server.Get("/api/stats/history", handleGetStatsHistory);
     server.Get("/api/stats/swaps", handleGetStatsSwaps);
     server.Get("/api/hardware", handleGetHardware);
+    server.Post("/api/hardware/vram-override", handleSetVramOverride);
+    server.Delete(R"(/api/hardware/vram-override/(\d+))", handleClearVramOverride);
+
+    // Logs
+    server.Get("/api/logs", handleGetLogs);
 
     // Storage management
     server.Get("/api/storage", handleGetStorage);
@@ -778,7 +811,8 @@ void handleGetVersion(const httplib::Request &, httplib::Response &res)
         {"version", ver.toString()},
         {"major", ver.major},
         {"minor", ver.minor},
-        {"patch", ver.patch}
+        {"patch", ver.patch},
+        {"llamaCppBuild", ver.llamaCppBuild}
     };
     res.set_content(j.dump(), "application/json");
 }
@@ -846,16 +880,48 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
         std::string variant;
         int contextSize=0;
 
+        // Accept parameters from query string
         if(req.has_param("variant"))
             variant=req.get_param_value("variant");
         if(req.has_param("context"))
             contextSize=std::stoi(req.get_param_value("context"));
 
+        // Also accept from JSON body (body takes precedence)
+        if(!req.body.empty())
+        {
+            try
+            {
+                nlohmann::json body=nlohmann::json::parse(req.body);
+                if(body.contains("variant")&&body["variant"].is_string())
+                    variant=body["variant"].get<std::string>();
+                if(body.contains("context")&&body["context"].is_number_integer())
+                    contextSize=body["context"].get<int>();
+                if(body.contains("context_size")&&body["context_size"].is_number_integer())
+                    contextSize=body["context_size"].get<int>();
+            }
+            catch(const nlohmann::json::parse_error &)
+            {
+                // Not JSON body — ignore, use query params
+            }
+        }
+
+        spdlog::info("Load request: model='{}' variant='{}' context={}", modelName, variant, contextSize);
+
         ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize);
 
         if(err==ErrorCode::Success)
         {
-            res.set_content(nlohmann::json{{"status", "loaded"}, {"model", modelName}}.dump(), "application/json");
+            // Include the actual context info in the response
+            nlohmann::json response={{"status", "loaded"}, {"model", modelName}};
+
+            std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(modelName);
+            if(state.has_value())
+            {
+                response["context_size"]=state->contextSize;
+                response["max_context_size"]=state->maxContextSize;
+            }
+
+            res.set_content(response.dump(), "application/json");
         }
         else if(err==ErrorCode::ModelDownloading)
         {
@@ -882,8 +948,88 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
         }
         else
         {
+            std::string errCode=errorCodeToString(err);
+            std::string reason;
+
+            switch(err)
+            {
+                case ErrorCode::ModelNotFound:
+                    reason="Model '"+modelName+"' is not defined in any loaded configuration file. "
+                        "Check that the model name matches a config entry and that the config path is correct.";
+                    break;
+                case ErrorCode::ModelLoadError:
+                {
+                    LoadErrorDetail detail=ModelRuntime::instance().getLastLoadError();
+                    reason=detail.summary;
+                    if(reason.empty())
+                    {
+                        reason="Failed to load model '"+modelName+"'";
+                        if(!variant.empty()) reason+=" variant '"+variant+"'";
+                        reason+=". Check the server log for details.";
+                    }
+                    break;
+                }
+                case ErrorCode::ModelDownloadFailed:
+                    reason="Download failed for model '"+modelName+"'";
+                    if(!variant.empty()) reason+=" variant '"+variant+"'";
+                    reason+=". The download URL may be unreachable or the SHA256 hash did not match.";
+                    break;
+                case ErrorCode::InvalidRequest:
+                    reason="Invalid request for model '"+modelName+"'. "
+                        "The model may be a local provider without variants defined.";
+                    break;
+                case ErrorCode::UnsupportedProvider:
+                    reason="The provider for model '"+modelName+"' is not supported or not enabled in this build.";
+                    break;
+                default:
+                    reason="Unexpected error loading model '"+modelName+"': "+errCode;
+                    break;
+            }
+
+            spdlog::warn("Load failed: model='{}' variant='{}' error={} — {}", modelName, variant, errCode, reason);
+
+            // Build detail payload; include structured error fields for programmatic handling
+            LoadErrorDetail loadDetail=ModelRuntime::instance().getLastLoadError();
+
+            nlohmann::json details={
+                {"model", modelName},
+                {"variant", variant.empty()?nlohmann::json(nullptr):nlohmann::json(variant)},
+                {"context_requested", contextSize},
+                {"error_code", errCode},
+                {"reason", loadFailureReasonToString(loadDetail.reason)},
+                {"recoverable", loadDetail.recoverable}
+            };
+
+            if(!loadDetail.action.empty())
+            {
+                details["action"]=loadDetail.action;
+            }
+            if(!loadDetail.suggestion.empty())
+            {
+                details["suggestion"]=loadDetail.suggestion;
+            }
+            if(!loadDetail.llamaLog.empty())
+            {
+                // Trim to a reasonable size for the response
+                std::string logSnippet=loadDetail.llamaLog;
+                if(logSnippet.size()>2000)
+                {
+                    logSnippet=logSnippet.substr(logSnippet.size()-2000);
+                }
+                details["llama_log"]=logSnippet;
+            }
+
+            nlohmann::json body={
+                {"error", {
+                    {"message", reason},
+                    {"type", "invalid_request_error"},
+                    {"code", errCode},
+                    {"param", "model"},
+                    {"details", details}
+                }}
+            };
             res.status=400;
-            res.set_content(errorJson("Failed to load model: "+errorCodeToString(err), "invalid_request_error", "model", errorCodeToString(err)).dump(), "application/json");
+            res.set_content(body.dump(), "application/json");
         }
     }
     catch(const std::exception &e)
@@ -949,12 +1095,11 @@ void handleDownloadModel(const httplib::Request &req, httplib::Response &res)
 {
     std::string modelName=req.matches[1];
 
-    // Initiate download via loadModel (which triggers download if file not present)
     std::string variant;
     if(req.has_param("variant"))
         variant=req.get_param_value("variant");
 
-    ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant);
+    ErrorCode err=ArbiterAI::instance().downloadModel(modelName, variant);
 
     if(err==ErrorCode::ModelDownloading)
     {
@@ -1238,6 +1383,8 @@ void handleGetStats(const httplib::Request &, httplib::Response &res)
         {"hardware", systemInfoToJson(snapshot.hardware)},
         {"models", models},
         {"avg_tokens_per_second", snapshot.avgTokensPerSecond},
+        {"avg_prompt_tokens_per_second", snapshot.avgPromptTokensPerSecond},
+        {"avg_generation_tokens_per_second", snapshot.avgGenerationTokensPerSecond},
         {"active_requests", snapshot.activeRequests}
     };
 
@@ -1286,6 +1433,66 @@ void handleGetHardware(const httplib::Request &, httplib::Response &res)
     res.set_content(systemInfoToJson(hw).dump(), "application/json");
 }
 
+void handleSetVramOverride(const httplib::Request &req, httplib::Response &res)
+{
+    nlohmann::json body;
+
+    try
+    {
+        body=nlohmann::json::parse(req.body);
+    }
+    catch(const std::exception &)
+    {
+        res.status=400;
+        res.set_content(R"({"error":"Invalid JSON body"})", "application/json");
+        return;
+    }
+
+    if(!body.contains("gpu_index")||!body.contains("vram_mb"))
+    {
+        res.status=400;
+        res.set_content(R"({"error":"Missing required fields: gpu_index, vram_mb"})", "application/json");
+        return;
+    }
+
+    int gpuIndex=body["gpu_index"].get<int>();
+    int vramMb=body["vram_mb"].get<int>();
+
+    if(vramMb<=0)
+    {
+        res.status=400;
+        res.set_content(R"({"error":"vram_mb must be positive"})", "application/json");
+        return;
+    }
+
+    HardwareDetector::instance().setVramOverride(gpuIndex, vramMb);
+
+    nlohmann::json result={
+        {"status", "ok"},
+        {"gpu_index", gpuIndex},
+        {"vram_mb", vramMb}
+    };
+
+    res.set_content(result.dump(), "application/json");
+}
+
+void handleClearVramOverride(const httplib::Request &req, httplib::Response &res)
+{
+    int gpuIndex=std::stoi(req.matches[1]);
+
+    HardwareDetector::instance().clearVramOverride(gpuIndex);
+
+    // Refresh to restore detected values
+    HardwareDetector::instance().refresh();
+
+    nlohmann::json result={
+        {"status", "ok"},
+        {"gpu_index", gpuIndex}
+    };
+
+    res.set_content(result.dump(), "application/json");
+}
+
 // ========== Storage Management ==========
 
 namespace
@@ -1323,7 +1530,7 @@ std::string timePointToIsoStr(const std::chrono::system_clock::time_point &tp)
 
 nlohmann::json downloadedModelToJson(const DownloadedModelFile &f)
 {
-    return {
+    nlohmann::json j={
         {"model", f.modelName},
         {"variant", f.variant},
         {"filename", f.filename},
@@ -1334,8 +1541,14 @@ nlohmann::json downloadedModelToJson(const DownloadedModelFile &f)
         {"usage_count", f.usageCount},
         {"hot_ready", f.hotReady},
         {"protected", f.isProtected},
-        {"runtime_state", f.runtimeState}
+        {"runtime_state", f.runtimeState},
+        {"file_count", 1+static_cast<int>(f.additionalFiles.size())}
     };
+    if(!f.additionalFiles.empty())
+    {
+        j["additional_files"]=f.additionalFiles;
+    }
+    return j;
 }
 
 } // anonymous namespace
@@ -1366,15 +1579,18 @@ void handleGetStorageModels(const httplib::Request &req, httplib::Response &res)
     std::string sortField=req.has_param("sort")?req.get_param_value("sort"):"last_used";
     std::string sortOrder=req.has_param("order")?req.get_param_value("order"):"desc";
 
+    bool ascending=(sortOrder=="asc");
+
     auto compare=[&](const DownloadedModelFile &a, const DownloadedModelFile &b) -> bool
     {
-        bool result=false;
-        if(sortField=="name") result=a.modelName<b.modelName;
-        else if(sortField=="size") result=a.fileSizeBytes<b.fileSizeBytes;
-        else if(sortField=="usage_count") result=a.usageCount<b.usageCount;
-        else result=a.lastUsedAt<b.lastUsedAt; // default: last_used
+        // For descending, swap a and b so strict weak ordering is maintained.
+        const DownloadedModelFile &lhs=ascending?a:b;
+        const DownloadedModelFile &rhs=ascending?b:a;
 
-        return sortOrder=="asc"?result:!result;
+        if(sortField=="name") return lhs.modelName<rhs.modelName;
+        if(sortField=="size") return lhs.fileSizeBytes<rhs.fileSizeBytes;
+        if(sortField=="usage_count") return lhs.usageCount<rhs.usageCount;
+        return lhs.lastUsedAt<rhs.lastUsedAt; // default: last_used
     };
 
     std::sort(models.begin(), models.end(), compare);
@@ -1495,8 +1711,24 @@ void handleDeleteModelFiles(const httplib::Request &req, httplib::Response &res)
         return;
     }
 
-    // Unload from ModelRuntime if loaded
+    // Reject deletion of models that are currently downloading
     std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(modelName);
+    if(state.has_value()&&state->state==ModelState::Downloading)
+    {
+        if(variant.empty()||state->variant==variant)
+        {
+            res.status=409;
+            res.set_content(nlohmann::json{
+                {"error", {
+                    {"message", "Cannot delete model '"+modelName+"': download is in progress"},
+                    {"type", "invalid_request_error"}
+                }}
+            }.dump(), "application/json");
+            return;
+        }
+    }
+
+    // Unload from ModelRuntime if loaded
     if(state.has_value()&&(state->state==ModelState::Loaded||state->state==ModelState::Ready))
     {
         if(variant.empty()||state->variant==variant)
@@ -1755,6 +1987,64 @@ void handleGetActiveDownloads(const httplib::Request &, httplib::Response &res)
     }
 
     res.set_content(nlohmann::json{{"downloads", downloads}}.dump(), "application/json");
+}
+
+// ========== Logs ==========
+
+void handleGetLogs(const httplib::Request &req, httplib::Response &res)
+{
+    auto &sink=logBufferSinkInstance();
+    if(!sink)
+    {
+        res.set_content(nlohmann::json{{"logs", nlohmann::json::array()}}.dump(), "application/json");
+        return;
+    }
+
+    size_t count=200;
+    std::string levelFilter;
+
+    if(req.has_param("count"))
+    {
+        count=static_cast<size_t>(std::stoi(req.get_param_value("count")));
+        if(count>1000) count=1000;
+    }
+    if(req.has_param("level"))
+    {
+        levelFilter=req.get_param_value("level");
+    }
+
+    std::deque<LogEntry> entries=sink->getEntries(count);
+
+    nlohmann::json logs=nlohmann::json::array();
+    for(const LogEntry &entry:entries)
+    {
+        if(!levelFilter.empty()&&entry.level!=levelFilter)
+            continue;
+
+        auto epochMs=std::chrono::duration_cast<std::chrono::milliseconds>(
+            entry.timestamp.time_since_epoch()).count();
+
+        // Format ISO timestamp
+        std::time_t t=std::chrono::system_clock::to_time_t(entry.timestamp);
+        std::tm tm{};
+        gmtime_r(&t, &tm);
+
+        auto ms=epochMs%1000;
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+
+        std::ostringstream ts;
+        ts<<buf<<"."<<std::setfill('0')<<std::setw(3)<<ms<<"Z";
+
+        logs.push_back({
+            {"timestamp", ts.str()},
+            {"epoch_ms", epochMs},
+            {"level", entry.level},
+            {"message", entry.message}
+        });
+    }
+
+    res.set_content(nlohmann::json{{"logs", logs}}.dump(), "application/json");
 }
 
 // ========== Dashboard ==========

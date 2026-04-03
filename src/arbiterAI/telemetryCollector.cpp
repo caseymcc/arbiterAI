@@ -70,6 +70,32 @@ SystemSnapshot TelemetryCollector::getSnapshot() const
     snapshot.avgTokensPerSecond=getAvgTokensPerSecond();
     snapshot.activeRequests=ModelRuntime::instance().isInferenceActive()?1:0;
 
+    // Calculate average prompt/generation speeds over last 5 minutes
+    std::chrono::system_clock::time_point cutoff=
+        std::chrono::system_clock::now()-std::chrono::minutes(5);
+    double promptSum=0.0, genSum=0.0;
+    int promptCount=0, genCount=0;
+
+    for(const InferenceStats &stat:m_inferenceHistory)
+    {
+        if(stat.timestamp>=cutoff)
+        {
+            if(stat.promptTokensPerSecond>0.0)
+            {
+                promptSum+=stat.promptTokensPerSecond;
+                promptCount++;
+            }
+            if(stat.generationTokensPerSecond>0.0)
+            {
+                genSum+=stat.generationTokensPerSecond;
+                genCount++;
+            }
+        }
+    }
+
+    snapshot.avgPromptTokensPerSecond=promptCount>0?(promptSum/promptCount):0.0;
+    snapshot.avgGenerationTokensPerSecond=genCount>0?(genSum/genCount):0.0;
+
     return snapshot;
 }
 

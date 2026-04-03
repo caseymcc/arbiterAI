@@ -201,7 +201,7 @@
                 },
                 "download": {
                   "type": "object",
-                  "description": "Download metadata for this variant",
+                  "description": "Download metadata for this variant (single file)",
                   "properties": {
                     "url": {
                       "type": "string",
@@ -219,6 +219,31 @@
                     }
                   },
                   "required": ["url", "filename"]
+                },
+                "files": {
+                  "type": "array",
+                  "description": "Download metadata for split/multi-shard GGUF variants. When present, takes precedence over the single download field.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri",
+                        "description": "Download URL for this shard"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "SHA256 checksum for this shard"
+                      },
+                      "filename": {
+                        "type": "string",
+                        "description": "Local filename for this shard"
+                      }
+                    },
+                    "required": ["url", "filename"]
+                  },
+                  "minItems": 1
                 }
               }
             }

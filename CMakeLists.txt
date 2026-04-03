@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 project(arbiterAI VERSION 0.1.6 LANGUAGES C CXX)
 
+# Read llama-cpp build number from our custom vcpkg port
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/custom_ports/llama-cpp/vcpkg.json" LLAMA_PORT_JSON)
+string(JSON ARBITERAI_LLAMACPP_BUILD GET "${LLAMA_PORT_JSON}" "version")
+
 # Generate version header from template
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/arbiterAI/version.h.in"
@@ -139,6 +143,7 @@ target_link_libraries(arbiterai
         tests/telemetryCollectorTests.cpp
         tests/llamaProviderTests.cpp
         tests/storageManagerTests.cpp
+        tests/serverConnectTests.cpp
     )
     
     target_link_libraries(arbiterai_tests
@@ -185,7 +190,6 @@ target_link_libraries(arbiterAI-server
     PRIVATE
         arbiterai
         httplib::httplib
-        cxxopts::cxxopts
         spdlog::spdlog
 )
 

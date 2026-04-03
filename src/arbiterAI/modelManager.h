@@ -45,7 +45,19 @@ struct ModelVariant {
     int fileSizeMb=0;
     int minVramMb=0;
     int recommendedVramMb=0;
-    VariantDownload download;
+    VariantDownload download; // Primary / single-file download (backward compat)
+    std::vector<VariantDownload> files; // All shard files (split GGUF). Empty = use download field.
+
+    /// Get the complete list of files to download for this variant.
+    /// Returns files if non-empty, otherwise a 1-element vector from download (if non-empty).
+    std::vector<VariantDownload> getAllFiles() const;
+
+    /// Get the primary filename (first shard / single file) used as the llama.cpp load path.
+    /// Returns empty string if no download info is configured.
+    std::string getPrimaryFilename() const;
+
+    /// Check whether this variant is a split (multi-file) GGUF.
+    bool isSplit() const;
 };
 
 struct Pricing
