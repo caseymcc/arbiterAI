@@ -51,9 +51,11 @@ ErrorCode Llama::completion(const CompletionRequest &request,
     std::string resultText;
     int promptTokens=0;
     int completionTokens=0;
+    double promptTimeMs=0.0;
+    double generationTimeMs=0.0;
 
     ErrorCode code=runInference(llamaModel, llamaCtx, request, model,
-        resultText, promptTokens, completionTokens, nullptr);
+        resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, nullptr);
 
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
     double totalTimeMs=std::chrono::duration<double, std::milli>(endTime-startTime).count();
@@ -79,7 +81,11 @@ ErrorCode Llama::completion(const CompletionRequest &request,
         stats.promptTokens=promptTokens;
         stats.completionTokens=completionTokens;
         stats.totalTimeMs=totalTimeMs;
+        stats.promptTimeMs=promptTimeMs;
+        stats.generationTimeMs=generationTimeMs;
         stats.tokensPerSecond=totalTimeMs>0.0?(completionTokens/(totalTimeMs/1000.0)):0.0;
+        stats.promptTokensPerSecond=promptTimeMs>0.0?(promptTokens/(promptTimeMs/1000.0)):0.0;
+        stats.generationTokensPerSecond=generationTimeMs>0.0?(completionTokens/(generationTimeMs/1000.0)):0.0;
         stats.timestamp=std::chrono::system_clock::now();
         TelemetryCollector::instance().recordInference(stats);
     }
@@ -120,9 +126,11 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     std::string resultText;
     int promptTokens=0;
     int completionTokens=0;
+    double promptTimeMs=0.0;
+    double generationTimeMs=0.0;
 
     ErrorCode code=runInference(llamaModel, llamaCtx, request, *modelInfo,
-        resultText, promptTokens, completionTokens, callback);
+        resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, callback);
 
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
     double totalTimeMs=std::chrono::duration<double, std::milli>(endTime-startTime).count();
@@ -139,7 +147,11 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
         stats.promptTokens=promptTokens;
         stats.completionTokens=completionTokens;
         stats.totalTimeMs=totalTimeMs;
+        stats.promptTimeMs=promptTimeMs;
+        stats.generationTimeMs=generationTimeMs;
         stats.tokensPerSecond=totalTimeMs>0.0?(completionTokens/(totalTimeMs/1000.0)):0.0;
+        stats.promptTokensPerSecond=promptTimeMs>0.0?(promptTokens/(promptTimeMs/1000.0)):0.0;
+        stats.generationTokensPerSecond=generationTimeMs>0.0?(completionTokens/(generationTimeMs/1000.0)):0.0;
         stats.timestamp=std::chrono::system_clock::now();
         TelemetryCollector::instance().recordInference(stats);
     }
@@ -331,6 +343,7 @@ std::string Llama::applyTemplate(llama_model *model,
 ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     std::string &result, int &promptTokens, int &completionTokens,
+    double &promptTimeMs, double &generationTimeMs,
     std::function<void(const std::string &)> streamCallback)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
@@ -358,7 +371,7 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     promptTokens=nTokens;
 
     // Clear KV cache for fresh inference
-    llama_kv_cache_clear(ctx);
+    llama_memory_clear(llama_get_memory(ctx), true);
 
     llama_batch batch=llama_batch_init(std::max(nTokens, 512), 0, 1);
 
@@ -374,13 +387,18 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     }
     batch.logits[batch.n_tokens-1]=1;
 
-    // Process prompt
+    // Process prompt (timed)
+    std::chrono::steady_clock::time_point promptStart=std::chrono::steady_clock::now();
+
     if(llama_decode(ctx, batch)!=0)
     {
         spdlog::error("llama_decode failed during prompt processing");
         llama_batch_free(batch);
         return ErrorCode::GenerationError;
     }
+
+    std::chrono::steady_clock::time_point promptEnd=std::chrono::steady_clock::now();
+    promptTimeMs=std::chrono::duration<double, std::milli>(promptEnd-promptStart).count();
 
     int maxOutputTokens=request.max_tokens.value_or(modelInfo.maxOutputTokens);
     int nCur=nTokens;
@@ -412,7 +430,9 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
         llama_sampler_accept(samplerChain, token);
     }
 
-    // Generation loop
+    // Generation loop (timed)
+    std::chrono::steady_clock::time_point genStart=std::chrono::steady_clock::now();
+
     for(int i=0; i<maxOutputTokens; ++i)
     {
         llama_token nextToken=llama_sampler_sample(samplerChain, ctx, -1);
@@ -477,6 +497,9 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
             return ErrorCode::GenerationError;
         }
     }
+
+    std::chrono::steady_clock::time_point genEnd=std::chrono::steady_clock::now();
+    generationTimeMs=std::chrono::duration<double, std::milli>(genEnd-genStart).count();
 
     llama_sampler_free(samplerChain);
     llama_batch_free(batch);

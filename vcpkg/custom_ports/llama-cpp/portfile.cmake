@@ -2,26 +2,26 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO ggml-org/llama.cpp
     REF b${VERSION}
-    SHA512 e093f4c7d4b2de425932bb4960683527a8a3bba242132c2f5e5bfed8480f0e336a06f97baf2d20ee591c6deee7535e159d40884a5e3f7caf0ae0967b8a046850
+    SHA512 b05f130a2052d3c2cec483c3b098f71585fe7d00fa1971786c0a646717f82320211801780625b9aabc9fc1e1797f8995381e40661f3e8a115c72710f147083cd
     HEAD_REF master
-    PATCHES
-        0001-external-ggml.patch
 )
-
-file(REMOVE_RECURSE "${SOURCE_PATH}/ggml")
 
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
       -DGGML_CCACHE=OFF
+      -DGGML_VULKAN=ON
       -DLLAMA_BUILD_TESTS=OFF
       -DLLAMA_BUILD_EXAMPLES=OFF
+      -DLLAMA_BUILD_TOOLS=OFF
+      -DLLAMA_BUILD_SERVER=OFF
       -DLLAMA_ALL_WARNINGS=OFF
       ${FEATURE_OPTIONS}
 )
 
 vcpkg_cmake_install()
-vcpkg_cmake_config_fixup(PACKAGE_NAME llama CONFIG_PATH "lib/cmake/llama")
+vcpkg_cmake_config_fixup(PACKAGE_NAME llama CONFIG_PATH "lib/cmake/llama" DO_NOT_DELETE_PARENT_CONFIG_PATH)
+vcpkg_cmake_config_fixup(PACKAGE_NAME ggml  CONFIG_PATH "lib/cmake/ggml")
 vcpkg_copy_pdbs()
 vcpkg_fixup_pkgconfig()
 

@@ -628,4 +628,178 @@ TEST_F(ModelManagerConfigInjectionTest, AddModelFromJson_AllOptionalFields)
     EXPECT_DOUBLE_EQ(info->pricing.completion_token_cost, 0.0006);
 }
 
+TEST_F(ModelManagerTest, ParseSplitGGUFVariant)
+{
+    std::filesystem::create_directory("config_split");
+    std::filesystem::create_directory("config_split/models");
+    std::ofstream outfile("config_split/models/split_model.json");
+    outfile << R"({
+        "models": [
+            {
+                "model": "big-model-120b",
+                "provider": "llama",
+                "variants": [
+                    {
+                        "quantization": "Q4_K_M",
+                        "file_size_mb": 70000,
+                        "min_vram_mb": 40000,
+                        "recommended_vram_mb": 48000,
+                        "download": {
+                            "url": "https://example.com/big-model-Q4_K_M-00001-of-00002.gguf",
+                            "sha256": "aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa1",
+                            "filename": "big-model-Q4_K_M-00001-of-00002.gguf"
+                        },
+                        "files": [
+                            {
+                                "url": "https://example.com/big-model-Q4_K_M-00001-of-00002.gguf",
+                                "sha256": "aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa1",
+                                "filename": "big-model-Q4_K_M-00001-of-00002.gguf"
+                            },
+                            {
+                                "url": "https://example.com/big-model-Q4_K_M-00002-of-00002.gguf",
+                                "sha256": "bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb2",
+                                "filename": "big-model-Q4_K_M-00002-of-00002.gguf"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    })";
+    outfile.close();
+
+    ModelManager &mm=ModelManager::instance();
+    mm.initialize({"config_split"});
+
+    auto model=mm.getModelInfo("big-model-120b");
+    ASSERT_TRUE(model.has_value());
+    ASSERT_EQ(model->variants.size(), 1u);
+
+    const ModelVariant &v=model->variants[0];
+    EXPECT_EQ(v.quantization, "Q4_K_M");
+    EXPECT_EQ(v.fileSizeMb, 70000);
+
+    // Single-file download field (backward compat)
+    EXPECT_EQ(v.download.url, "https://example.com/big-model-Q4_K_M-00001-of-00002.gguf");
+    EXPECT_EQ(v.download.filename, "big-model-Q4_K_M-00001-of-00002.gguf");
+
+    // Multi-file files array
+    ASSERT_EQ(v.files.size(), 2u);
+    EXPECT_EQ(v.files[0].filename, "big-model-Q4_K_M-00001-of-00002.gguf");
+    EXPECT_EQ(v.files[1].filename, "big-model-Q4_K_M-00002-of-00002.gguf");
+    EXPECT_EQ(v.files[1].sha256, "bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb2");
+
+    // Helper methods
+    EXPECT_TRUE(v.isSplit());
+    EXPECT_EQ(v.getPrimaryFilename(), "big-model-Q4_K_M-00001-of-00002.gguf");
+
+    std::vector<VariantDownload> allFiles=v.getAllFiles();
+    ASSERT_EQ(allFiles.size(), 2u);
+    EXPECT_EQ(allFiles[0].filename, "big-model-Q4_K_M-00001-of-00002.gguf");
+    EXPECT_EQ(allFiles[1].filename, "big-model-Q4_K_M-00002-of-00002.gguf");
+
+    std::filesystem::remove_all("config_split");
+}
+
+TEST_F(ModelManagerTest, SingleFileVariantBackwardCompat)
+{
+    // Single-file variant without "files" array should still work
+    ModelManager &mm=ModelManager::instance();
+    mm.initialize({"config1"});
+
+    auto model=mm.getModelInfo("model1");
+    ASSERT_TRUE(model.has_value());
+
+    // Build a single-file variant via JSON injection
+    nlohmann::json modelJson={
+        {"model", "single-file-model"},
+        {"provider", "llama"},
+        {"variants", {{
+            {"quantization", "Q8_0"},
+            {"file_size_mb", 8100},
+            {"min_vram_mb", 8192},
+            {"download", {
+                {"url", "https://example.com/single.gguf"},
+                {"sha256", "abc123def456abc123def456abc123def456abc123def456abc123def456abcd"},
+                {"filename", "single.gguf"}
+            }}
+        }}}
+    };
+
+    std::string error;
+    ASSERT_TRUE(mm.addModelFromJson(modelJson, error))<<error;
+
+    auto info=mm.getModelInfo("single-file-model");
+    ASSERT_TRUE(info.has_value());
+    ASSERT_EQ(info->variants.size(), 1u);
+
+    const ModelVariant &v=info->variants[0];
+
+    // files array should be empty
+    EXPECT_TRUE(v.files.empty());
+    EXPECT_FALSE(v.isSplit());
+
+    // getAllFiles() should fall back to the single download field
+    std::vector<VariantDownload> allFiles=v.getAllFiles();
+    ASSERT_EQ(allFiles.size(), 1u);
+    EXPECT_EQ(allFiles[0].filename, "single.gguf");
+    EXPECT_EQ(allFiles[0].url, "https://example.com/single.gguf");
+
+    // getPrimaryFilename() should return the single download filename
+    EXPECT_EQ(v.getPrimaryFilename(), "single.gguf");
+}
+
+TEST_F(ModelManagerTest, SplitVariantSerializationRoundTrip)
+{
+    nlohmann::json modelJson={
+        {"model", "roundtrip-split"},
+        {"provider", "llama"},
+        {"variants", {{
+            {"quantization", "Q4_K_M"},
+            {"file_size_mb", 70000},
+            {"min_vram_mb", 40000},
+            {"recommended_vram_mb", 48000},
+            {"download", {
+                {"url", "https://example.com/shard-00001-of-00003.gguf"},
+                {"sha256", "aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa1"},
+                {"filename", "shard-00001-of-00003.gguf"}
+            }},
+            {"files", {
+                {{"url", "https://example.com/shard-00001-of-00003.gguf"},
+                 {"sha256", "aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa1"},
+                 {"filename", "shard-00001-of-00003.gguf"}},
+                {{"url", "https://example.com/shard-00002-of-00003.gguf"},
+                 {"sha256", "bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb2"},
+                 {"filename", "shard-00002-of-00003.gguf"}},
+                {{"url", "https://example.com/shard-00003-of-00003.gguf"},
+                 {"sha256", "ccc333ccc333ccc333ccc333ccc333ccc333ccc333ccc333ccc333ccc333ccc3"},
+                 {"filename", "shard-00003-of-00003.gguf"}}
+            }}
+        }}}
+    };
+
+    ModelManager &mm=ModelManager::instance();
+    mm.initialize({"config1"});
+
+    std::string error;
+    ASSERT_TRUE(mm.addModelFromJson(modelJson, error))<<error;
+
+    auto info=mm.getModelInfo("roundtrip-split");
+    ASSERT_TRUE(info.has_value());
+
+    // Serialize back to JSON
+    nlohmann::json outputJson=ModelManager::modelInfoToJson(info.value());
+
+    // Verify files array is present in output
+    ASSERT_TRUE(outputJson.contains("variants"));
+    ASSERT_EQ(outputJson["variants"].size(), 1u);
+    ASSERT_TRUE(outputJson["variants"][0].contains("files"));
+    ASSERT_EQ(outputJson["variants"][0]["files"].size(), 3u);
+    EXPECT_EQ(outputJson["variants"][0]["files"][2]["filename"].get<std::string>(), "shard-00003-of-00003.gguf");
+
+    // Verify download field is also present (backward compat)
+    ASSERT_TRUE(outputJson["variants"][0].contains("download"));
+    EXPECT_EQ(outputJson["variants"][0]["download"]["filename"].get<std::string>(), "shard-00001-of-00003.gguf");
+}
+
 } // namespace arbiterAI

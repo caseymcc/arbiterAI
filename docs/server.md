@@ -12,8 +12,9 @@ Standalone HTTP server that wraps the ArbiterAI library, providing an OpenAI-com
    - [Model Config Injection](#33-model-config-injection)
    - [Telemetry](#34-telemetry)
    - [Storage Management](#35-storage-management)
-   - [Health & Version](#36-health--version)
-   - [Dashboard](#37-dashboard)
+   - [Logs](#36-logs)
+   - [Health & Version](#37-health--version)
+   - [Dashboard](#38-dashboard)
 4. [Configuration Persistence](#4-configuration-persistence)
 5. [Error Format](#5-error-format)
 
@@ -45,40 +46,94 @@ The server supports:
 
 ### CLI Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-p, --port` | `8080` | HTTP port |
-| `-H, --host` | `0.0.0.0` | Bind address |
-| `-c, --config` | `config` | Model config directory path(s) |
-| `-m, --model` | *(none)* | Default model to load on startup |
-| `-v, --variant` | *(none)* | Default quantization variant (e.g., `Q4_K_M`) |
-| `--override-path` | *(none)* | Path to write runtime model config overrides (enables persistence) |
-| `--ram-budget` | `0` (auto 50%) | Ready-model RAM budget in MB |
-| `--models-dir` | `/models` | Directory where downloaded model files are stored |
-| `--storage-limit` | `0` (unlimited) | Maximum storage for model files (e.g., `50G`, `500M`). `0` = use all free disk space. |
-| `--cleanup-enabled` | `true` | Enable automated storage cleanup |
-| `--cleanup-max-age` | `720` | Max age in hours before a variant becomes a cleanup candidate (default: 30 days) |
-| `--cleanup-interval` | `24` | Hours between automated cleanup runs |
-| `--log-level` | `info` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
-| `-h, --help` | | Print usage |
+The server accepts only two command-line options:
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config <path>` | Path to server configuration JSON file (**required**) |
+| `-h, --help` | Print usage |
+
+### Configuration File
+
+All server settings are defined in a JSON configuration file. See [`examples/server_config.json`](../examples/server_config.json) for a complete example.
+
+```json
+{
+    "host": "0.0.0.0",
+    "port": 8080,
+    "model_config_paths": ["config"],
+    "models_dir": "/models",
+    "default_model": "",
+    "default_variant": "",
+    "override_path": "",
+    "ram_budget_mb": 0,
+    "max_concurrent_downloads": 2,
+    "storage": {
+        "limit": "0",
+        "cleanup_enabled": true,
+        "cleanup_max_age_days": 30,
+        "cleanup_interval_hours": 24
+    },
+    "hardware": {
+        "vram_overrides": {
+            "0": 32000
+        }
+    },
+    "logging": {
+        "level": "info",
+        "directory": "",
+        "rotate_hour": 0,
+        "retain_days": 7
+    }
+}
+```
+
+#### Configuration Reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | `string` | `"0.0.0.0"` | Bind address |
+| `port` | `int` | `8080` | HTTP port |
+| `model_config_paths` | `string[]` | `["config"]` | Model config directory paths |
+| `models_dir` | `string` | `"/models"` | Directory for downloaded model files |
+| `default_model` | `string` | `""` | Model to load on startup |
+| `default_variant` | `string` | `""` | Default quantization variant (e.g., `Q4_K_M`) |
+| `override_path` | `string` | `""` | Path to write runtime model config overrides |
+| `ram_budget_mb` | `int` | `0` | Ready-model RAM budget in MB (`0` = auto 50%) |
+| `max_concurrent_downloads` | `int` | `2` | Maximum simultaneous model downloads |
+
+**`storage` object:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `string` | `"0"` | Max storage for model files (e.g., `"50G"`, `"500M"`). `"0"` = all free disk. |
+| `cleanup_enabled` | `bool` | `true` | Enable automated storage cleanup |
+| `cleanup_max_age_days` | `int` | `30` | Days since last use before cleanup candidacy |
+| `cleanup_interval_hours` | `int` | `24` | Hours between automated cleanup runs |
+
+**`hardware` object:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `vram_overrides` | `object` | `{}` | GPU index → VRAM MB overrides (e.g., `{"0": 32000}`) |
+
+**`logging` object:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `level` | `string` | `"info"` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
+| `directory` | `string` | `""` | Directory for log files (empty = console only) |
+| `rotate_hour` | `int` | `0` | Hour of day (0–23) to rotate log files |
+| `retain_days` | `int` | `7` | Number of daily log files to keep |
 
 ### Examples
 
 ```bash
-# Start with defaults
-./arbiterAI-server
+# Start with a config file
+./arbiterAI-server --config /etc/arbiterai/server_config.json
 
-# Custom port, load a model on startup
-./arbiterAI-server -p 9090 -m gpt-4 --log-level debug
-
-# Enable runtime config persistence
-./arbiterAI-server --override-path /data/overrides.json
-
-# Load a local model with a specific variant
-./arbiterAI-server -m qwen2.5-7b-instruct -v Q4_K_M --ram-budget 8192
-
-# Limit model storage to 50 GB with cleanup every 12 hours
-./arbiterAI-server --models-dir /data/models --storage-limit 50G --cleanup-interval 12
+# Short form
+./arbiterAI-server -c server_config.json
 ```
 
 ---
@@ -337,6 +392,56 @@ Load a model into VRAM for inference.
 **Response (200):** `{"status": "loaded", "model": "qwen2.5-7b-instruct"}`
 
 **Response (202):** `{"status": "downloading", "model": "qwen2.5-7b-instruct"}` — model file is being downloaded.
+
+**Response (400):** Model load failed. The response includes structured error details so callers can programmatically react to the failure.
+
+```json
+{
+  "error": {
+    "message": "Model architecture is not supported by this llama.cpp build",
+    "type": "invalid_request_error",
+    "code": "model_load_error",
+    "param": "model",
+    "details": {
+      "model": "qwen3.5-27b",
+      "variant": "Q4_K_M",
+      "context_requested": 4096,
+      "error_code": "model_load_error",
+      "reason": "unsupported_arch",
+      "recoverable": false,
+      "action": "update_server",
+      "suggestion": "Update the server to a newer version that supports this model architecture, or use a different model.",
+      "llama_log": "llama_model_load: error loading model architecture: unknown model architecture: 'qwen35'\nllama_model_load_from_file_impl: failed to load model"
+    }
+  }
+}
+```
+
+**`details.reason` values:**
+
+| Reason | Description | Recoverable |
+|--------|-------------|-------------|
+| `file_not_found` | GGUF file does not exist at the expected path | Yes |
+| `file_corrupt` | GGUF header invalid, bad magic, or file truncated | Yes |
+| `insufficient_vram` | Not enough GPU memory to load model at requested context | Yes |
+| `insufficient_ram` | Not enough system RAM | Yes |
+| `context_too_large` | Requested context size exceeds model or hardware limits | Yes |
+| `unsupported_arch` | Model architecture not supported by this llama.cpp build | No |
+| `backend_error` | Generic llama.cpp internal error | No |
+| `unknown` | Could not classify the failure | No |
+
+**`details.action` values:**
+
+| Action | Description |
+|--------|-------------|
+| `redownload` | Re-download the model file (file missing) |
+| `delete_and_redownload` | Delete the corrupt file, then re-download |
+| `reduce_context` | Retry with a smaller context size |
+| `use_smaller_variant` | Try a smaller quantization variant |
+| `update_server` | Update the server to a newer version |
+| `check_logs` | Inspect the `llama_log` field or server logs for details |
+
+**`details.recoverable`** is `true` when the caller can take an automated action (re-download, reduce context, switch variant) to resolve the failure. When `false`, human intervention or a server update is required.
 
 **Response (507):** Insufficient storage — the model file won't fit within the configured storage limit. Includes `available_bytes`, `required_bytes`, and `storage_limit_bytes` for programmatic decision-making.
 
@@ -944,7 +1049,45 @@ List all active downloads with progress, speed, and ETA.
 
 ---
 
-### 3.6 Health & Version
+### 3.6 Logs
+
+#### `GET /api/logs`
+
+Retrieve recent server log entries from the in-memory ring buffer. Useful for debugging model load failures, provider errors, and server behaviour without SSH access.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `count` | `200` | Number of log entries to return (max `1000`) |
+| `level` | *(all)* | Filter by minimum level: `trace`, `debug`, `info`, `warning`, `error`, `critical` |
+
+**Response:**
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2025-01-15T14:30:05.123Z",
+      "epoch_ms": 1736952605123,
+      "level": "info",
+      "message": "Loading model qwen2.5-7b-instruct variant Q4_K_M context 4096"
+    },
+    {
+      "timestamp": "2025-01-15T14:30:06.456Z",
+      "epoch_ms": 1736952606456,
+      "level": "error",
+      "message": "Model load failed: insufficient VRAM"
+    }
+  ]
+}
+```
+
+The ring buffer holds the most recent 1000 entries. Entries are returned in chronological order (oldest first). The dashboard polls this endpoint to display a live scrolling log panel.
+
+---
+
+### 3.7 Health & Version
 
 #### `GET /health` (or `/v1/health`)
 
@@ -969,7 +1112,7 @@ Library version.
 
 ---
 
-### 3.7 Dashboard
+### 3.8 Dashboard
 
 #### `GET /dashboard`
 
@@ -983,6 +1126,7 @@ Returns an HTML page with a live-updating dashboard showing:
 - **Download progress** — Active downloads with progress bar, bytes transferred, speed (MB/s), and ETA
 - **Row age coloring** — Fresh (green, <14 days), stale (yellow, 14–30 days), old (red, >30 days)
 - Model deletion (guarded variants show disabled delete button with tooltip)
+- **Server log panel** — Collapsible live-scrolling log viewer with level filtering (trace/debug/info/warning/error/critical) and auto-scroll toggle. Polls `/api/logs` every 2 seconds.
 
 Open in a browser: `http://localhost:8080/dashboard`
 

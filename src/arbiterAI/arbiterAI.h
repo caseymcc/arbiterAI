@@ -43,6 +43,7 @@ struct VersionInfo {
     int major;
     int minor;
     int patch;
+    std::string llamaCppBuild; ///< llama.cpp build number (e.g. "b8573")
 
     /// Returns the version as "major.minor.patch".
     std::string toString() const;
@@ -607,6 +608,30 @@ public:
      * @return ErrorCode indicating success, ModelDownloading, or failure
      */
     ErrorCode loadModel(const std::string &model, const std::string &variant="", int contextSize=0);
+
+    /**
+     * @brief Download model files without loading into VRAM
+     *
+     * Launches an async background download that respects the concurrent
+     * download limit.  Returns ModelDownloading on success (download started),
+     * Success if files are already present, or an error code.
+     * @param model Model name
+     * @param variant Quantization variant (empty = auto-select)
+     * @return ErrorCode::ModelDownloading, Success, ModelNotFound, InsufficientStorage
+     */
+    ErrorCode downloadModel(const std::string &model, const std::string &variant="");
+
+    /**
+     * @brief Set the maximum number of concurrent model downloads
+     * @param max Maximum concurrent downloads (minimum 1, default 2)
+     */
+    void setMaxConcurrentDownloads(int max);
+
+    /**
+     * @brief Get the current concurrent download limit
+     * @return Maximum concurrent downloads
+     */
+    int getMaxConcurrentDownloads() const;
 
     /**
      * @brief Unload a model from VRAM/RAM

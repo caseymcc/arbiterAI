@@ -20,68 +20,8 @@ ModelDownloader::ModelDownloader(std::shared_ptr<IFileVerifier> fileVerifier) : 
 
 std::future<bool> ModelDownloader::downloadModel(const std::string &downloadUrl, const std::string &filePathStr, const std::optional<std::string> &fileHash, const std::optional<std::string> &minVersion, const std::optional<std::string> &maxVersion)
 {
-    return std::async(std::launch::async, [this, downloadUrl, filePathStr, fileHash, minVersion, maxVersion]()
-        {
-            // Check version compatibility first
-            if(minVersion||maxVersion)
-            {
-                std::string clientVersion="1.0.0"; // TODO: Get from build config
-                if ((minVersion && ModelManager::compareVersions(clientVersion, *minVersion) < 0) ||
-                    (maxVersion && ModelManager::compareVersions(clientVersion, *maxVersion) > 0))
-                {
-                    spdlog::error("Version mismatch: client {} not compatible with model requirements (min: {}, max: {})",
-                        clientVersion, minVersion?*minVersion:"none", maxVersion?*maxVersion:"none");
-                    return false;
-                }
-            }
-
-            std::filesystem::path filePath(filePathStr);
-            if(std::filesystem::exists(filePath))
-            {
-                if(fileHash&&m_fileVerifier->verifyFile(filePath.string(), *fileHash))
-                {
-                    spdlog::info("Model already exists and is verified: {}", filePath.string());
-                    return true;
-                }
-            }
-
-            spdlog::info("Downloading model from {} to {}", downloadUrl, filePath.string());
-            cpr::Response r=cpr::Get(cpr::Url{ downloadUrl });
-            if(r.status_code!=200)
-            {
-                spdlog::error("Failed to download model. Status code: {}", r.status_code);
-                return false;
-            }
-
-            try
-            {
-                std::filesystem::create_directories(filePath.parent_path());
-                std::ofstream outFile(filePath, std::ios::binary);
-                outFile.write(r.text.c_str(), r.text.length());
-                outFile.close();
-            }
-            catch(const std::filesystem::filesystem_error &e)
-            {
-                spdlog::error("Failed to write model to file: {}. Error: {}", filePath.string(), e.what());
-                return false;
-            }
-
-            if(fileHash)
-            {
-                if(m_fileVerifier->verifyFile(filePath.string(), *fileHash))
-                {
-                    spdlog::info("Model downloaded and verified successfully: {}", filePath.string());
-                    return true;
-                }
-                else
-                {
-                    spdlog::error("SHA256 verification failed for: {}", filePath.string());
-                    return false;
-                }
-            }
-
-            return true;
-        });
+    // Delegate to downloadModelWithProgress with no callback or tracking name
+    return downloadModelWithProgress(downloadUrl, filePathStr, fileHash, nullptr, "", "");
 }
 
 
@@ -188,45 +128,36 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
     const std::string &variant)
 {
     // Create tracking state
-    auto downloadState = std::make_shared<ActiveDownload>();
-    downloadState->modelName = modelName.empty() ? filePathStr : modelName;
-    downloadState->variant = variant;
-    downloadState->status = DownloadStatus::Pending;
-    downloadState->startTime = std::chrono::steady_clock::now();
+    auto downloadState=std::make_shared<ActiveDownload>();
+    downloadState->modelName=modelName.empty()?filePathStr:modelName;
+    downloadState->variant=variant;
+    downloadState->status=DownloadStatus::Pending;
+    downloadState->startTime=std::chrono::steady_clock::now();
 
     {
         std::lock_guard<std::mutex> lock(m_downloadsMutex);
-        m_activeDownloads[downloadState->modelName] = downloadState;
+        m_activeDownloads[downloadState->modelName]=downloadState;
     }
 
     return std::async(std::launch::async, [this, downloadUrl, filePathStr, fileHash, progressCallback, downloadState]()
     {
-        downloadState->status = DownloadStatus::InProgress;
+        downloadState->status=DownloadStatus::InProgress;
         std::filesystem::path filePath(filePathStr);
 
         // Check if file already exists and is valid
-        if (std::filesystem::exists(filePath))
+        if(std::filesystem::exists(filePath))
         {
-            if (fileHash && m_fileVerifier->verifyFile(filePath.string(), *fileHash))
+            if(fileHash&&m_fileVerifier->verifyFile(filePath.string(), *fileHash))
             {
                 spdlog::info("Model already exists and is verified: {}", filePath.string());
-                downloadState->status = DownloadStatus::Completed;
-                downloadState->percentComplete = 100.0f;
-                if (progressCallback)
+                downloadState->status=DownloadStatus::Completed;
+                downloadState->percentComplete=100.0f;
+                if(progressCallback)
                 {
                     progressCallback(0, 0, 100.0f);
                 }
                 return true;
             }
-        }
-
-        // Check for partial download (resume support)
-        std::string partialPath = filePathStr + ".partial";
-        int64_t existingBytes = 0;
-        if (std::filesystem::exists(partialPath))
-        {
-            existingBytes = std::filesystem::file_size(partialPath);
-            spdlog::info("Found partial download with {} bytes", existingBytes);
         }
 
         spdlog::info("Downloading model from {} to {}", downloadUrl, filePath.string());
@@ -235,105 +166,149 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
         {
             std::filesystem::create_directories(filePath.parent_path());
         }
-        catch (const std::filesystem::filesystem_error &e)
+        catch(const std::filesystem::filesystem_error &e)
         {
             spdlog::error("Failed to create directory: {}", e.what());
-            downloadState->status = DownloadStatus::Failed;
-            downloadState->error = e.what();
+            downloadState->status=DownloadStatus::Failed;
+            downloadState->error=e.what();
             return false;
         }
 
-        // Use CPR with progress callback
-        cpr::Response r = cpr::Get(
+        // Stream directly to a .partial file on disk to avoid buffering the
+        // entire response body in RAM.  A 20 GB model download would otherwise
+        // require 20+ GB of heap, which caused OOM / heap corruption (SEGV).
+        std::string partialPath=filePathStr+".partial";
+
+        // Remove stale partial file so we start fresh
+        {
+            std::error_code ec;
+            std::filesystem::remove(partialPath, ec);
+        }
+
+        std::ofstream outFile(partialPath, std::ios::binary|std::ios::trunc);
+        if(!outFile.is_open())
+        {
+            spdlog::error("Failed to open partial file for writing: {}", partialPath);
+            downloadState->status=DownloadStatus::Failed;
+            downloadState->error="Failed to open "+partialPath;
+            return false;
+        }
+
+        bool writeError=false;
+
+        cpr::Response r=cpr::Get(
             cpr::Url{downloadUrl},
-            cpr::ProgressCallback([&downloadState, &progressCallback](cpr::cpr_off_t downloadTotal, 
-                                                                        cpr::cpr_off_t downloadNow,
-                                                                        cpr::cpr_off_t uploadTotal,
-                                                                        cpr::cpr_off_t uploadNow,
-                                                                        intptr_t userdata) -> bool
+            cpr::WriteCallback([&outFile, &writeError](const std::string_view &data, intptr_t) -> bool
             {
-                downloadState->bytesDownloaded = downloadNow;
-                downloadState->totalBytes = downloadTotal;
-                
-                float percent = 0.0f;
-                if (downloadTotal > 0)
+                outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
+                if(!outFile.good())
                 {
-                    percent = (static_cast<float>(downloadNow) / downloadTotal) * 100.0f;
+                    writeError=true;
+                    return false; // abort transfer
                 }
-                downloadState->percentComplete = percent;
+                return true;
+            }),
+            cpr::ProgressCallback([&downloadState, &progressCallback](cpr::cpr_off_t downloadTotal,
+                cpr::cpr_off_t downloadNow,
+                cpr::cpr_off_t uploadTotal,
+                cpr::cpr_off_t uploadNow,
+                intptr_t userdata) -> bool
+            {
+                (void)uploadTotal;
+                (void)uploadNow;
+                (void)userdata;
+
+                downloadState->bytesDownloaded=downloadNow;
+                downloadState->totalBytes=downloadTotal;
+
+                float percent=0.0f;
+                if(downloadTotal>0)
+                {
+                    percent=(static_cast<float>(downloadNow)/downloadTotal)*100.0f;
+                }
+                downloadState->percentComplete=percent;
 
                 // Record speed sample
                 {
                     std::lock_guard<std::mutex> lock(downloadState->speedMutex);
-                    auto now = std::chrono::steady_clock::now();
+                    std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now();
 
                     downloadState->speedSamples.push_back({now, downloadNow});
 
                     // Keep only last 10 seconds of samples
-                    auto cutoff = now - std::chrono::seconds(10);
-                    while(!downloadState->speedSamples.empty() && downloadState->speedSamples.front().first < cutoff)
+                    std::chrono::steady_clock::time_point cutoff=now-std::chrono::seconds(10);
+                    while(!downloadState->speedSamples.empty()&&downloadState->speedSamples.front().first<cutoff)
                     {
                         downloadState->speedSamples.pop_front();
                     }
                 }
-                
-                if (progressCallback)
+
+                if(progressCallback)
                 {
                     progressCallback(downloadNow, downloadTotal, percent);
                 }
-                
-                return true;  // Continue downloading
+
+                return true;
             })
         );
 
-        if (r.status_code != 200)
+        outFile.close();
+
+        if(writeError)
+        {
+            spdlog::error("Write error during download to {}", partialPath);
+            std::error_code ec;
+            std::filesystem::remove(partialPath, ec);
+            downloadState->status=DownloadStatus::Failed;
+            downloadState->error="Disk write error";
+            return false;
+        }
+
+        if(r.status_code!=200)
         {
             spdlog::error("Failed to download model. Status code: {}", r.status_code);
-            downloadState->status = DownloadStatus::Failed;
-            downloadState->error = "HTTP error: " + std::to_string(r.status_code);
+            std::error_code ec;
+            std::filesystem::remove(partialPath, ec);
+            downloadState->status=DownloadStatus::Failed;
+            downloadState->error="HTTP error: "+std::to_string(r.status_code);
             return false;
         }
 
-        try
+        // Rename .partial -> final path atomically
         {
-            std::ofstream outFile(filePath, std::ios::binary);
-            outFile.write(r.text.c_str(), r.text.length());
-            outFile.close();
-            
-            // Remove partial file if it exists
-            if (std::filesystem::exists(partialPath))
+            std::error_code ec;
+            std::filesystem::rename(partialPath, filePath, ec);
+            if(ec)
             {
-                std::filesystem::remove(partialPath);
+                spdlog::error("Failed to rename {} -> {}: {}", partialPath, filePath.string(), ec.message());
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="Failed to rename partial file";
+                return false;
             }
         }
-        catch (const std::filesystem::filesystem_error &e)
-        {
-            spdlog::error("Failed to write model to file: {}. Error: {}", filePath.string(), e.what());
-            downloadState->status = DownloadStatus::Failed;
-            downloadState->error = e.what();
-            return false;
-        }
 
-        if (fileHash)
+        if(fileHash)
         {
-            if (m_fileVerifier->verifyFile(filePath.string(), *fileHash))
+            if(m_fileVerifier->verifyFile(filePath.string(), *fileHash))
             {
                 spdlog::info("Model downloaded and verified successfully: {}", filePath.string());
-                downloadState->status = DownloadStatus::Completed;
-                downloadState->percentComplete = 100.0f;
+                downloadState->status=DownloadStatus::Completed;
+                downloadState->percentComplete=100.0f;
                 return true;
             }
             else
             {
                 spdlog::error("SHA256 verification failed for: {}", filePath.string());
-                downloadState->status = DownloadStatus::Failed;
-                downloadState->error = "SHA256 verification failed";
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="SHA256 verification failed";
                 return false;
             }
         }
 
-        downloadState->status = DownloadStatus::Completed;
-        downloadState->percentComplete = 100.0f;
+        spdlog::info("Model downloaded successfully: {}", filePath.string());
+        downloadState->status=DownloadStatus::Completed;
+        downloadState->percentComplete=100.0f;
         return true;
     });
 }

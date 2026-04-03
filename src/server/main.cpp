@@ -1,59 +1,168 @@
 #include "routes.h"
+#include "logBuffer.h"
 
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/hardwareDetector.h"
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/storageManager.h"
 
 #include <httplib.h>
-#include <cxxopts.hpp>
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/daily_file_sink.h>
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <filesystem>
 
+namespace
+{
+
+int64_t parseStorageLimit(const std::string &str)
+{
+    if(str.empty()||str=="0") return 0;
+
+    char suffix=str.back();
+    std::string numStr=str;
+
+    if(suffix=='G'||suffix=='g')
+    {
+        numStr.pop_back();
+        return static_cast<int64_t>(std::stod(numStr)*1073741824);
+    }
+    if(suffix=='M'||suffix=='m')
+    {
+        numStr.pop_back();
+        return static_cast<int64_t>(std::stod(numStr)*1048576);
+    }
+    if(suffix=='K'||suffix=='k')
+    {
+        numStr.pop_back();
+        return static_cast<int64_t>(std::stod(numStr)*1024);
+    }
+    return std::stoll(str);
+}
+
+void printUsage()
+{
+    std::cout<<"Usage: arbiterAI-server [options]\n"
+        "\n"
+        "Options:\n"
+        "  -c, --config <path>   Path to server configuration JSON file (required)\n"
+        "  -h, --help            Print this help message\n"
+        "\n"
+        "See examples/server_config.json for the configuration file format.\n";
+}
+
+} // anonymous namespace
+
 int main(int argc, char *argv[])
 {
-    cxxopts::Options options("arbiterAI-server", "ArbiterAI standalone server with OpenAI-compatible API");
+    // ── Parse CLI — only --config and --help ──────────────────────
+    std::string configPath;
 
-    options.add_options()
-        ("p,port", "HTTP port", cxxopts::value<int>()->default_value("8080"))
-        ("H,host", "Bind address", cxxopts::value<std::string>()->default_value("0.0.0.0"))
-        ("c,config", "Model config path(s)", cxxopts::value<std::vector<std::string>>()->default_value("config"))
-        ("m,model", "Default model to load on startup", cxxopts::value<std::string>()->default_value(""))
-        ("v,variant", "Default variant (e.g., Q4_K_M)", cxxopts::value<std::string>()->default_value(""))
-        ("override-path", "Path to write runtime model config overrides (enables persistence)", cxxopts::value<std::string>()->default_value(""))
-        ("ram-budget", "Ready model RAM budget in MB (0 = auto 50%)", cxxopts::value<int>()->default_value("0"))
-        ("models-dir", "Path to directory for downloaded model files", cxxopts::value<std::string>()->default_value("/models"))
-        ("storage-limit", "Maximum bytes for model storage (0 = all free, supports suffixes: 10G, 500M)", cxxopts::value<std::string>()->default_value("0"))
-        ("cleanup-enabled", "Enable automated storage cleanup", cxxopts::value<bool>()->default_value("true"))
-        ("cleanup-max-age", "Maximum days since last use before cleanup candidacy", cxxopts::value<int>()->default_value("30"))
-        ("cleanup-interval", "Hours between automated cleanup runs", cxxopts::value<int>()->default_value("24"))
-        ("log-level", "Log level (trace, debug, info, warn, error)", cxxopts::value<std::string>()->default_value("info"))
-        ("h,help", "Print usage");
-
-    cxxopts::ParseResult result;
-
-    try
+    for(int i=1; i<argc; ++i)
     {
-        result=options.parse(argc, argv);
+        std::string arg=argv[i];
+
+        if(arg=="-h"||arg=="--help")
+        {
+            printUsage();
+            return 0;
+        }
+        if((arg=="-c"||arg=="--config")&&i+1<argc)
+        {
+            configPath=argv[++i];
+        }
+        else if(arg.rfind("--config=", 0)==0)
+        {
+            configPath=arg.substr(9);
+        }
+        else
+        {
+            std::cerr<<"Unknown argument: "<<arg<<"\n";
+            printUsage();
+            return 1;
+        }
     }
-    catch(const cxxopts::exceptions::exception &e)
+
+    if(configPath.empty())
     {
-        std::cerr<<"Error parsing options: "<<e.what()<<std::endl;
-        std::cout<<options.help()<<std::endl;
+        std::cerr<<"Error: --config <path> is required.\n\n";
+        printUsage();
         return 1;
     }
 
-    if(result.count("help"))
+    // ── Load config file ─────────────────────────────────────────
+    nlohmann::json cfg;
+
+    try
     {
-        std::cout<<options.help()<<std::endl;
-        return 0;
+        std::ifstream file(configPath);
+
+        if(!file.is_open())
+        {
+            std::cerr<<"Error: cannot open config file: "<<configPath<<"\n";
+            return 1;
+        }
+
+        cfg=nlohmann::json::parse(file, nullptr, true, true);
+    }
+    catch(const std::exception &e)
+    {
+        std::cerr<<"Error parsing config file: "<<e.what()<<"\n";
+        return 1;
     }
 
-    // Configure logging
-    std::string logLevel=result["log-level"].as<std::string>();
+    // ── Extract settings with defaults ───────────────────────────
+    std::string host=cfg.value("host", "0.0.0.0");
+    int port=cfg.value("port", 8080);
+
+    std::vector<std::string> modelConfigPaths;
+    if(cfg.contains("model_config_paths")&&cfg["model_config_paths"].is_array())
+    {
+        for(const nlohmann::json &p:cfg["model_config_paths"])
+        {
+            modelConfigPaths.push_back(p.get<std::string>());
+        }
+    }
+    if(modelConfigPaths.empty())
+    {
+        modelConfigPaths.push_back("config");
+    }
+
+    std::string modelsDir=cfg.value("models_dir", "/models");
+    std::string defaultModel=cfg.value("default_model", "");
+    std::string defaultVariant=cfg.value("default_variant", "");
+    std::string overridePath=cfg.value("override_path", "");
+    int ramBudget=cfg.value("ram_budget_mb", 0);
+    int maxDownloads=cfg.value("max_concurrent_downloads", 2);
+
+    // Storage
+    nlohmann::json storageCfg=cfg.value("storage", nlohmann::json::object());
+    std::string storageLimitStr=storageCfg.value("limit", "0");
+    bool cleanupEnabled=storageCfg.value("cleanup_enabled", true);
+    int cleanupMaxAgeDays=storageCfg.value("cleanup_max_age_days", 30);
+    int cleanupIntervalHours=storageCfg.value("cleanup_interval_hours", 24);
+
+    // Hardware
+    nlohmann::json hwCfg=cfg.value("hardware", nlohmann::json::object());
+    nlohmann::json vramOverrides=hwCfg.value("vram_overrides", nlohmann::json::object());
+
+    // Logging
+    nlohmann::json logCfg=cfg.value("logging", nlohmann::json::object());
+    std::string logLevel=logCfg.value("level", "info");
+    std::string logDir=logCfg.value("directory", "");
+    int logRotateHour=logCfg.value("rotate_hour", 0);
+    int logRetainDays=logCfg.value("retain_days", 7);
+
+    if(logRotateHour<0||logRotateHour>23) logRotateHour=0;
+    if(logRetainDays<1) logRetainDays=1;
+
+    // ── Configure logging ────────────────────────────────────────
     if(logLevel=="trace")       spdlog::set_level(spdlog::level::trace);
     else if(logLevel=="debug")  spdlog::set_level(spdlog::level::debug);
     else if(logLevel=="info")   spdlog::set_level(spdlog::level::info);
@@ -61,59 +170,47 @@ int main(int argc, char *argv[])
     else if(logLevel=="error")  spdlog::set_level(spdlog::level::err);
     else                        spdlog::set_level(spdlog::level::info);
 
-    int port=result["port"].as<int>();
-    std::string host=result["host"].as<std::string>();
-    std::vector<std::string> configStrs=result["config"].as<std::vector<std::string>>();
-    std::string defaultModel=result["model"].as<std::string>();
-    std::string defaultVariant=result["variant"].as<std::string>();
-    std::string overridePath=result["override-path"].as<std::string>();
-    int ramBudget=result["ram-budget"].as<int>();
-    std::string modelsDir=result["models-dir"].as<std::string>();
-    std::string storageLimitStr=result["storage-limit"].as<std::string>();
-    bool cleanupEnabled=result["cleanup-enabled"].as<bool>();
-    int cleanupMaxAgeDays=result["cleanup-max-age"].as<int>();
-    int cleanupIntervalHours=result["cleanup-interval"].as<int>();
+    auto consoleSink=std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    auto bufferSink=std::make_shared<arbiterAI::server::LogBufferSink>(1000);
+    arbiterAI::server::logBufferSinkInstance()=bufferSink;
 
-    // Parse storage limit (supports suffixes: G, M, K)
-    int64_t storageLimitBytes=0;
-    if(!storageLimitStr.empty()&&storageLimitStr!="0")
+    std::vector<spdlog::sink_ptr> sinks{consoleSink, bufferSink};
+
+    if(!logDir.empty())
     {
-        char suffix=storageLimitStr.back();
-        std::string numStr=storageLimitStr;
+        std::filesystem::create_directories(logDir);
+        std::string logPath=logDir+"/arbiterAI-server.log";
 
-        if(suffix=='G'||suffix=='g')
-        {
-            numStr.pop_back();
-            storageLimitBytes=static_cast<int64_t>(std::stod(numStr)*1073741824);
-        }
-        else if(suffix=='M'||suffix=='m')
-        {
-            numStr.pop_back();
-            storageLimitBytes=static_cast<int64_t>(std::stod(numStr)*1048576);
-        }
-        else if(suffix=='K'||suffix=='k')
-        {
-            numStr.pop_back();
-            storageLimitBytes=static_cast<int64_t>(std::stod(numStr)*1024);
-        }
-        else
-        {
-            storageLimitBytes=std::stoll(storageLimitStr);
-        }
+        auto fileSink=std::make_shared<spdlog::sinks::daily_file_sink_mt>(
+            logPath, logRotateHour, 0, false,
+            static_cast<uint16_t>(logRetainDays));
+        sinks.push_back(fileSink);
     }
 
-    // Convert config paths
-    std::vector<std::filesystem::path> configPaths;
-    for(const std::string &s:configStrs)
+    auto logger=std::make_shared<spdlog::logger>("arbiterAI",
+        sinks.begin(), sinks.end());
+    logger->set_level(spdlog::get_level());
+    spdlog::set_default_logger(logger);
+
+    spdlog::info("Loaded config from: {}", configPath);
+
+    if(!logDir.empty())
     {
-        configPaths.push_back(s);
+        spdlog::info("File logging enabled: dir={}, rotate at {:02d}:00, retain {} days",
+            logDir, logRotateHour, logRetainDays);
+    }
+
+    // ── Initialize ArbiterAI ─────────────────────────────────────
+    std::vector<std::filesystem::path> fsPaths;
+    for(const std::string &s:modelConfigPaths)
+    {
+        fsPaths.push_back(s);
     }
 
     spdlog::info("Initializing ArbiterAI...");
 
-    // Initialize ArbiterAI
     arbiterAI::ArbiterAI &ai=arbiterAI::ArbiterAI::instance();
-    arbiterAI::ErrorCode err=ai.initialize(configPaths);
+    arbiterAI::ErrorCode err=ai.initialize(fsPaths);
 
     if(err!=arbiterAI::ErrorCode::Success)
     {
@@ -123,7 +220,22 @@ int main(int argc, char *argv[])
 
     spdlog::info("ArbiterAI initialized successfully");
 
-    // Configure StorageManager
+    // ── Apply VRAM overrides ─────────────────────────────────────
+    for(auto it=vramOverrides.begin(); it!=vramOverrides.end(); ++it)
+    {
+        int gpuIndex=std::stoi(it.key());
+        int vramMb=it.value().get<int>();
+
+        if(vramMb>0)
+        {
+            arbiterAI::HardwareDetector::instance().setVramOverride(gpuIndex, vramMb);
+            spdlog::info("VRAM override set for GPU {}: {} MB", gpuIndex, vramMb);
+        }
+    }
+
+    // ── Configure StorageManager ─────────────────────────────────
+    int64_t storageLimitBytes=parseStorageLimit(storageLimitStr);
+
     arbiterAI::StorageManager &storage=arbiterAI::StorageManager::instance();
     storage.initialize(modelsDir);
 
@@ -141,14 +253,21 @@ int main(int argc, char *argv[])
     spdlog::info("Cleanup policy: enabled={}, maxAge={}d, interval={}h",
         cleanupEnabled, cleanupMaxAgeDays, cleanupIntervalHours);
 
-    // Set RAM budget if specified
+    // ── RAM budget ───────────────────────────────────────────────
     if(ramBudget>0)
     {
         arbiterAI::ModelRuntime::instance().setReadyRamBudget(ramBudget);
         spdlog::info("Ready model RAM budget set to {} MB", ramBudget);
     }
 
-    // Load default model if specified
+    // ── Concurrent download limit ────────────────────────────────
+    if(maxDownloads>0)
+    {
+        arbiterAI::ModelRuntime::instance().setMaxConcurrentDownloads(maxDownloads);
+        spdlog::info("Max concurrent downloads set to {}", maxDownloads);
+    }
+
+    // ── Load default model ───────────────────────────────────────
     if(!defaultModel.empty())
     {
         spdlog::info("Loading default model: {} (variant: {})", defaultModel, defaultVariant.empty()?"auto":defaultVariant);
@@ -168,20 +287,17 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Create HTTP server
+    // ── HTTP server ──────────────────────────────────────────────
     httplib::Server server;
 
-    // Register routes
     arbiterAI::server::registerRoutes(server);
 
-    // Set override path for runtime model config persistence
     if(!overridePath.empty())
     {
         arbiterAI::server::setOverridePath(overridePath);
         spdlog::info("Runtime model config overrides will be saved to: {}", overridePath);
     }
 
-    // Log available endpoints
     spdlog::info("Server endpoints:");
     spdlog::info("  GET  /health                - Health check");
     spdlog::info("  POST /v1/chat/completions   - Chat completions (OpenAI-compatible)");
@@ -202,6 +318,8 @@ int main(int argc, char *argv[])
     spdlog::info("  GET  /api/stats/history      - Inference history");
     spdlog::info("  GET  /api/stats/swaps        - Swap history");
     spdlog::info("  GET  /api/hardware           - Hardware info");
+    spdlog::info("  POST /api/hardware/vram-override  - Set VRAM override");
+    spdlog::info("  DEL  /api/hardware/vram-override/:idx - Clear VRAM override");
     spdlog::info("  GET  /api/storage            - Storage overview");
     spdlog::info("  GET  /api/storage/models     - Downloaded models");
     spdlog::info("  GET  /api/storage/models/:n  - Model storage stats");

@@ -4,10 +4,12 @@
 #include "arbiterAI/storageManager.h"
 
 #include <llama.h>
+#include <ggml.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <filesystem>
 #include <thread>
+#include <regex>
 
 namespace arbiterAI
 {
@@ -21,7 +23,28 @@ ModelRuntime &ModelRuntime::instance()
 void ModelRuntime::reset()
 {
     ModelRuntime &rt=instance();
+
+    // Signal all background download threads to stop waiting
+    {
+        std::lock_guard<std::mutex> lock(rt.m_mutex);
+        rt.m_shuttingDown=true;
+        rt.m_downloadCv.notify_all();
+    }
+
+    for(std::thread &t:rt.m_downloadThreads)
+    {
+        if(t.joinable())
+        {
+            t.join();
+        }
+    }
+
     std::lock_guard<std::mutex> lock(rt.m_mutex);
+
+    rt.m_downloadThreads.clear();
+    rt.m_activeDownloadCount=0;
+    rt.m_maxConcurrentDownloads=2;
+    rt.m_shuttingDown=false;
 
     // Free all llama.cpp resources
     for(auto &pair:rt.m_models)
@@ -49,12 +72,239 @@ ModelRuntime::ModelRuntime()
     m_readyRamBudgetMb=hw.totalRamMb/2;
 }
 
+// ---- llama.cpp log capture ------------------------------------------------
+
+// Thread-local pointer to the active ModelRuntime capturing logs.
+// Only one load happens at a time (under m_mutex), so this is safe.
+static ModelRuntime *s_capturingInstance=nullptr;
+
+static void llamaLogCallback(enum ggml_log_level level, const char *text, void *userData)
+{
+    (void)userData;
+    ModelRuntime *rt=s_capturingInstance;
+    if(rt)
+    {
+        rt->appendLlamaLog(text);
+    }
+
+    // Also forward to spdlog so logs still appear in the server log
+    if(text)
+    {
+        std::string msg(text);
+        // Strip trailing newline for spdlog
+        while(!msg.empty()&&(msg.back()=='\n'||msg.back()=='\r'))
+        {
+            msg.pop_back();
+        }
+        if(msg.empty()) return;
+
+        switch(level)
+        {
+            case GGML_LOG_LEVEL_ERROR:
+                spdlog::error("[llama] {}", msg);
+                break;
+            case GGML_LOG_LEVEL_WARN:
+                spdlog::warn("[llama] {}", msg);
+                break;
+            case GGML_LOG_LEVEL_DEBUG:
+                spdlog::debug("[llama] {}", msg);
+                break;
+            default:
+                spdlog::info("[llama] {}", msg);
+                break;
+        }
+    }
+}
+
+void ModelRuntime::appendLlamaLog(const char *text)
+{
+    if(m_capturingLlamaLog&&text)
+    {
+        m_llamaLogCapture<<text;
+    }
+}
+
+void ModelRuntime::beginLlamaLogCapture()
+{
+    m_llamaLogCapture.str("");
+    m_llamaLogCapture.clear();
+    m_capturingLlamaLog=true;
+    s_capturingInstance=this;
+    llama_log_set(llamaLogCallback, nullptr);
+}
+
+void ModelRuntime::endLlamaLogCapture()
+{
+    m_capturingLlamaLog=false;
+    s_capturingInstance=nullptr;
+    llama_log_set(llamaLogCallback, nullptr); // keep forwarding to spdlog
+}
+
+const char *loadFailureReasonToString(LoadFailureReason reason)
+{
+    switch(reason)
+    {
+        case LoadFailureReason::FileNotFound:     return "file_not_found";
+        case LoadFailureReason::FileCorrupt:       return "file_corrupt";
+        case LoadFailureReason::InsufficientVram:  return "insufficient_vram";
+        case LoadFailureReason::InsufficientRam:   return "insufficient_ram";
+        case LoadFailureReason::ContextTooLarge:   return "context_too_large";
+        case LoadFailureReason::UnsupportedArch:   return "unsupported_arch";
+        case LoadFailureReason::BackendError:      return "backend_error";
+        default:                                   return "unknown";
+    }
+}
+
+LoadErrorDetail ModelRuntime::classifyLoadFailure(
+    const std::string &llamaLog,
+    const std::string &model,
+    const std::string &filePath,
+    int contextSize) const
+{
+    LoadErrorDetail detail;
+    detail.llamaLog=llamaLog;
+
+    std::string logLower=llamaLog;
+    std::transform(logLower.begin(), logLower.end(), logLower.begin(), ::tolower);
+
+    // Check for file-not-found / failed-to-open
+    if(logLower.find("failed to open")!=std::string::npos||
+        logLower.find("no such file")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::FileNotFound;
+        detail.summary="Model file not found: "+filePath;
+        detail.suggestion="The GGUF file does not exist at the expected path. "
+            "Re-download the model or verify the file path in the model configuration.";
+        detail.action="redownload";
+        detail.recoverable=true;
+        return detail;
+    }
+
+    // Check for corrupt / truncated GGUF
+    if(logLower.find("invalid magic")!=std::string::npos||
+        logLower.find("gguf_init")!=std::string::npos&&logLower.find("fail")!=std::string::npos||
+        logLower.find("unexpected end")!=std::string::npos||
+        logLower.find("truncated")!=std::string::npos||
+        logLower.find("invalid header")!=std::string::npos||
+        logLower.find("bad magic")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::FileCorrupt;
+        detail.summary="Model file appears corrupt or truncated: "+filePath;
+        detail.suggestion="Delete the file and re-download it. "
+            "The download may have been interrupted or the file was partially written.";
+        detail.action="delete_and_redownload";
+        detail.recoverable=true;
+        return detail;
+    }
+
+    // Check for VRAM / GPU memory allocation failures
+    if(logLower.find("out of memory")!=std::string::npos||
+        logLower.find("cuda error")!=std::string::npos||
+        logLower.find("cudamalloc")!=std::string::npos||
+        logLower.find("not enough vram")!=std::string::npos||
+        logLower.find("vk_error_out_of_device_memory")!=std::string::npos||
+        logLower.find("failed to allocate")!=std::string::npos&&logLower.find("buffer")!=std::string::npos||
+        logLower.find("ggml_backend_cuda")!=std::string::npos&&logLower.find("error")!=std::string::npos||
+        logLower.find("ggml_cuda_error")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::InsufficientVram;
+        detail.summary="Insufficient GPU memory to load model with context size "+std::to_string(contextSize);
+        detail.suggestion="Try reducing the context size, use a smaller quantization variant, "
+            "or unload other models to free VRAM.";
+        detail.action="reduce_context";
+        detail.recoverable=true;
+        return detail;
+    }
+
+    // Check for RAM allocation failures
+    if(logLower.find("bad_alloc")!=std::string::npos||
+        logLower.find("cannot allocate memory")!=std::string::npos||
+        logLower.find("enomem")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::InsufficientRam;
+        detail.summary="Insufficient system RAM to load model";
+        detail.suggestion="Close other applications, unload other models, or use a smaller quantization variant.";
+        detail.action="reduce_context";
+        detail.recoverable=true;
+        return detail;
+    }
+
+    // Check for context size issues
+    if(logLower.find("n_ctx")!=std::string::npos&&
+        (logLower.find("too large")!=std::string::npos||logLower.find("exceeds")!=std::string::npos))
+    {
+        detail.reason=LoadFailureReason::ContextTooLarge;
+        detail.summary="Requested context size "+std::to_string(contextSize)+" exceeds model or hardware limits";
+        detail.suggestion="Use a smaller context size. The model may support a maximum context window smaller "
+            "than what was requested.";
+        detail.action="reduce_context";
+        detail.recoverable=true;
+        return detail;
+    }
+
+    // Check for unsupported architecture
+    if(logLower.find("unknown model architecture")!=std::string::npos||
+        logLower.find("unsupported model")!=std::string::npos||
+        logLower.find("unknown arch")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::UnsupportedArch;
+        detail.summary="Model architecture is not supported by this llama.cpp build";
+        detail.suggestion="Update the server to a newer version that supports this model architecture, "
+            "or use a different model.";
+        detail.action="update_server";
+        detail.recoverable=false;
+        return detail;
+    }
+
+    // Generic model load failure — still include the log for debugging
+    if(logLower.find("failed to load model")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::BackendError;
+        detail.summary="llama.cpp failed to load the model from: "+filePath;
+        detail.suggestion="Check the llama.cpp log output above for specific error details. "
+            "Common causes include corrupt files, insufficient memory, or unsupported model formats.";
+        detail.action="check_logs";
+        detail.recoverable=false;
+        return detail;
+    }
+
+    // Fallback: generic context creation failure
+    detail.reason=LoadFailureReason::Unknown;
+    detail.summary="Model load failed for '"+model+"'";
+    detail.suggestion="Check the server log for llama.cpp error output.";
+    detail.action="check_logs";
+    detail.recoverable=false;
+    return detail;
+}
+
+LoadErrorDetail ModelRuntime::getLastLoadError() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_lastLoadError;
+}
+
+void ModelRuntime::setMaxConcurrentDownloads(int max)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_maxConcurrentDownloads=std::max(1, max);
+    m_downloadCv.notify_all();
+}
+
+int ModelRuntime::getMaxConcurrentDownloads() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_maxConcurrentDownloads;
+}
+
 ErrorCode ModelRuntime::loadModel(
     const std::string &model,
     const std::string &variant,
     int contextSize)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+
+    // Clear previous load error
+    m_lastLoadError=LoadErrorDetail{};
 
     // Check if already loaded
     auto it=m_models.find(model);
@@ -110,8 +360,13 @@ ErrorCode ModelRuntime::loadModel(
     }
 
     // Determine context size
+    // For llama provider models, contextSize=0 means "use model's native
+    // training context from GGUF metadata" — resolved in loadLlamaModel after
+    // loading model weights.  For cloud models, fall back to the config value.
     int resolvedContext=contextSize;
-    if(resolvedContext<=0)
+    bool useNativeContext=(resolvedContext<=0&&modelInfo->provider=="llama");
+
+    if(resolvedContext<=0&&!useNativeContext)
     {
         resolvedContext=modelInfo->contextWindow;
     }
@@ -137,6 +392,16 @@ ErrorCode ModelRuntime::loadModel(
             ModelFit fit=ModelFitCalculator::calculateModelFit(modelInfo.value(), *selectedVar, hw);
             if(!fit.canRun)
             {
+                m_lastLoadError.reason=(fit.limitingFactor=="ram")
+                    ?LoadFailureReason::InsufficientRam
+                    :LoadFailureReason::InsufficientVram;
+                m_lastLoadError.summary="Model '"+model+"' variant '"+selectedVariant+
+                    "' cannot run on this hardware: "+fit.limitingFactor;
+                m_lastLoadError.suggestion=(fit.limitingFactor=="ram")
+                    ?"Insufficient system RAM. Try a smaller quantization variant or close other applications."
+                    :"Insufficient VRAM. Try a smaller quantization variant, reduce context size, or unload other models.";
+                m_lastLoadError.action="use_smaller_variant";
+                m_lastLoadError.recoverable=true;
                 spdlog::error("Model '{}' variant '{}' cannot run: {}", model, selectedVariant, fit.limitingFactor);
                 return ErrorCode::ModelLoadError;
             }
@@ -144,19 +409,31 @@ ErrorCode ModelRuntime::loadModel(
             // Evict if needed to make room
             evictIfNeeded(selectedVar->minVramMb);
 
-            // Check if model file exists, initiate download if needed
-            if(!selectedVar->download.filename.empty())
+            // Check if all model files exist, initiate async download for any missing ones
+            std::vector<VariantDownload> allFiles=selectedVar->getAllFiles();
+            std::string primaryFilename=selectedVar->getPrimaryFilename();
+
+            if(!allFiles.empty())
             {
-                std::string filePath="/models/"+selectedVar->download.filename;
-                if(!std::filesystem::exists(filePath)&&!selectedVar->download.url.empty())
+                bool anyMissing=false;
+                for(const VariantDownload &file:allFiles)
                 {
-                    // Check storage quota before downloading
-                    int64_t fileSizeBytes=static_cast<int64_t>(selectedVar->fileSizeMb)*1024*1024;
-                    if(!StorageManager::instance().canDownload(fileSizeBytes))
+                    std::string filePath="/models/"+file.filename;
+                    if(!std::filesystem::exists(filePath)&&!file.url.empty())
                     {
-                        // Try cleanup first
+                        anyMissing=true;
+                        break;
+                    }
+                }
+
+                if(anyMissing)
+                {
+                    // Check storage quota for total missing file size
+                    int64_t totalDownloadBytes=static_cast<int64_t>(selectedVar->fileSizeMb)*1024*1024;
+                    if(!StorageManager::instance().canDownload(totalDownloadBytes))
+                    {
                         StorageManager::instance().runCleanup();
-                        if(!StorageManager::instance().canDownload(fileSizeBytes))
+                        if(!StorageManager::instance().canDownload(totalDownloadBytes))
                         {
                             spdlog::error("Insufficient storage to download '{}' variant '{}' ({} MB)",
                                 model, selectedVariant, selectedVar->fileSizeMb);
@@ -164,47 +441,29 @@ ErrorCode ModelRuntime::loadModel(
                         }
                     }
 
-                    // Mark as downloading
+                    // Mark as downloading and launch async background download
                     LoadedModel &dlEntry=m_models[model];
                     dlEntry.modelName=model;
                     dlEntry.variant=selectedVariant;
                     dlEntry.state=ModelState::Downloading;
                     dlEntry.lastUsed=std::chrono::steady_clock::now();
-                    spdlog::info("Downloading model '{}' variant '{}'", model, selectedVariant);
 
-                    // Release the lock during download (can be very large)
-                    m_mutex.unlock();
-                    bool downloadOk=downloadModelFile(
-                        selectedVar->download.url,
-                        filePath,
-                        selectedVar->download.sha256,
-                        model,
-                        selectedVariant);
-                    m_mutex.lock();
+                    spdlog::info("Model '{}' variant '{}' needs download — launching async download",
+                        model, selectedVariant);
 
-                    if(!downloadOk)
-                    {
-                        m_models.erase(model);
-                        return ErrorCode::ModelDownloadFailed;
-                    }
+                    m_downloadThreads.emplace_back(
+                        &ModelRuntime::runBackgroundDownload, this,
+                        model, selectedVariant, modelInfo.value());
 
-                    // Register the download with StorageManager
-                    int64_t actualSize=0;
-                    std::error_code ec;
-                    if(std::filesystem::exists(filePath, ec))
-                    {
-                        actualSize=static_cast<int64_t>(std::filesystem::file_size(filePath, ec));
-                    }
-                    StorageManager::instance().registerDownload(
-                        model, selectedVariant, selectedVar->download.filename, actualSize);
+                    return ErrorCode::ModelDownloading;
                 }
             }
 
-            // Create/update loaded model entry
+            // All files present — create/update loaded model entry
             LoadedModel &entry=m_models[model];
             entry.modelName=model;
             entry.variant=selectedVariant;
-            entry.contextSize=std::min(resolvedContext, fit.maxContextSize);
+            entry.contextSize=useNativeContext?0:std::min(resolvedContext, fit.maxContextSize);
             entry.estimatedVramUsageMb=fit.estimatedVramUsageMb;
             entry.gpuIndices=fit.gpuIndices;
             entry.lastUsed=std::chrono::steady_clock::now();
@@ -212,8 +471,9 @@ ErrorCode ModelRuntime::loadModel(
             // Actually load llama.cpp model for local providers
             if(modelInfo->provider=="llama")
             {
-                std::string filePath="/models/"+selectedVar->download.filename;
-                ErrorCode loadResult=loadLlamaModel(model, filePath, entry.contextSize, entry.gpuIndices);
+                std::string filePath="/models/"+primaryFilename;
+                ErrorCode loadResult=loadLlamaModel(model, filePath, entry.contextSize, entry.gpuIndices,
+                    fit.maxContextSize);
                 if(loadResult!=ErrorCode::Success)
                 {
                     m_models.erase(model);
@@ -251,6 +511,246 @@ ErrorCode ModelRuntime::loadModel(
     }
 
     return ErrorCode::Success;
+}
+
+ErrorCode ModelRuntime::downloadModel(
+    const std::string &model,
+    const std::string &variant)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    // Check if already downloading
+    auto it=m_models.find(model);
+    if(it!=m_models.end())
+    {
+        if(it->second.state==ModelState::Downloading)
+        {
+            return ErrorCode::ModelDownloading;
+        }
+        if(it->second.state==ModelState::Loaded||it->second.state==ModelState::Ready)
+        {
+            return ErrorCode::Success;
+        }
+    }
+
+    // Look up model info from ModelManager
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(model);
+    if(!modelInfo.has_value())
+    {
+        spdlog::error("downloadModel: model '{}' not found in ModelManager", model);
+        return ErrorCode::ModelNotFound;
+    }
+
+    if(modelInfo->variants.empty())
+    {
+        // Cloud model — nothing to download
+        return ErrorCode::Success;
+    }
+
+    // Determine which variant to use
+    std::string selectedVariant=variant;
+    if(selectedVariant.empty())
+    {
+        selectedVariant=selectBestVariant(modelInfo.value());
+    }
+
+    // Find the selected variant
+    const ModelVariant *selectedVar=nullptr;
+    for(const ModelVariant &v:modelInfo->variants)
+    {
+        if(v.quantization==selectedVariant)
+        {
+            selectedVar=&v;
+            break;
+        }
+    }
+
+    if(!selectedVar)
+    {
+        spdlog::error("downloadModel: variant '{}' not found for model '{}'", selectedVariant, model);
+        return ErrorCode::ModelNotFound;
+    }
+
+    // Check if all files are already present
+    std::vector<VariantDownload> allFiles=selectedVar->getAllFiles();
+    bool anyMissing=false;
+    for(const VariantDownload &file:allFiles)
+    {
+        std::string filePath="/models/"+file.filename;
+        if(!std::filesystem::exists(filePath)&&!file.url.empty())
+        {
+            anyMissing=true;
+            break;
+        }
+    }
+
+    if(!anyMissing)
+    {
+        return ErrorCode::Success;
+    }
+
+    // Check storage quota
+    int64_t totalDownloadBytes=static_cast<int64_t>(selectedVar->fileSizeMb)*1024*1024;
+    if(!StorageManager::instance().canDownload(totalDownloadBytes))
+    {
+        StorageManager::instance().runCleanup();
+        if(!StorageManager::instance().canDownload(totalDownloadBytes))
+        {
+            spdlog::error("Insufficient storage to download '{}' variant '{}' ({} MB)",
+                model, selectedVariant, selectedVar->fileSizeMb);
+            return ErrorCode::InsufficientStorage;
+        }
+    }
+
+    // Mark as downloading and launch async background download
+    LoadedModel &dlEntry=m_models[model];
+    dlEntry.modelName=model;
+    dlEntry.variant=selectedVariant;
+    dlEntry.state=ModelState::Downloading;
+    dlEntry.lastUsed=std::chrono::steady_clock::now();
+
+    spdlog::info("downloadModel: launching async download for '{}' variant '{}'",
+        model, selectedVariant);
+
+    m_downloadThreads.emplace_back(
+        &ModelRuntime::runBackgroundDownload, this,
+        model, selectedVariant, modelInfo.value());
+
+    return ErrorCode::ModelDownloading;
+}
+
+void ModelRuntime::runBackgroundDownload(
+    const std::string &model,
+    const std::string &variant,
+    const ModelInfo &info)
+{
+    // Wait for a download slot (respects concurrent download limit)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_downloadCv.wait(lock, [this]()
+        {
+            return m_shuttingDown||m_activeDownloadCount<m_maxConcurrentDownloads;
+        });
+
+        if(m_shuttingDown)
+        {
+            return;
+        }
+
+        ++m_activeDownloadCount;
+    }
+
+    // Find the selected variant from the ModelInfo
+    const ModelVariant *selectedVar=nullptr;
+    for(const ModelVariant &v:info.variants)
+    {
+        if(v.quantization==variant)
+        {
+            selectedVar=&v;
+            break;
+        }
+    }
+
+    if(!selectedVar)
+    {
+        spdlog::error("runBackgroundDownload: variant '{}' not found for model '{}'", variant, model);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_models.erase(model);
+        --m_activeDownloadCount;
+        m_downloadCv.notify_one();
+        return;
+    }
+
+    std::vector<VariantDownload> allFiles=selectedVar->getAllFiles();
+    std::string primaryFilename=selectedVar->getPrimaryFilename();
+
+    // Collect files that need downloading
+    std::vector<const VariantDownload *> missingFiles;
+    for(const VariantDownload &file:allFiles)
+    {
+        std::string filePath="/models/"+file.filename;
+        if(!std::filesystem::exists(filePath)&&!file.url.empty())
+        {
+            missingFiles.push_back(&file);
+        }
+    }
+
+    if(missingFiles.size()>1||allFiles.size()>1)
+    {
+        spdlog::info("Downloading model '{}' variant '{}' ({} files, {} missing)",
+            model, variant, allFiles.size(), missingFiles.size());
+    }
+    else
+    {
+        spdlog::info("Downloading model '{}' variant '{}'", model, variant);
+    }
+
+    // Download each missing file (no mutex held)
+    bool allDownloadsOk=true;
+    for(const VariantDownload *file:missingFiles)
+    {
+        std::string filePath="/models/"+file->filename;
+        bool downloadOk=downloadModelFile(
+            file->url,
+            filePath,
+            file->sha256,
+            model,
+            variant);
+
+        if(!downloadOk)
+        {
+            allDownloadsOk=false;
+            spdlog::error("Failed to download shard '{}' for model '{}' variant '{}'",
+                file->filename, model, variant);
+            break;
+        }
+    }
+
+    // Release the download slot
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        --m_activeDownloadCount;
+        m_downloadCv.notify_one();
+    }
+
+    // Update model state under lock
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    if(!allDownloadsOk)
+    {
+        m_models.erase(model);
+        spdlog::error("Download failed for model '{}' variant '{}'", model, variant);
+        return;
+    }
+
+    // Register all files with StorageManager
+    int64_t totalActualSize=0;
+    std::vector<std::string> extraFiles;
+    for(size_t i=0; i<allFiles.size(); ++i)
+    {
+        std::string filePath="/models/"+allFiles[i].filename;
+        int64_t actualSize=0;
+        std::error_code ec;
+        if(std::filesystem::exists(filePath, ec))
+        {
+            actualSize=static_cast<int64_t>(std::filesystem::file_size(filePath, ec));
+        }
+        totalActualSize+=actualSize;
+        if(i>0)
+        {
+            extraFiles.push_back(allFiles[i].filename);
+        }
+    }
+    StorageManager::instance().registerDownload(
+        model, variant, primaryFilename, totalActualSize, extraFiles);
+
+    // Transition to Unloaded (downloaded, not yet loaded into VRAM)
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&it->second.state==ModelState::Downloading)
+    {
+        it->second.state=ModelState::Unloaded;
+        spdlog::info("Download complete for model '{}' variant '{}' — state is now Unloaded", model, variant);
+    }
 }
 
 ErrorCode ModelRuntime::unloadModel(const std::string &model)
@@ -693,9 +1193,13 @@ ErrorCode ModelRuntime::loadLlamaModel(
     const std::string &model,
     const std::string &filePath,
     int contextSize,
-    const std::vector<int> &gpuIndices)
+    const std::vector<int> &gpuIndices,
+    int maxHardwareContext)
 {
     initLlamaBackend();
+
+    // Start capturing llama.cpp log output for diagnostics
+    beginLlamaLogCapture();
 
     llama_model_params mparams=llama_model_default_params();
     mparams.n_gpu_layers=99; // offload all layers to GPU by default
@@ -703,28 +1207,75 @@ ErrorCode ModelRuntime::loadLlamaModel(
     llama_model *llamaModel=llama_model_load_from_file(filePath.c_str(), mparams);
     if(!llamaModel)
     {
-        spdlog::error("Failed to load llama model from: {}", filePath);
+        std::string captured=m_llamaLogCapture.str();
+        endLlamaLogCapture();
+
+        m_lastLoadError=classifyLoadFailure(captured, model, filePath, contextSize);
+        spdlog::error("Failed to load llama model from: {} — {}", filePath, m_lastLoadError.summary);
         return ErrorCode::ModelLoadError;
     }
 
+    // Query native training context from GGUF metadata
+    int nativeContext=llama_model_n_ctx_train(llamaModel);
+
+    // Resolve actual context to allocate:
+    //   contextSize > 0  → user/config requested explicit size
+    //   contextSize == 0 → use model's native training context
+    // In both cases, cap by the hardware-fit maximum.
+    int actualContext=contextSize;
+    if(actualContext<=0)
+    {
+        actualContext=nativeContext;
+    }
+    if(maxHardwareContext>0&&actualContext>maxHardwareContext)
+    {
+        spdlog::info("Capping context from {} to {} (hardware limit) for model '{}'",
+            actualContext, maxHardwareContext, model);
+        actualContext=maxHardwareContext;
+    }
+
     llama_context_params cparams=llama_context_default_params();
-    cparams.n_ctx=contextSize;
+    cparams.n_ctx=static_cast<uint32_t>(actualContext);
     cparams.n_threads=std::thread::hardware_concurrency();
     cparams.n_threads_batch=std::thread::hardware_concurrency();
 
     llama_context *llamaCtx=llama_init_from_model(llamaModel, cparams);
     if(!llamaCtx)
     {
-        spdlog::error("Failed to create llama context for model: {}", model);
+        std::string captured=m_llamaLogCapture.str();
+        endLlamaLogCapture();
+
+        m_lastLoadError=classifyLoadFailure(captured, model, filePath, actualContext);
+
+        // If classification didn't catch a specific VRAM/context issue,
+        // context creation failure is almost always a memory issue
+        if(m_lastLoadError.reason==LoadFailureReason::Unknown||
+            m_lastLoadError.reason==LoadFailureReason::BackendError)
+        {
+            m_lastLoadError.reason=LoadFailureReason::InsufficientVram;
+            m_lastLoadError.summary="Failed to create context (size="+std::to_string(actualContext)+
+                ") — likely insufficient GPU memory";
+            m_lastLoadError.suggestion="Try a smaller context size or use a smaller quantization variant. "
+                "You can also unload other models to free VRAM.";
+            m_lastLoadError.action="reduce_context";
+            m_lastLoadError.recoverable=true;
+        }
+
+        spdlog::error("Failed to create llama context for model: {} — {}", model, m_lastLoadError.summary);
         llama_model_free(llamaModel);
         return ErrorCode::ModelLoadError;
     }
 
+    endLlamaLogCapture();
+
     LoadedModel &entry=m_models[model];
     entry.llamaModel=llamaModel;
     entry.llamaCtx=llamaCtx;
+    entry.maxContextSize=nativeContext;
+    entry.contextSize=static_cast<int>(llama_n_ctx(llamaCtx));
 
-    spdlog::info("llama.cpp model loaded: {} (context={})", model, contextSize);
+    spdlog::info("llama.cpp model loaded: {} (context={}, maxContext={})",
+        model, entry.contextSize, entry.maxContextSize);
     return ErrorCode::Success;
 }
 

@@ -29,7 +29,8 @@ std::string VersionInfo::toString() const
 
 VersionInfo getVersion()
 {
-    return {ARBITERAI_VERSION_MAJOR, ARBITERAI_VERSION_MINOR, ARBITERAI_VERSION_PATCH};
+    return {ARBITERAI_VERSION_MAJOR, ARBITERAI_VERSION_MINOR, ARBITERAI_VERSION_PATCH,
+        "b" ARBITERAI_LLAMACPP_BUILD};
 }
 
 VersionInfo ArbiterAI::getVersion()
@@ -87,8 +88,8 @@ ErrorCode ArbiterAI::initialize(const std::vector<std::filesystem::path> &config
     // Mark global singleton initialized so subsequent operations succeed
     ArbiterAI::instance().initialized = true;
 
-    // Initialize StorageManager with default models directory
-    StorageManager::instance().initialize("/models");
+    // Note: StorageManager is initialized by the application (e.g., server main.cpp)
+    // with the user-configured models directory path, not here.
 
     return ErrorCode::Success;
 }
@@ -534,6 +535,21 @@ ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
 ErrorCode ArbiterAI::loadModel(const std::string &model, const std::string &variant, int contextSize)
 {
     return ModelRuntime::instance().loadModel(model, variant, contextSize);
+}
+
+ErrorCode ArbiterAI::downloadModel(const std::string &model, const std::string &variant)
+{
+    return ModelRuntime::instance().downloadModel(model, variant);
+}
+
+void ArbiterAI::setMaxConcurrentDownloads(int max)
+{
+    ModelRuntime::instance().setMaxConcurrentDownloads(max);
+}
+
+int ArbiterAI::getMaxConcurrentDownloads() const
+{
+    return ModelRuntime::instance().getMaxConcurrentDownloads();
 }
 
 ErrorCode ArbiterAI::unloadModel(const std::string &model)

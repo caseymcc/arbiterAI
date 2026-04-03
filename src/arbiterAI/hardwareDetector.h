@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <map>
 #include <mutex>
 
 namespace arbiterAI
@@ -12,6 +13,14 @@ enum class GpuBackend {
     None,
     CUDA,
     Vulkan
+};
+
+struct MemoryHeapInfo {
+    int index=0;
+    bool deviceLocal=false;
+    int sizeMb=0;
+    int budgetMb=0;    // 0 if VK_EXT_memory_budget not available
+    int usageMb=0;     // 0 if VK_EXT_memory_budget not available
 };
 
 struct GpuInfo {
@@ -25,6 +34,9 @@ struct GpuInfo {
     bool unifiedMemory=false;     // true for APUs/iGPUs sharing system RAM
     int gpuAccessibleRamMb=0;     // total RAM the GPU can access (GTT+VRAM on APUs, 0 for discrete)
     int gpuAccessibleRamFreeMb=0; // free RAM the GPU can access
+    bool hasMemoryBudget=false;   // true if VK_EXT_memory_budget was used
+    bool vramOverridden=false;    // true if VRAM values were overridden by user
+    std::vector<MemoryHeapInfo> memoryHeaps; // per-heap details from Vulkan
 };
 
 struct SystemInfo {
@@ -60,6 +72,22 @@ public:
     /// Check whether Vulkan is available at runtime
     bool isVulkanAvailable() const;
 
+    /// Override the reported VRAM for a GPU (persists across refresh cycles).
+    /// For unified memory devices, also overrides gpuAccessibleRamMb.
+    void setVramOverride(int gpuIndex, int vramMb);
+
+    /// Clear a VRAM override for a specific GPU
+    void clearVramOverride(int gpuIndex);
+
+    /// Clear all VRAM overrides
+    void clearAllVramOverrides();
+
+    /// Check whether a GPU has a VRAM override set
+    bool hasVramOverride(int gpuIndex) const;
+
+    /// Get the VRAM override value for a GPU (0 if not set)
+    int getVramOverride(int gpuIndex) const;
+
 private:
     HardwareDetector();
     ~HardwareDetector();
@@ -73,6 +101,7 @@ private:
     void detectNvmlGpus();
     void detectVulkanGpus();
     void detectUnifiedMemory();
+    void applyVramOverrides();
 
     // NVML dlopen handles
     bool loadNvml();
@@ -84,6 +113,7 @@ private:
 
     SystemInfo m_systemInfo;
     mutable std::mutex m_mutex;
+    std::map<int, int> m_vramOverrides; // gpuIndex → vramMb
 
     // Runtime library handles
     void *m_nvmlLib=nullptr;
@@ -107,10 +137,15 @@ private:
     void *m_vkEnumeratePhysicalDevices=nullptr;
     void *m_vkGetPhysicalDeviceProperties=nullptr;
     void *m_vkGetPhysicalDeviceMemoryProperties=nullptr;
+    void *m_vkGetPhysicalDeviceMemoryProperties2=nullptr;
+    void *m_vkEnumerateDeviceExtensionProperties=nullptr;
 
     // CPU utilization tracking (for delta calculation)
     long long m_prevCpuIdle=0;
     long long m_prevCpuTotal=0;
+
+    // First refresh logs at info, subsequent refreshes at debug
+    bool m_firstRefreshDone=false;
 };
 
 } // namespace arbiterAI

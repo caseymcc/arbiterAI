@@ -43,6 +43,7 @@ private:
     ErrorCode runInference(llama_model *model, llama_context *ctx,
         const CompletionRequest &request, const ModelInfo &modelInfo,
         std::string &result, int &promptTokens, int &completionTokens,
+        double &promptTimeMs, double &generationTimeMs,
         std::function<void(const std::string &)> streamCallback);
 };
 

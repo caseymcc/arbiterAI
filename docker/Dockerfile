@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1
-ARG DOCKER_VERSION=1.1.1
-FROM ubuntu:22.04
+ARG DOCKER_VERSION=1.2.0
+FROM ubuntu:24.04
 
-# Install basic build tools and Python 3
+# Install basic build tools, Python 3, and GPU libraries.
+# Vulkan headers + glslc are needed at build time for llama.cpp's Vulkan backend.
+# At runtime, GPU inference requires a Vulkan ICD on the host; without one
+# llama.cpp falls back to CPU-only.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -26,17 +29,11 @@ RUN apt-get update && apt-get install -y \
     libxrandr-dev \
     libxinerama-dev \
     libglu1-mesa-dev \
-    && apt-get remove -y nodejs npm \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install NVIDIA CUDA toolkit and Vulkan SDK for GPU-accelerated inference.
-# These are optional at runtime — builds and tests work without a GPU,
-# but llama.cpp inference falls back to CPU-only.
-RUN apt-get update && apt-get install -y \
-    nvidia-cuda-toolkit \
     vulkan-tools \
     libvulkan-dev \
     mesa-vulkan-drivers \
+    glslc \
+    glslang-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \

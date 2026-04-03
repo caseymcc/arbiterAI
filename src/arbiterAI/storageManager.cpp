@@ -77,6 +77,10 @@ void StorageManager::initialize(const std::filesystem::path &modelsDir)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
+    // Clear any existing state from a previous initialize() call
+    m_entries.clear();
+    m_dirty=false;
+
     m_modelsDir=modelsDir;
 
     if(!std::filesystem::exists(m_modelsDir))
@@ -187,7 +191,8 @@ std::vector<DownloadedModelFile> StorageManager::getDownloadedModels() const
 void StorageManager::registerDownload(const std::string &modelName,
     const std::string &variant,
     const std::string &filename,
-    int64_t fileSizeBytes)
+    int64_t fileSizeBytes,
+    const std::vector<std::string> &additionalFiles)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -196,6 +201,7 @@ void StorageManager::registerDownload(const std::string &modelName,
     if(existing)
     {
         existing->filename=filename;
+        existing->additionalFiles=additionalFiles;
         existing->fileSizeBytes=fileSizeBytes;
         existing->downloadedAt=std::chrono::system_clock::now();
         m_dirty=true;
@@ -206,6 +212,7 @@ void StorageManager::registerDownload(const std::string &modelName,
     entry.modelName=modelName;
     entry.variant=variant;
     entry.filename=filename;
+    entry.additionalFiles=additionalFiles;
     entry.fileSizeBytes=fileSizeBytes;
     entry.downloadedAt=std::chrono::system_clock::now();
     entry.lastUsedAt=std::chrono::system_clock::now();
@@ -216,8 +223,16 @@ void StorageManager::registerDownload(const std::string &modelName,
     m_entries.push_back(entry);
     m_dirty=true;
 
-    spdlog::info("StorageManager: registered download {} variant {} ({})",
-        modelName, variant, formatBytes(fileSizeBytes));
+    if(additionalFiles.empty())
+    {
+        spdlog::info("StorageManager: registered download {} variant {} ({})",
+            modelName, variant, formatBytes(fileSizeBytes));
+    }
+    else
+    {
+        spdlog::info("StorageManager: registered download {} variant {} ({}, {} files)",
+            modelName, variant, formatBytes(fileSizeBytes), 1+additionalFiles.size());
+    }
 }
 
 void StorageManager::recordUsage(const std::string &modelName, const std::string &variant)
@@ -267,7 +282,10 @@ bool StorageManager::deleteModelFile(const std::string &modelName, const std::st
         // Delete files and remove entries (in reverse order to preserve indices)
         for(auto it=toRemove.rbegin(); it!=toRemove.rend(); ++it)
         {
-            std::filesystem::path filePath=m_modelsDir/m_entries[*it].filename;
+            ModelFileEntry &entry=m_entries[*it];
+
+            // Delete primary file
+            std::filesystem::path filePath=m_modelsDir/entry.filename;
 
             std::error_code ec;
             if(std::filesystem::exists(filePath, ec))
@@ -280,9 +298,23 @@ bool StorageManager::deleteModelFile(const std::string &modelName, const std::st
                 }
             }
 
-            freedBytes+=m_entries[*it].fileSizeBytes;
+            // Delete additional shard files
+            for(const std::string &extraFile:entry.additionalFiles)
+            {
+                std::filesystem::path extraPath=m_modelsDir/extraFile;
+                if(std::filesystem::exists(extraPath, ec))
+                {
+                    std::filesystem::remove(extraPath, ec);
+                    if(ec)
+                    {
+                        spdlog::warn("StorageManager: failed to delete shard {}: {}", extraPath.string(), ec.message());
+                    }
+                }
+            }
+
+            freedBytes+=entry.fileSizeBytes;
             spdlog::info("StorageManager: deleted {} variant {} ({})",
-                m_entries[*it].modelName, m_entries[*it].variant, formatBytes(m_entries[*it].fileSizeBytes));
+                entry.modelName, entry.variant, formatBytes(entry.fileSizeBytes));
             m_entries.erase(m_entries.begin()+static_cast<ptrdiff_t>(*it));
         }
     }
@@ -299,6 +331,7 @@ bool StorageManager::deleteModelFile(const std::string &modelName, const std::st
                     return false;
                 }
 
+                // Delete primary file
                 std::filesystem::path filePath=m_modelsDir/it->filename;
 
                 std::error_code ec;
@@ -309,6 +342,20 @@ bool StorageManager::deleteModelFile(const std::string &modelName, const std::st
                     {
                         spdlog::error("StorageManager: failed to delete file {}: {}", filePath.string(), ec.message());
                         return false;
+                    }
+                }
+
+                // Delete additional shard files
+                for(const std::string &extraFile:it->additionalFiles)
+                {
+                    std::filesystem::path extraPath=m_modelsDir/extraFile;
+                    if(std::filesystem::exists(extraPath, ec))
+                    {
+                        std::filesystem::remove(extraPath, ec);
+                        if(ec)
+                        {
+                            spdlog::warn("StorageManager: failed to delete shard {}: {}", extraPath.string(), ec.message());
+                        }
                     }
                 }
 
@@ -439,7 +486,7 @@ void StorageManager::scanModelsDirectory()
             continue;
         }
 
-        // Check if already tracked
+        // Check if already tracked (as primary or additional file)
         bool found=false;
         for(const ModelFileEntry &entry:m_entries)
         {
@@ -448,6 +495,15 @@ void StorageManager::scanModelsDirectory()
                 found=true;
                 break;
             }
+            for(const std::string &extra:entry.additionalFiles)
+            {
+                if(extra==filename)
+                {
+                    found=true;
+                    break;
+                }
+            }
+            if(found) break;
         }
 
         if(!found)
@@ -653,6 +709,10 @@ void StorageManager::loadUsageData()
                 entry.modelName=m.value("model", "");
                 entry.variant=m.value("variant", "");
                 entry.filename=m.value("filename", "");
+                if(m.contains("additional_files")&&m["additional_files"].is_array())
+                {
+                    entry.additionalFiles=m["additional_files"].get<std::vector<std::string>>();
+                }
                 entry.fileSizeBytes=m.value("file_size_bytes", int64_t(0));
                 entry.downloadedAt=isoToTimePoint(m.value("downloaded_at", ""));
                 entry.lastUsedAt=isoToTimePoint(m.value("last_used_at", ""));
@@ -660,10 +720,29 @@ void StorageManager::loadUsageData()
                 entry.hotReady=m.value("hot_ready", false);
                 entry.isProtected=m.value("protected", false);
 
-                if(!entry.filename.empty())
+                if(entry.filename.empty())
                 {
-                    m_entries.push_back(entry);
+                    continue;
                 }
+
+                // Deduplicate: skip if we already have an entry with the same filename
+                bool duplicate=false;
+                for(const ModelFileEntry &existing:m_entries)
+                {
+                    if(existing.filename==entry.filename)
+                    {
+                        duplicate=true;
+                        break;
+                    }
+                }
+
+                if(duplicate)
+                {
+                    spdlog::warn("StorageManager: skipping duplicate entry for file: {}", entry.filename);
+                    continue;
+                }
+
+                m_entries.push_back(entry);
             }
         }
 
@@ -704,6 +783,10 @@ void StorageManager::saveUsageData() const
         m["model"]=entry.modelName;
         m["variant"]=entry.variant;
         m["filename"]=entry.filename;
+        if(!entry.additionalFiles.empty())
+        {
+            m["additional_files"]=entry.additionalFiles;
+        }
         m["file_size_bytes"]=entry.fileSizeBytes;
         m["downloaded_at"]=timePointToIso(entry.downloadedAt);
         m["last_used_at"]=timePointToIso(entry.lastUsedAt);
@@ -740,13 +823,13 @@ std::vector<CleanupCandidate> StorageManager::collectCleanupCandidates() const
         if(m_cleanupPolicy.respectHotReady&&entry.hotReady) continue;
         if(m_cleanupPolicy.respectProtected&&entry.isProtected) continue;
 
-        // Skip entries that are currently Loaded or Ready in ModelRuntime
+        // Skip entries that are currently Loaded, Ready, or Downloading in ModelRuntime
         // Note: we don't hold ModelRuntime's lock here, so this is a best-effort check
         std::optional<LoadedModel> runtimeState=ModelRuntime::instance().getModelState(entry.modelName);
         if(runtimeState.has_value())
         {
             ModelState state=runtimeState->state;
-            if(state==ModelState::Loaded||state==ModelState::Ready)
+            if(state==ModelState::Loaded||state==ModelState::Ready||state==ModelState::Downloading)
             {
                 continue;
             }
@@ -785,6 +868,7 @@ DownloadedModelFile StorageManager::entryToPublic(const ModelFileEntry &entry) c
     f.modelName=entry.modelName;
     f.variant=entry.variant;
     f.filename=entry.filename;
+    f.additionalFiles=entry.additionalFiles;
     f.filePath=m_modelsDir/entry.filename;
     f.fileSizeBytes=entry.fileSizeBytes;
     f.downloadedAt=entry.downloadedAt;

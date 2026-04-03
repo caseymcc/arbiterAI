@@ -1,0 +1,36 @@
+{
+    "host": "0.0.0.0",
+    "port": 8080,
+
+    "model_config_paths": [
+        "config"
+    ],
+
+    "models_dir": "/models",
+
+    "default_model": "",
+    "default_variant": "",
+
+    "override_path": "",
+
+    "ram_budget_mb": 0,
+    "max_concurrent_downloads": 2,
+
+    "storage": {
+        "limit": "0",
+        "cleanup_enabled": true,
+        "cleanup_max_age_days": 30,
+        "cleanup_interval_hours": 24
+    },
+
+    "hardware": {
+        "vram_overrides": {}
+    },
+
+    "logging": {
+        "level": "info",
+        "directory": "",
+        "rotate_hour": 0,
+        "retain_days": 7
+    }
+}

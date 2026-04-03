@@ -14,6 +14,9 @@
 #include <queue>
 #include <functional>
 #include <chrono>
+#include <sstream>
+#include <thread>
+#include <condition_variable>
 
 // Forward declarations for llama.cpp types
 struct llama_model;
@@ -30,6 +33,31 @@ enum class ModelState {
     Unloading
 };
 
+/// Classification of why a model load failed, with actionable guidance.
+enum class LoadFailureReason {
+    Unknown,            // could not determine
+    FileNotFound,       // GGUF file does not exist at expected path
+    FileCorrupt,        // GGUF header invalid or file truncated
+    InsufficientVram,   // not enough VRAM / failed to allocate GPU buffers
+    InsufficientRam,    // not enough system RAM
+    ContextTooLarge,    // requested context exceeds model or hardware limits
+    UnsupportedArch,    // model architecture not supported by this llama.cpp build
+    BackendError        // llama.cpp internal error
+};
+
+/// Convert a LoadFailureReason to a stable, snake_case string for API responses.
+const char *loadFailureReasonToString(LoadFailureReason reason);
+
+/// Detailed information about the last model load failure.
+struct LoadErrorDetail {
+    LoadFailureReason reason=LoadFailureReason::Unknown;
+    std::string summary;        // one-line human-readable summary
+    std::string suggestion;     // actionable fix for a human operator
+    std::string action;         // machine-readable recovery action (e.g. "redownload", "reduce_context")
+    bool recoverable=false;     // true if the caller can take an automated action to fix the problem
+    std::string llamaLog;       // raw llama.cpp log output captured during the load attempt
+};
+
 struct LoadedModel {
     std::string modelName;
     std::string variant;
@@ -38,6 +66,7 @@ struct LoadedModel {
     int ramUsageMb=0;
     int estimatedVramUsageMb=0;
     int contextSize=0;
+    int maxContextSize=0; // model's native/training context from GGUF metadata
     std::vector<int> gpuIndices;
     std::chrono::steady_clock::time_point lastUsed;
     bool pinned=false;
@@ -51,6 +80,9 @@ public:
     static void reset(); // For testing
 
     /// Load a model into VRAM for inference.
+    /// If files are not yet downloaded, triggers an async download and returns
+    /// ModelDownloading immediately.  If a download is already in progress for
+    /// this model the call also returns ModelDownloading.
     /// @param model     Model name from ModelManager.
     /// @param variant   Quantization variant (empty = auto-select best fitting).
     /// @param contextSize  Context size (0 = use model default).
@@ -59,6 +91,20 @@ public:
         const std::string &model,
         const std::string &variant="",
         int contextSize=0);
+
+    /// Download model files without loading into VRAM.
+    /// Launches an async background download that respects the concurrent
+    /// download limit.  Returns ModelDownloading on success, Success if
+    /// files are already present, or an error code.
+    ErrorCode downloadModel(
+        const std::string &model,
+        const std::string &variant="");
+
+    /// Set the maximum number of concurrent model downloads (default: 2).
+    void setMaxConcurrentDownloads(int max);
+
+    /// Get the current concurrent download limit.
+    int getMaxConcurrentDownloads() const;
 
     /// Unload a model. Pinned models move to Ready; others to Unloaded.
     ErrorCode unloadModel(const std::string &model);
@@ -122,6 +168,14 @@ public:
     /// Get the ModelInfo for a loaded model.
     std::optional<ModelInfo> getLoadedModelInfo(const std::string &model) const;
 
+    /// Get detailed information about the most recent model load failure.
+    /// Cleared at the start of each loadModel() call.
+    LoadErrorDetail getLastLoadError() const;
+
+    /// Called from the llama.cpp log callback to append captured text.
+    /// Public so the C-style callback can reach it; not intended for external use.
+    void appendLlamaLog(const char *text);
+
 private:
     ModelRuntime();
 
@@ -144,11 +198,14 @@ private:
     void initLlamaBackend();
 
     /// Load a GGUF file into llama.cpp.
+    /// @param contextSize      Requested context (0 = use model's native training context).
+    /// @param maxHardwareContext  Hardware-fit limit (0 = no limit).
     ErrorCode loadLlamaModel(
         const std::string &model,
         const std::string &filePath,
         int contextSize,
-        const std::vector<int> &gpuIndices);
+        const std::vector<int> &gpuIndices,
+        int maxHardwareContext=0);
 
     /// Free llama.cpp resources for a model.
     void freeLlamaModel(LoadedModel &entry);
@@ -177,6 +234,39 @@ private:
     std::queue<SwapRequest> m_pendingSwaps;
 
     ModelDownloader m_downloader;
+
+    /// Background download concurrency management.
+    int m_maxConcurrentDownloads=2;
+    int m_activeDownloadCount=0;
+    bool m_shuttingDown=false;
+    std::condition_variable m_downloadCv;
+    std::vector<std::thread> m_downloadThreads;
+
+    /// Internal: run a background download for a model.  Respects the
+    /// concurrent download semaphore and registers files with StorageManager
+    /// on success.  Called on a detached background thread.
+    void runBackgroundDownload(
+        const std::string &model,
+        const std::string &variant,
+        const ModelInfo &info);
+
+    /// Last load error detail (set in loadLlamaModel, cleared in loadModel).
+    LoadErrorDetail m_lastLoadError;
+
+    /// Buffer for capturing llama.cpp log output during model load.
+    std::ostringstream m_llamaLogCapture;
+    bool m_capturingLlamaLog=false;
+
+    /// Install/remove the llama.cpp log callback that routes to m_llamaLogCapture.
+    void beginLlamaLogCapture();
+    void endLlamaLogCapture();
+
+    /// Analyze captured llama.cpp log to classify the failure reason.
+    LoadErrorDetail classifyLoadFailure(
+        const std::string &llamaLog,
+        const std::string &model,
+        const std::string &filePath,
+        int contextSize) const;
 };
 
 } // namespace arbiterAI

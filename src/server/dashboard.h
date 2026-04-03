@@ -314,9 +314,41 @@ td
 {
     background: linear-gradient(90deg, #4caf50, #66cc66);
 }
+.cpu-bar-fill
+{
+    background: linear-gradient(90deg, #f0a030, #f0c040);
+}
 .gpu-row
 {
     margin-bottom: 8px;
+}
+.heap-tooltip-wrap
+{
+    position: relative;
+    display: inline;
+    cursor: help;
+    border-bottom: 1px dotted #666;
+}
+.heap-tooltip-wrap .heap-tooltip
+{
+    display: none;
+    position: absolute;
+    bottom: 120%;
+    right: 0;
+    background: #1a1d2e;
+    border: 1px solid #2a2d3e;
+    border-radius: 6px;
+    padding: 8px 10px;
+    white-space: nowrap;
+    font-size: 11px;
+    color: #ccc;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    line-height: 1.6;
+}
+.heap-tooltip-wrap:hover .heap-tooltip
+{
+    display: block;
 }
 .gpu-label
 {
@@ -332,6 +364,18 @@ td
     fill: none;
     stroke-width: 2;
 }
+#promptChart
+{
+    stroke: #4caf50;
+    fill: none;
+    stroke-width: 2;
+}
+#genChart
+{
+    stroke: #f0c040;
+    fill: none;
+    stroke-width: 2;
+}
 .chart-grid line
 {
     stroke: #1f2230;
@@ -342,19 +386,138 @@ td
     fill: #666;
     font-size: 10px;
 }
+.chart-legend
+{
+    display: flex;
+    gap: 16px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: #999;
+}
+.chart-legend-dot
+{
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+.log-panel
+{
+    background: #0d0f14;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+.log-panel.collapsed
+{
+    max-height: 0;
+    padding: 0;
+    border: none;
+    overflow: hidden;
+}
+.log-entry
+{
+    padding: 1px 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.log-entry:hover
+{
+    background: #161922;
+}
+.log-ts
+{
+    color: #555;
+    margin-right: 8px;
+}
+.log-level
+{
+    display: inline-block;
+    width: 52px;
+    font-weight: 600;
+    margin-right: 6px;
+}
+.log-level-trace { color: #666; }
+.log-level-debug { color: #888; }
+.log-level-info  { color: #4caf50; }
+.log-level-warning { color: #f0c040; }
+.log-level-error { color: #ff4444; }
+.log-level-critical { color: #ff2222; font-weight: 800; }
+.log-msg
+{
+    color: #ccc;
+}
+.log-toolbar
+{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.log-toolbar select
+{
+    background: #1a1d27;
+    color: #ccc;
+    border: 1px solid #2a2d3a;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.log-toolbar label
+{
+    color: #888;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.log-toolbar input[type="checkbox"]
+{
+    accent-color: #7c8aff;
+}
+.card-header-row
+{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    cursor: pointer;
+}
+.card-header-row h2
+{
+    margin-bottom: 0;
+}
+.collapse-icon
+{
+    color: #888;
+    font-size: 16px;
+    transition: transform 0.2s;
+    user-select: none;
+}
+.collapse-icon.open
+{
+    transform: rotate(180deg);
+}
 </style>
 </head>
 <body>
 <div class="header">
-    <h1>ArbiterAI Dashboard <span id="versionBadge" class="version-badge"></span></h1>
+    <h1>ArbiterAI Dashboard <span id="versionBadge" class="version-badge"></span><span id="llamaBadge" class="version-badge"></span></h1>
     <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connected</span></div>
 </div>
 <div class="container">
     <div class="grid">
         <div class="card">
             <h2>Performance</h2>
-            <div class="stat-big" id="avgTps">0.0</div>
-            <div style="color:#888;font-size:12px;margin-bottom:8px;">tokens/sec (avg)</div>
+            <div class="stat-row"><span class="stat-label">Prompt Speed</span><span class="stat-value" id="avgPromptTps">0.0 t/s</span></div>
+            <div class="stat-row"><span class="stat-label">Generation Speed</span><span class="stat-value" id="avgGenTps">0.0 t/s</span></div>
             <div class="stat-row"><span class="stat-label">Active Requests</span><span class="stat-value" id="activeReqs">0</span></div>
             <div class="stat-row"><span class="stat-label">Total Inferences</span><span class="stat-value" id="totalInferences">0</span></div>
             <div class="stat-row"><span class="stat-label">Model Swaps</span><span class="stat-value" id="totalSwaps">0</span></div>
@@ -364,15 +527,23 @@ td
             <div class="stat-row"><span class="stat-label">Total RAM</span><span class="stat-value" id="totalRam">-</span></div>
             <div class="stat-row"><span class="stat-label">Free RAM</span><span class="stat-value" id="freeRam">-</span></div>
             <div class="stat-row"><span class="stat-label">CPU Cores</span><span class="stat-value" id="cpuCores">-</span></div>
-            <div class="stat-row"><span class="stat-label">CPU Usage</span><span class="stat-value" id="cpuUsage">-</span></div>
+            <div class="gpu-label" style="margin-top:6px;"><span>CPU Usage</span><span id="cpuUsage">-</span></div>
+            <div class="gpu-bar"><div class="gpu-bar-fill cpu-bar-fill" id="cpuBar" style="width:0%"></div></div>
         </div>
         <div class="card">
-            <h2>Tokens/sec Over Time</h2>
+            <h2>Processing Speed Over Time</h2>
             <div class="chart-container">
-                <svg class="chart-svg" id="tpsChartSvg" viewBox="0 0 400 120" preserveAspectRatio="none">
+                <svg class="chart-svg" id="tpsChartSvg" viewBox="0 0 430 120" preserveAspectRatio="none">
                     <g class="chart-grid" id="chartGrid"></g>
-                    <polyline id="tpsChart" points=""></polyline>
+                    <g id="chartYLabelsLeft"></g>
+                    <g id="chartYLabelsRight"></g>
+                    <polyline id="promptChart" points=""></polyline>
+                    <polyline id="genChart" points=""></polyline>
                 </svg>
+            </div>
+            <div class="chart-legend">
+                <span><span class="chart-legend-dot" style="background:#4caf50;"></span>Prompt (tokens in/s)</span>
+                <span><span class="chart-legend-dot" style="background:#f0c040;"></span>Generation (tokens out/s)</span>
             </div>
         </div>
     </div>
@@ -391,6 +562,7 @@ td
                     <th>Variant</th>
                     <th>State</th>
                     <th>Context</th>
+                    <th>Max Context</th>
                     <th>VRAM (MB)</th>
                     <th>RAM (MB)</th>
                     <th>Pinned</th>
@@ -443,9 +615,9 @@ td
         <div class="card">
             <h2>Recent Inferences</h2>
             <table>
-                <thead><tr><th>Model</th><th>TPS</th><th>Prompt</th><th>Completion</th><th>Latency</th></tr></thead>
+                <thead><tr><th>Model</th><th>Prompt t/s</th><th>Gen t/s</th><th>Prompt</th><th>Completion</th><th>Latency</th></tr></thead>
                 <tbody id="inferenceTable">
-                    <tr><td colspan="5" style="color:#666;text-align:center;">No recent inferences</td></tr>
+                    <tr><td colspan="6" style="color:#666;text-align:center;">No recent inferences</td></tr>
                 </tbody>
             </table>
         </div>
@@ -459,13 +631,118 @@ td
             </table>
         </div>
     </div>
+    <div class="card" style="margin-bottom:20px;">
+        <div class="card-header-row" onclick="toggleLogPanel()">
+            <h2>Server Log</h2>
+            <span class="collapse-icon open" id="logCollapseIcon">&#x25BC;</span>
+        </div>
+        <div class="log-toolbar" id="logToolbar">
+            <select id="logLevelFilter" onchange="refreshLogs(true)">
+                <option value="">All levels</option>
+                <option value="trace">Trace</option>
+                <option value="debug">Debug</option>
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="error">Error</option>
+                <option value="critical">Critical</option>
+            </select>
+            <label><input type="checkbox" id="logAutoScroll" checked onchange="refreshLogs(true)"> Live</label>
+        </div>
+        <div class="log-panel" id="logPanel">
+            <div class="log-entry" style="color:#666;">Loading logs...</div>
+        </div>
+    </div>
 </div>
 <script>
 const POLL_INTERVAL=2000;
 const FAST_POLL_INTERVAL=1000;
-let tpsHistory=[];
+let promptTpsHistory=[];
+let genTpsHistory=[];
 const MAX_TPS_POINTS=60;
 let hasActiveDownloads=false;
+let logPanelOpen=true;
+let lastLogEpoch=0;
+
+function toggleLogPanel()
+{
+    logPanelOpen=!logPanelOpen;
+    const panel=document.getElementById("logPanel");
+    const toolbar=document.getElementById("logToolbar");
+    const icon=document.getElementById("logCollapseIcon");
+
+    if(logPanelOpen)
+    {
+        panel.classList.remove("collapsed");
+        toolbar.style.display="flex";
+        icon.classList.add("open");
+    }
+    else
+    {
+        panel.classList.add("collapsed");
+        toolbar.style.display="none";
+        icon.classList.remove("open");
+    }
+}
+
+function logLevelClass(level)
+{
+    const map={"trace":"trace", "debug":"debug", "info":"info", "warning":"warning", "error":"error", "critical":"critical"};
+    return "log-level-"+(map[level]||"info");
+}
+
+function formatLogTime(isoStr)
+{
+    if(!isoStr) return "";
+    const d=new Date(isoStr);
+    const h=String(d.getHours()).padStart(2, "0");
+    const m=String(d.getMinutes()).padStart(2, "0");
+    const s=String(d.getSeconds()).padStart(2, "0");
+    const ms=String(d.getMilliseconds()).padStart(3, "0");
+    return h+":"+m+":"+s+"."+ms;
+}
+
+function escapeHtml(text)
+{
+    const el=document.createElement("span");
+    el.textContent=text;
+    return el.innerHTML;
+}
+
+async function refreshLogs(force)
+{
+    if(!logPanelOpen) return;
+
+    const autoScroll=document.getElementById("logAutoScroll").checked;
+
+    // When live mode is off, freeze the view entirely so the user
+    // can select and copy text without the DOM changing underneath.
+    // A forced refresh (filter change, re-enabling live) always runs.
+    if(!autoScroll&&!force) return;
+
+    const level=document.getElementById("logLevelFilter").value;
+    let url="/api/logs?count=200";
+    if(level) url+="&level="+encodeURIComponent(level);
+
+    const data=await fetchJson(url);
+    if(!data||!data.logs) return;
+
+    const panel=document.getElementById("logPanel");
+
+    let html="";
+    for(const entry of data.logs)
+    {
+        const lvl=entry.level||"info";
+        html+=`<div class="log-entry"><span class="log-ts">${formatLogTime(entry.timestamp)}</span><span class="log-level ${logLevelClass(lvl)}">${lvl.toUpperCase().padEnd(8)}</span><span class="log-msg">${escapeHtml(entry.message)}</span></div>`;
+    }
+
+    if(data.logs.length===0)
+    {
+        html='<div class="log-entry" style="color:#666;">No log entries</div>';
+    }
+
+    panel.innerHTML=html;
+    panel.scrollTop=panel.scrollHeight;
+}
 
 function formatMb(mb)
 {
@@ -506,38 +783,164 @@ async function modelAction(name, action)
     }
 }
 
-function updateTpsChart()
+async function promptVramOverride(gpuIndex, currentMb)
 {
-    const svg=document.getElementById("tpsChartSvg");
-    const polyline=document.getElementById("tpsChart");
-    const grid=document.getElementById("chartGrid");
+    const input=prompt("Enter VRAM override in MB for GPU "+gpuIndex+" (current: "+currentMb+" MB):", currentMb);
 
-    if(tpsHistory.length<2)
+    if(input===null) return;
+
+    const vramMb=parseInt(input, 10);
+
+    if(isNaN(vramMb)||vramMb<=0)
     {
-        polyline.setAttribute("points", "");
+        alert("Invalid value. Please enter a positive integer in MB.");
         return;
     }
 
-    const w=400, h=120, pad=5;
-    const maxTps=Math.max(...tpsHistory, 1);
-
-    let points=[];
-    for(let i=0; i<tpsHistory.length; i++)
+    try
     {
-        const x=pad+(i/(Math.max(tpsHistory.length-1, 1)))*(w-2*pad);
-        const y=h-pad-(tpsHistory[i]/maxTps)*(h-2*pad);
-        points.push(x.toFixed(1)+","+y.toFixed(1));
-    }
-    polyline.setAttribute("points", points.join(" "));
+        const res=await fetch("/api/hardware/vram-override", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({gpu_index: gpuIndex, vram_mb: vramMb})
+        });
 
+        if(!res.ok)
+        {
+            const err=await res.json();
+            alert("Failed: "+(err.error||"Unknown error"));
+            return;
+        }
+        await refresh();
+    }
+    catch(e)
+    {
+        console.error("VRAM override failed:", e);
+    }
+}
+
+async function clearVramOverride(gpuIndex)
+{
+    try
+    {
+        const res=await fetch("/api/hardware/vram-override/"+gpuIndex, {method: "DELETE"});
+
+        if(!res.ok)
+        {
+            const err=await res.json();
+            alert("Failed: "+(err.error||"Unknown error"));
+            return;
+        }
+        await refresh();
+    }
+    catch(e)
+    {
+        console.error("Clear VRAM override failed:", e);
+    }
+}
+
+function updateTpsChart()
+{
+    const promptLine=document.getElementById("promptChart");
+    const genLine=document.getElementById("genChart");
+    const grid=document.getElementById("chartGrid");
+    const yLabelsL=document.getElementById("chartYLabelsLeft");
+    const yLabelsR=document.getElementById("chartYLabelsRight");
+
+    const nPoints=Math.max(promptTpsHistory.length, genTpsHistory.length);
+
+    if(nPoints<2)
+    {
+        promptLine.setAttribute("points", "");
+        genLine.setAttribute("points", "");
+        return;
+    }
+
+    const w=430, h=120, padL=32, padR=32, padT=5, padB=5;
+
+    const maxPrompt=Math.max(...promptTpsHistory, 1);
+    const maxGen=Math.max(...genTpsHistory, 1);
+    const niceMaxPrompt=niceNum(maxPrompt);
+    const niceMaxGen=niceNum(maxGen);
+
+    function buildPoints(data, niceMax)
+    {
+        let pts=[];
+        for(let i=0; i<data.length; i++)
+        {
+            const x=padL+(i/(Math.max(data.length-1, 1)))*(w-padL-padR);
+            const y=h-padB-(data[i]/niceMax)*(h-padT-padB);
+            pts.push(x.toFixed(1)+","+y.toFixed(1));
+        }
+        return pts.join(" ");
+    }
+
+    promptLine.setAttribute("points", buildPoints(promptTpsHistory, niceMaxPrompt));
+    genLine.setAttribute("points", buildPoints(genTpsHistory, niceMaxGen));
+
+    // Grid lines (based on prompt/left axis)
     grid.innerHTML="";
-    for(let i=0; i<=4; i++)
+    yLabelsL.innerHTML="";
+    yLabelsR.innerHTML="";
+    const steps=4;
+
+    for(let i=0; i<=steps; i++)
     {
-        const y=pad+i*((h-2*pad)/4);
-        const val=((maxTps*(4-i)/4)).toFixed(0);
-        grid.innerHTML+=`<line x1="${pad}" y1="${y}" x2="${w-pad}" y2="${y}"/>`;
-        grid.innerHTML+=`<text class="chart-label" x="${w-pad+4}" y="${y+3}">${val}</text>`;
+        const y=padT+i*((h-padT-padB)/steps);
+        const promptVal=((niceMaxPrompt*(steps-i)/steps)).toFixed(0);
+        const genVal=((niceMaxGen*(steps-i)/steps)).toFixed(0);
+        grid.innerHTML+=`<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}"/>`;
+        yLabelsL.innerHTML+=`<text class="chart-label" x="${padL-4}" y="${y+3}" text-anchor="end" fill="#4caf50">${promptVal}</text>`;
+        yLabelsR.innerHTML+=`<text class="chart-label" x="${w-padR+4}" y="${y+3}" text-anchor="start" fill="#f0c040">${genVal}</text>`;
     }
+}
+
+function niceNum(val)
+{
+    if(val<=0) return 1;
+    const exp=Math.floor(Math.log10(val));
+    const frac=val/Math.pow(10, exp);
+    let nice;
+
+    if(frac<=1.5) nice=1.5;
+    else if(frac<=2) nice=2;
+    else if(frac<=3) nice=3;
+    else if(frac<=5) nice=5;
+    else nice=10;
+
+    return nice*Math.pow(10, exp);
+}
+
+function buildHeapTooltip(gpu)
+{
+    const heaps=gpu.memory_heaps;
+
+    if(!heaps||heaps.length===0) return "";
+
+    let lines=[];
+
+    if(gpu.has_memory_budget)
+    {
+        lines.push("<b>Vulkan Memory Heaps (VK_EXT_memory_budget)</b>");
+        for(const h of heaps)
+        {
+            const tag=h.device_local?"DEVICE_LOCAL":"host";
+            const avail=h.budget_mb-h.usage_mb;
+            lines.push(`Heap ${h.index} [${tag}]: size ${formatMb(h.size_mb)}, budget ${formatMb(h.budget_mb)}, used ${formatMb(h.usage_mb)}, avail ${formatMb(avail>0?avail:0)}`);
+        }
+    }
+    else
+    {
+        lines.push("<b>Vulkan Memory Heaps</b>");
+        for(const h of heaps)
+        {
+            const tag=h.device_local?"DEVICE_LOCAL":"host";
+            lines.push(`Heap ${h.index} [${tag}]: size ${formatMb(h.size_mb)}`);
+        }
+        lines.push("<i>VK_EXT_memory_budget not available</i>");
+    }
+
+    return lines.join("<br>");
 }
 
 function renderGpus(gpus)
@@ -571,11 +974,39 @@ function renderGpus(gpus)
             memPct=memTotal>0?(memUsed/memTotal*100):0;
         }
 
+        const hasUtilData=(gpu.backend==="CUDA");
+        let utilHtml;
+
+        if(hasUtilData)
+        {
+            utilHtml=`<div class="gpu-label"><span>Utilization</span><span>${utilPct.toFixed(0)}%</span></div>
+            <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-util" style="width:${utilPct.toFixed(1)}%"></div></div>`;
+        }
+        else
+        {
+            utilHtml=`<div class="gpu-label"><span>Utilization</span><span style="color:#555;">N/A (${gpu.backend})</span></div>`;
+        }
+
+        const tooltip=buildHeapTooltip(gpu);
+        let memSpan;
+
+        if(tooltip)
+        {
+            memSpan=`<span class="heap-tooltip-wrap">${memLabel}: ${formatMb(memUsed)} / ${formatMb(memTotal)}<span class="heap-tooltip">${tooltip}</span></span>`;
+        }
+        else
+        {
+            memSpan=`<span>${memLabel}: ${formatMb(memUsed)} / ${formatMb(memTotal)}</span>`;
+        }
+
+        const overrideTag=gpu.vram_overridden?` <span style="color:#f0a;font-size:0.8em;" title="VRAM overridden by user">⚙ Override</span>`:"";
+        const overrideBtn=`<button class="btn" style="font-size:0.7em;padding:2px 6px;margin-left:6px;" onclick="promptVramOverride(${gpu.index}, ${memTotal})" title="Override reported VRAM">✏</button>`;
+        const clearBtn=gpu.vram_overridden?`<button class="btn btn-danger" style="font-size:0.7em;padding:2px 6px;margin-left:2px;" onclick="clearVramOverride(${gpu.index})" title="Clear VRAM override">✕</button>`:"";
+
         html+=`<div class="gpu-row">
-            <div class="gpu-label"><span>${gpu.name} (${gpu.backend})${gpu.unified_memory?" ⚡ Unified":"" }</span><span>${memLabel}: ${formatMb(memUsed)} / ${formatMb(memTotal)}</span></div>
+            <div class="gpu-label"><span>${gpu.name} (${gpu.backend})${gpu.unified_memory?" ⚡ Unified":""}${overrideTag}${overrideBtn}${clearBtn}</span>${memSpan}</div>
             <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-vram" style="width:${memPct.toFixed(1)}%"></div></div>
-            <div class="gpu-label"><span>Utilization</span><span>${utilPct.toFixed(0)}%</span></div>
-            <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-util" style="width:${utilPct.toFixed(1)}%"></div></div>
+            ${utilHtml}
         </div>`;
     }
     el.innerHTML=html;
@@ -587,7 +1018,7 @@ function renderModels(models)
 
     if(!models||models.length===0)
     {
-        el.innerHTML='<tr><td colspan="8" style="color:#666;text-align:center;">No models loaded</td></tr>';
+        el.innerHTML='<tr><td colspan="9" style="color:#666;text-align:center;">No models loaded</td></tr>';
         return;
     }
 
@@ -600,11 +1031,15 @@ function renderModels(models)
         if(!m.pinned) actions.push(`<button class="btn" onclick="modelAction('${m.model}','pin')">Pin</button>`);
         else actions.push(`<button class="btn" onclick="modelAction('${m.model}','unpin')">Unpin</button>`);
 
+        const ctxDisplay=m.context_size? m.context_size.toLocaleString() : "-";
+        const maxCtxDisplay=m.max_context_size? m.max_context_size.toLocaleString() : "-";
+
         html+=`<tr>
             <td>${m.model}</td>
             <td>${m.variant||"-"}</td>
             <td><span class="badge ${stateClass(m.state)}">${m.state}</span></td>
-            <td>${m.context_size||"-"}</td>
+            <td>${ctxDisplay}</td>
+            <td>${maxCtxDisplay}</td>
             <td>${m.vram_usage_mb||0}</td>
             <td>${m.ram_usage_mb||0}</td>
             <td>${m.pinned?"Yes":"No"}</td>
@@ -620,7 +1055,7 @@ function renderInferences(history)
 
     if(!history||history.length===0)
     {
-        el.innerHTML='<tr><td colspan="5" style="color:#666;text-align:center;">No recent inferences</td></tr>';
+        el.innerHTML='<tr><td colspan="6" style="color:#666;text-align:center;">No recent inferences</td></tr>';
         return;
     }
 
@@ -628,9 +1063,13 @@ function renderInferences(history)
     let html="";
     for(const s of recent)
     {
+        const promptTps=s.prompt_tokens_per_second||0;
+        const genTps=s.generation_tokens_per_second||0;
+
         html+=`<tr>
             <td>${s.model}</td>
-            <td>${s.tokens_per_second.toFixed(1)}</td>
+            <td>${promptTps.toFixed(1)}</td>
+            <td>${genTps.toFixed(1)}</td>
             <td>${s.prompt_tokens}</td>
             <td>${s.completion_tokens}</td>
             <td>${s.latency_ms.toFixed(0)}ms</td>
@@ -857,7 +1296,8 @@ async function refresh()
     statusText.textContent="Connected";
 
     // Performance card
-    document.getElementById("avgTps").textContent=(stats.avg_tokens_per_second||0).toFixed(1);
+    document.getElementById("avgPromptTps").textContent=(stats.avg_prompt_tokens_per_second||0).toFixed(1)+" t/s";
+    document.getElementById("avgGenTps").textContent=(stats.avg_generation_tokens_per_second||0).toFixed(1)+" t/s";
     document.getElementById("activeReqs").textContent=stats.active_requests||0;
     document.getElementById("totalInferences").textContent=history?history.length:0;
     document.getElementById("totalSwaps").textContent=swaps?swaps.length:0;
@@ -869,13 +1309,16 @@ async function refresh()
         document.getElementById("freeRam").textContent=formatMb(stats.hardware.free_ram_mb);
         document.getElementById("cpuCores").textContent=stats.hardware.cpu_cores;
         document.getElementById("cpuUsage").textContent=stats.hardware.cpu_utilization_percent.toFixed(1)+"%";
+        document.getElementById("cpuBar").style.width=stats.hardware.cpu_utilization_percent.toFixed(1)+"%";
     }
 
     // TPS chart
-    if(stats.avg_tokens_per_second!==undefined)
+    if(stats.avg_prompt_tokens_per_second!==undefined||stats.avg_generation_tokens_per_second!==undefined)
     {
-        tpsHistory.push(stats.avg_tokens_per_second||0);
-        if(tpsHistory.length>MAX_TPS_POINTS) tpsHistory.shift();
+        promptTpsHistory.push(stats.avg_prompt_tokens_per_second||0);
+        genTpsHistory.push(stats.avg_generation_tokens_per_second||0);
+        if(promptTpsHistory.length>MAX_TPS_POINTS) promptTpsHistory.shift();
+        if(genTpsHistory.length>MAX_TPS_POINTS) genTpsHistory.shift();
         updateTpsChart();
     }
 
@@ -902,12 +1345,18 @@ async function loadVersion()
     if(data)
     {
         document.getElementById("versionBadge").textContent="v"+data.version;
+        if(data.llamaCppBuild)
+        {
+            document.getElementById("llamaBadge").textContent="llama.cpp "+data.llamaCppBuild;
+        }
     }
 }
 
 loadVersion();
 refresh();
+refreshLogs();
 setInterval(refresh, POLL_INTERVAL);
+setInterval(refreshLogs, POLL_INTERVAL);
 </script>
 </body>
 </html>)HTML";

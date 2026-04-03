@@ -27,7 +27,8 @@ struct StorageInfo {
 struct DownloadedModelFile {
     std::string modelName;
     std::string variant;             // quantization (e.g., "Q4_K_M")
-    std::string filename;
+    std::string filename;            // primary filename (first shard / single file)
+    std::vector<std::string> additionalFiles; // extra shard filenames for split GGUF models
     std::filesystem::path filePath;
     int64_t fileSizeBytes=0;
     std::chrono::system_clock::time_point downloadedAt;
@@ -84,10 +85,12 @@ public:
     std::vector<DownloadedModelFile> getDownloadedModels() const;
 
     /// Register a completed download (updates inventory).
+    /// @param additionalFiles Extra shard filenames for split GGUF models (empty for single-file).
     void registerDownload(const std::string &modelName,
         const std::string &variant,
         const std::string &filename,
-        int64_t fileSizeBytes);
+        int64_t fileSizeBytes,
+        const std::vector<std::string> &additionalFiles={});
 
     /// Record a model usage event (inference served).
     void recordUsage(const std::string &modelName, const std::string &variant);
@@ -152,6 +155,7 @@ private:
         std::string modelName;
         std::string variant;
         std::string filename;
+        std::vector<std::string> additionalFiles; // extra shard filenames for split GGUF
         int64_t fileSizeBytes=0;
         std::chrono::system_clock::time_point downloadedAt;
         std::chrono::system_clock::time_point lastUsedAt;

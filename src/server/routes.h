@@ -56,6 +56,12 @@ void handleGetStats(const httplib::Request &req, httplib::Response &res);
 void handleGetStatsHistory(const httplib::Request &req, httplib::Response &res);
 void handleGetStatsSwaps(const httplib::Request &req, httplib::Response &res);
 void handleGetHardware(const httplib::Request &req, httplib::Response &res);
+void handleSetVramOverride(const httplib::Request &req, httplib::Response &res);
+void handleClearVramOverride(const httplib::Request &req, httplib::Response &res);
+
+// ========== Logs ==========
+
+void handleGetLogs(const httplib::Request &req, httplib::Response &res);
 
 // ========== Storage Management ==========
 

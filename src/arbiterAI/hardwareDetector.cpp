@@ -54,7 +54,9 @@ typedef enum
 typedef enum
 {
     VK_STRUCTURE_TYPE_APPLICATION_INFO=0,
-    VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO=1
+    VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO=1,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2=1000059006,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT=1000237000
 } VkStructureType;
 
 typedef enum
@@ -98,8 +100,8 @@ typedef VkInstance_T *VkInstance;
 struct VkPhysicalDevice_T;
 typedef VkPhysicalDevice_T *VkPhysicalDevice;
 
-typedef struct VkPhysicalDeviceLimits {
-    char padding[504]; // exact size of VkPhysicalDeviceLimits
+typedef struct alignas(8) VkPhysicalDeviceLimits {
+    char padding[504]; // exact size and alignment of VkPhysicalDeviceLimits
 } VkPhysicalDeviceLimits;
 
 typedef struct VkPhysicalDeviceSparseProperties {
@@ -147,6 +149,29 @@ typedef VkResult (*VkEnumeratePhysicalDevicesFunc)(VkInstance, uint32_t *, VkPhy
 typedef void (*VkGetPhysicalDevicePropertiesFunc)(VkPhysicalDevice, VkPhysicalDeviceProperties *);
 typedef void (*VkGetPhysicalDeviceMemoryPropertiesFunc)(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties *);
 
+// Vulkan 1.1+ / VK_EXT_memory_budget structures and function pointers
+
+typedef struct VkPhysicalDeviceMemoryProperties2 {
+    VkStructureType sType;
+    void *pNext;
+    VkPhysicalDeviceMemoryProperties memoryProperties;
+} VkPhysicalDeviceMemoryProperties2;
+
+typedef struct VkPhysicalDeviceMemoryBudgetPropertiesEXT {
+    VkStructureType sType;
+    void *pNext;
+    uint64_t heapBudget[16]; // VK_MAX_MEMORY_HEAPS
+    uint64_t heapUsage[16];
+} VkPhysicalDeviceMemoryBudgetPropertiesEXT;
+
+typedef struct VkExtensionProperties {
+    char extensionName[256]; // VK_MAX_EXTENSION_NAME_SIZE
+    uint32_t specVersion;
+} VkExtensionProperties;
+
+typedef void (*VkGetPhysicalDeviceMemoryProperties2Func)(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties2 *);
+typedef VkResult (*VkEnumerateDeviceExtensionPropertiesFunc)(VkPhysicalDevice, const char *, uint32_t *, VkExtensionProperties *);
+
 const int NVML_DEVICE_NAME_BUFFER_SIZE=96;
 
 } // anonymous namespace
@@ -184,6 +209,9 @@ void HardwareDetector::refresh()
     detectNvmlGpus();
     detectVulkanGpus();
     detectUnifiedMemory();
+    applyVramOverrides();
+
+    m_firstRefreshDone=true;
 }
 
 SystemInfo HardwareDetector::getSystemInfo() const
@@ -224,6 +252,95 @@ bool HardwareDetector::isNvmlAvailable() const
 bool HardwareDetector::isVulkanAvailable() const
 {
     return m_vulkanLoaded;
+}
+
+void HardwareDetector::setVramOverride(int gpuIndex, int vramMb)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_vramOverrides[gpuIndex]=vramMb;
+
+    // Apply immediately to current data
+    for(GpuInfo &gpu:m_systemInfo.gpus)
+    {
+        if(gpu.index==gpuIndex)
+        {
+            // Preserve the actual used amount: free = newTotal - used
+            int usedMb=gpu.vramTotalMb-gpu.vramFreeMb;
+            gpu.vramTotalMb=vramMb;
+            gpu.vramFreeMb=std::max(0, vramMb-usedMb);
+            gpu.vramOverridden=true;
+
+            if(gpu.unifiedMemory)
+            {
+                int accessibleUsedMb=gpu.gpuAccessibleRamMb-gpu.gpuAccessibleRamFreeMb;
+                gpu.gpuAccessibleRamMb=vramMb;
+                gpu.gpuAccessibleRamFreeMb=std::max(0, vramMb-accessibleUsedMb);
+            }
+
+            spdlog::info("VRAM override applied to GPU {}: {} MB", gpuIndex, vramMb);
+            break;
+        }
+    }
+}
+
+void HardwareDetector::clearVramOverride(int gpuIndex)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_vramOverrides.erase(gpuIndex);
+    spdlog::info("VRAM override cleared for GPU {}", gpuIndex);
+}
+
+void HardwareDetector::clearAllVramOverrides()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_vramOverrides.clear();
+    spdlog::info("All VRAM overrides cleared");
+}
+
+bool HardwareDetector::hasVramOverride(int gpuIndex) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_vramOverrides.find(gpuIndex)!=m_vramOverrides.end();
+}
+
+int HardwareDetector::getVramOverride(int gpuIndex) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it=m_vramOverrides.find(gpuIndex);
+
+    if(it!=m_vramOverrides.end())
+    {
+        return it->second;
+    }
+    return 0;
+}
+
+void HardwareDetector::applyVramOverrides()
+{
+    for(GpuInfo &gpu:m_systemInfo.gpus)
+    {
+        auto it=m_vramOverrides.find(gpu.index);
+
+        if(it==m_vramOverrides.end())
+        {
+            continue;
+        }
+
+        int overrideMb=it->second;
+
+        // Preserve the actual used amount: free = newTotal - used
+        int usedMb=gpu.vramTotalMb-gpu.vramFreeMb;
+        gpu.vramTotalMb=overrideMb;
+        gpu.vramFreeMb=std::max(0, overrideMb-usedMb);
+        gpu.vramOverridden=true;
+
+        if(gpu.unifiedMemory)
+        {
+            int accessibleUsedMb=gpu.gpuAccessibleRamMb-gpu.gpuAccessibleRamFreeMb;
+            gpu.gpuAccessibleRamMb=overrideMb;
+            gpu.gpuAccessibleRamFreeMb=std::max(0, overrideMb-accessibleUsedMb);
+        }
+    }
 }
 
 // --- System RAM detection ---
@@ -474,6 +591,10 @@ bool HardwareDetector::loadVulkan()
     m_vkGetPhysicalDeviceProperties=dlsym(m_vulkanLib, "vkGetPhysicalDeviceProperties");
     m_vkGetPhysicalDeviceMemoryProperties=dlsym(m_vulkanLib, "vkGetPhysicalDeviceMemoryProperties");
 
+    // Vulkan 1.1+ optional symbols for memory budget queries
+    m_vkGetPhysicalDeviceMemoryProperties2=dlsym(m_vulkanLib, "vkGetPhysicalDeviceMemoryProperties2");
+    m_vkEnumerateDeviceExtensionProperties=dlsym(m_vulkanLib, "vkEnumerateDeviceExtensionProperties");
+
     if(!m_vkCreateInstance||!m_vkDestroyInstance||
         !m_vkEnumeratePhysicalDevices||!m_vkGetPhysicalDeviceProperties||
         !m_vkGetPhysicalDeviceMemoryProperties)
@@ -505,6 +626,8 @@ void HardwareDetector::unloadVulkan()
     m_vkEnumeratePhysicalDevices=nullptr;
     m_vkGetPhysicalDeviceProperties=nullptr;
     m_vkGetPhysicalDeviceMemoryProperties=nullptr;
+    m_vkGetPhysicalDeviceMemoryProperties2=nullptr;
+    m_vkEnumerateDeviceExtensionProperties=nullptr;
 #endif
 }
 
@@ -521,12 +644,25 @@ void HardwareDetector::detectVulkanGpus()
     VkGetPhysicalDevicePropertiesFunc getProperties=reinterpret_cast<VkGetPhysicalDevicePropertiesFunc>(m_vkGetPhysicalDeviceProperties);
     VkGetPhysicalDeviceMemoryPropertiesFunc getMemProperties=reinterpret_cast<VkGetPhysicalDeviceMemoryPropertiesFunc>(m_vkGetPhysicalDeviceMemoryProperties);
 
-    // Create a minimal Vulkan instance
+    // Optional Vulkan 1.1+ function for memory budget queries
+    VkGetPhysicalDeviceMemoryProperties2Func getMemProperties2=nullptr;
+    VkEnumerateDeviceExtensionPropertiesFunc enumDeviceExtensions=nullptr;
+
+    if(m_vkGetPhysicalDeviceMemoryProperties2)
+    {
+        getMemProperties2=reinterpret_cast<VkGetPhysicalDeviceMemoryProperties2Func>(m_vkGetPhysicalDeviceMemoryProperties2);
+    }
+    if(m_vkEnumerateDeviceExtensionProperties)
+    {
+        enumDeviceExtensions=reinterpret_cast<VkEnumerateDeviceExtensionPropertiesFunc>(m_vkEnumerateDeviceExtensionProperties);
+    }
+
+    // Create a Vulkan instance — request API 1.1 for vkGetPhysicalDeviceMemoryProperties2
     VkApplicationInfo appInfo{};
     appInfo.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName="ArbiterAI HardwareDetector";
     appInfo.applicationVersion=1;
-    appInfo.apiVersion=(1u<<22)|(0u<<12)|0u; // VK_MAKE_API_VERSION(0,1,0,0)
+    appInfo.apiVersion=(1u<<22)|(1u<<12)|0u; // VK_MAKE_API_VERSION(0,1,1,0)
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -582,29 +718,151 @@ void HardwareDetector::detectVulkanGpus()
             continue;
         }
 
-        VkPhysicalDeviceMemoryProperties memProps{};
-        getMemProperties(devices[i], &memProps);
-
-        // Sum device-local heap sizes for total VRAM
-        int vramTotalMb=0;
-        for(uint32_t h=0; h<memProps.memoryHeapCount; ++h)
+        // Check if VK_EXT_memory_budget is supported on this device
+        bool hasBudgetExt=false;
+        if(enumDeviceExtensions)
         {
-            if(memProps.memoryHeaps[h].flags&VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            uint32_t extCount=0;
+            if(enumDeviceExtensions(devices[i], nullptr, &extCount, nullptr)==VK_SUCCESS&&extCount>0)
             {
-                vramTotalMb+=static_cast<int>(memProps.memoryHeaps[h].size/(1024*1024));
+                std::vector<VkExtensionProperties> exts(extCount);
+                if(enumDeviceExtensions(devices[i], nullptr, &extCount, exts.data())==VK_SUCCESS)
+                {
+                    for(uint32_t e=0; e<extCount; ++e)
+                    {
+                        if(std::strcmp(exts[e].extensionName, "VK_EXT_memory_budget")==0)
+                        {
+                            hasBudgetExt=true;
+                            break;
+                        }
+                    }
+                }
             }
         }
 
+        bool isIntegrated=(props.deviceType==VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
         GpuInfo gpu;
         gpu.index=gpuOffset+static_cast<int>(i);
         gpu.name=props.deviceName;
         gpu.backend=GpuBackend::Vulkan;
-        gpu.vramTotalMb=vramTotalMb;
-        gpu.vramFreeMb=vramTotalMb; // Vulkan doesn't provide free VRAM — approximate as total
-        gpu.unifiedMemory=(props.deviceType==VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
+        gpu.unifiedMemory=isIntegrated;
 
-        spdlog::info("Vulkan GPU {}: {} ({}MB VRAM, integrated={})",
-            gpu.index, gpu.name, gpu.vramTotalMb, gpu.unifiedMemory);
+        // Use VK_EXT_memory_budget for accurate per-heap budget/usage data.
+        // This is the authoritative runtime signal for how much memory
+        // the GPU can actually use, especially on UMA/APU systems where
+        // heap sizes alone can be misleading.
+        if(hasBudgetExt&&getMemProperties2)
+        {
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budgetProps{};
+            budgetProps.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+
+            VkPhysicalDeviceMemoryProperties2 memProps2{};
+            memProps2.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+            memProps2.pNext=&budgetProps;
+
+            getMemProperties2(devices[i], &memProps2);
+
+            const VkPhysicalDeviceMemoryProperties &mp=memProps2.memoryProperties;
+
+            // Sum DEVICE_LOCAL heaps — on discrete GPUs this is dedicated VRAM,
+            // on UMA systems this is the GPU-accessible portion of system RAM.
+            uint64_t deviceLocalBudgetBytes=0;
+            uint64_t deviceLocalUsageBytes=0;
+            uint64_t deviceLocalSizeBytes=0;
+
+            for(uint32_t h=0; h<mp.memoryHeapCount; ++h)
+            {
+                bool deviceLocal=(mp.memoryHeaps[h].flags&VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)!=0;
+
+                spdlog::debug("Vulkan GPU {}: heap {} — {} size={:.0f}MB budget={:.0f}MB usage={:.0f}MB",
+                    gpu.index, h,
+                    deviceLocal ? "DEVICE_LOCAL" : "host",
+                    static_cast<double>(mp.memoryHeaps[h].size)/(1024.0*1024.0),
+                    static_cast<double>(budgetProps.heapBudget[h])/(1024.0*1024.0),
+                    static_cast<double>(budgetProps.heapUsage[h])/(1024.0*1024.0));
+
+                MemoryHeapInfo heapInfo;
+                heapInfo.index=static_cast<int>(h);
+                heapInfo.deviceLocal=deviceLocal;
+                heapInfo.sizeMb=static_cast<int>(mp.memoryHeaps[h].size/(1024ULL*1024ULL));
+                heapInfo.budgetMb=static_cast<int>(budgetProps.heapBudget[h]/(1024ULL*1024ULL));
+                heapInfo.usageMb=static_cast<int>(budgetProps.heapUsage[h]/(1024ULL*1024ULL));
+                gpu.memoryHeaps.push_back(heapInfo);
+
+                if(deviceLocal)
+                {
+                    deviceLocalSizeBytes+=mp.memoryHeaps[h].size;
+                    deviceLocalBudgetBytes+=budgetProps.heapBudget[h];
+                    deviceLocalUsageBytes+=budgetProps.heapUsage[h];
+                }
+            }
+
+            gpu.hasMemoryBudget=true;
+
+            // Budget is the best estimate of how much this process can allocate.
+            // On UMA, budget may be significantly larger than the raw heap size
+            // (driver exposes most of system RAM as available to the GPU).
+            uint64_t budgetTotalMb=deviceLocalBudgetBytes/(1024ULL*1024ULL);
+            uint64_t budgetUsedMb=deviceLocalUsageBytes/(1024ULL*1024ULL);
+            uint64_t heapSizeMb=deviceLocalSizeBytes/(1024ULL*1024ULL);
+
+            // Use the larger of heap size and budget for total — on some UMA
+            // drivers the budget exceeds the reported heap size.
+            uint64_t effectiveTotalMb=(budgetTotalMb>heapSizeMb) ? budgetTotalMb : heapSizeMb;
+            uint64_t effectiveFreeMb=(deviceLocalBudgetBytes>deviceLocalUsageBytes)
+                ? (deviceLocalBudgetBytes-deviceLocalUsageBytes)/(1024ULL*1024ULL)
+                : 0;
+
+            gpu.vramTotalMb=static_cast<int>(effectiveTotalMb);
+            gpu.vramFreeMb=static_cast<int>(effectiveFreeMb);
+
+            if(isIntegrated)
+            {
+                // For UMA, the GPU-accessible pool is the DEVICE_LOCAL budget —
+                // this is the closest Vulkan gives to "how much memory the GPU
+                // can actually use right now" on unified-memory systems.
+                gpu.gpuAccessibleRamMb=static_cast<int>(effectiveTotalMb);
+                gpu.gpuAccessibleRamFreeMb=static_cast<int>(effectiveFreeMb);
+            }
+
+            spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+                "Vulkan GPU {}: {} (budget: {}MB total, {}MB free, "
+                "heap size: {}MB, integrated={}, memoryBudget=true)",
+                gpu.index, gpu.name,
+                gpu.vramTotalMb, gpu.vramFreeMb,
+                static_cast<int>(heapSizeMb), gpu.unifiedMemory);
+        }
+        else
+        {
+            // Fallback: no memory budget extension — use raw heap sizes.
+            // Free VRAM is unknown, approximate as total.
+            VkPhysicalDeviceMemoryProperties memProps{};
+            getMemProperties(devices[i], &memProps);
+
+            int vramTotalMb=0;
+            for(uint32_t h=0; h<memProps.memoryHeapCount; ++h)
+            {
+                bool deviceLocal=(memProps.memoryHeaps[h].flags&VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)!=0;
+
+                MemoryHeapInfo heapInfo;
+                heapInfo.index=static_cast<int>(h);
+                heapInfo.deviceLocal=deviceLocal;
+                heapInfo.sizeMb=static_cast<int>(memProps.memoryHeaps[h].size/(1024ULL*1024ULL));
+                gpu.memoryHeaps.push_back(heapInfo);
+
+                if(deviceLocal)
+                {
+                    vramTotalMb+=static_cast<int>(memProps.memoryHeaps[h].size/(1024*1024));
+                }
+            }
+
+            gpu.vramTotalMb=vramTotalMb;
+            gpu.vramFreeMb=vramTotalMb;
+
+            spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+                "Vulkan GPU {}: {} ({}MB VRAM, integrated={}, memoryBudget=false)",
+                gpu.index, gpu.name, gpu.vramTotalMb, gpu.unifiedMemory);
+        }
 
         m_systemInfo.gpus.push_back(gpu);
     }
@@ -613,23 +871,14 @@ void HardwareDetector::detectVulkanGpus()
 }
 
 // --- Unified memory detection via sysfs (amdgpu) ---
+// Supplements Vulkan memory budget data with amdgpu kernel-side diagnostics.
+// If VK_EXT_memory_budget already provided gpuAccessibleRam, sysfs is used
+// only for logging correlation. If budget was not available, sysfs provides
+// the fallback for GPU-accessible memory detection.
 
 void HardwareDetector::detectUnifiedMemory()
 {
 #ifdef __linux__
-    // For each GPU flagged as integrated, attempt to read amdgpu sysfs
-    // to get the actual GPU-accessible memory pool (GTT + VRAM).
-    //
-    // amdgpu exposes per-device files under /sys/class/drm/card*/device/:
-    //   mem_info_vram_total  — dedicated VRAM in bytes
-    //   mem_info_vram_used   — used VRAM in bytes
-    //   mem_info_gtt_total   — system RAM accessible to GPU (GTT) in bytes
-    //   mem_info_gtt_used    — used GTT in bytes
-    //
-    // On unified memory APUs (e.g. Ryzen AI Max+), the GPU can address
-    // GTT + VRAM as its working memory pool. The GTT size is typically
-    // most of system RAM minus a kernel reservation.
-
     for(GpuInfo &gpu:m_systemInfo.gpus)
     {
         if(!gpu.unifiedMemory)
@@ -637,7 +886,15 @@ void HardwareDetector::detectUnifiedMemory()
             continue;
         }
 
+        // If Vulkan budget already set gpuAccessibleRamMb, we have good data.
+        // Still attempt sysfs for diagnostic logging, but don't overwrite.
+        bool hasBudgetData=(gpu.gpuAccessibleRamMb>0);
+
         // Find the matching DRM card by scanning /sys/class/drm/card*
+        // Match by reading mem_info_vram_total from sysfs and comparing
+        // to the basic Vulkan heap size. Note: when budget is available,
+        // gpu.vramTotalMb may reflect the budget (much larger on UMA),
+        // so we read the raw sysfs VRAM and look for any reasonable match.
         std::string matchedCardPath;
 
         for(int card=0; card<16; ++card)
@@ -651,107 +908,109 @@ void HardwareDetector::detectUnifiedMemory()
                 continue;
             }
 
-            // Verify this card's VRAM matches what Vulkan reported
-            // (to handle multi-GPU systems correctly)
+            // On UMA APUs, the sysfs VRAM is typically a small carveout
+            // (e.g. 512MB) that doesn't match the Vulkan budget-derived
+            // vramTotalMb. Accept the match if this is the only amdgpu card
+            // with sysfs data available, or if the values are close.
             long long vramBytes=0;
             testFile >> vramBytes;
-            int vramMb=static_cast<int>(vramBytes/(1024LL*1024LL));
 
-            // Allow 1% tolerance for rounding
-            int diff=vramMb-gpu.vramTotalMb;
-            if(diff<0)
-            {
-                diff=-diff;
-            }
-
-            if(diff<=gpu.vramTotalMb/100+1)
-            {
-                matchedCardPath=cardPath;
-                break;
-            }
+            // Just accept the first card that has sysfs data for UMA —
+            // multi-GPU UMA systems are extremely rare.
+            matchedCardPath=cardPath;
+            break;
         }
 
         if(matchedCardPath.empty())
         {
-            // No sysfs match — fall back to system RAM as GPU-accessible pool.
-            // Unified memory GPUs share system RAM, so the GPU can access most of it.
-            // Use total system RAM as the accessible pool estimate.
-            gpu.gpuAccessibleRamMb=m_systemInfo.totalRamMb;
-            gpu.gpuAccessibleRamFreeMb=m_systemInfo.freeRamMb;
+            if(!hasBudgetData)
+            {
+                // No sysfs and no budget — fall back to system RAM
+                gpu.gpuAccessibleRamMb=m_systemInfo.totalRamMb;
+                gpu.gpuAccessibleRamFreeMb=m_systemInfo.freeRamMb;
 
-            spdlog::info("Unified memory GPU {}: {} — no sysfs match, "
-                "falling back to system RAM ({}MB total, {}MB free) as GPU-accessible pool",
-                gpu.index, gpu.name,
-                gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
+                spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+                    "Unified memory GPU {}: {} — no sysfs or budget data, "
+                    "falling back to system RAM ({}MB total, {}MB free)",
+                    gpu.index, gpu.name,
+                    gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
+            }
             continue;
         }
 
-        // Read VRAM used (better than Vulkan's "assume all free")
+        // Read sysfs VRAM and GTT for diagnostic logging
+        long long sysfsVramTotal=0, sysfsVramUsed=0;
+        long long gttTotalBytes=0, gttUsedBytes=0;
+
+        {
+            std::ifstream file(matchedCardPath+"/mem_info_vram_total");
+            if(file.is_open()) file >> sysfsVramTotal;
+        }
         {
             std::ifstream file(matchedCardPath+"/mem_info_vram_used");
-            if(file.is_open())
-            {
-                long long usedBytes=0;
-                file >> usedBytes;
-
-                int usedMb=static_cast<int>(usedBytes/(1024LL*1024LL));
-                gpu.vramFreeMb=gpu.vramTotalMb-usedMb;
-                if(gpu.vramFreeMb<0)
-                {
-                    gpu.vramFreeMb=0;
-                }
-            }
+            if(file.is_open()) file >> sysfsVramUsed;
         }
-
-        // Read GTT total and used
-        long long gttTotalBytes=0;
-        long long gttUsedBytes=0;
-
         {
             std::ifstream file(matchedCardPath+"/mem_info_gtt_total");
-            if(file.is_open())
-            {
-                file >> gttTotalBytes;
-            }
+            if(file.is_open()) file >> gttTotalBytes;
         }
         {
             std::ifstream file(matchedCardPath+"/mem_info_gtt_used");
-            if(file.is_open())
-            {
-                file >> gttUsedBytes;
-            }
+            if(file.is_open()) file >> gttUsedBytes;
+        }
+
+        int sysfsVramTotalMb=static_cast<int>(sysfsVramTotal/(1024LL*1024LL));
+        int sysfsVramUsedMb=static_cast<int>(sysfsVramUsed/(1024LL*1024LL));
+        int gttTotalMb=static_cast<int>(gttTotalBytes/(1024LL*1024LL));
+        int gttUsedMb=static_cast<int>(gttUsedBytes/(1024LL*1024LL));
+        int gttFreeMb=gttTotalMb-gttUsedMb;
+
+        if(gttFreeMb<0) gttFreeMb=0;
+
+        spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+            "Unified memory GPU {}: {} — sysfs: VRAM {}MB ({}MB used), "
+            "GTT {}MB ({}MB used), budgetAlreadySet={}",
+            gpu.index, gpu.name,
+            sysfsVramTotalMb, sysfsVramUsedMb,
+            gttTotalMb, gttUsedMb, hasBudgetData);
+
+        if(hasBudgetData)
+        {
+            // Vulkan budget is authoritative for allocation decisions.
+            // Log sysfs as a diagnostic side channel only.
+            continue;
+        }
+
+        // No Vulkan budget — use sysfs data for GPU-accessible memory.
+        // Refine VRAM free from sysfs (more accurate than "assume all free").
+        if(sysfsVramTotal>0)
+        {
+            gpu.vramTotalMb=sysfsVramTotalMb;
+            gpu.vramFreeMb=sysfsVramTotalMb-sysfsVramUsedMb;
+            if(gpu.vramFreeMb<0) gpu.vramFreeMb=0;
         }
 
         if(gttTotalBytes>0)
         {
-            int gttTotalMb=static_cast<int>(gttTotalBytes/(1024LL*1024LL));
-            int gttUsedMb=static_cast<int>(gttUsedBytes/(1024LL*1024LL));
-            int gttFreeMb=gttTotalMb-gttUsedMb;
-
-            if(gttFreeMb<0)
-            {
-                gttFreeMb=0;
-            }
-
             // GPU-accessible memory = VRAM + GTT (system RAM mapped to GPU)
             gpu.gpuAccessibleRamMb=gpu.vramTotalMb+gttTotalMb;
             gpu.gpuAccessibleRamFreeMb=gpu.vramFreeMb+gttFreeMb;
 
-            spdlog::info("Unified memory GPU {}: {} — VRAM {}MB ({}MB free), "
-                "GTT {}MB ({}MB free), total accessible {}MB ({}MB free)",
+            spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+                "Unified memory GPU {}: {} — sysfs fallback: "
+                "total accessible {}MB ({}MB free)",
                 gpu.index, gpu.name,
-                gpu.vramTotalMb, gpu.vramFreeMb,
-                gttTotalMb, gttFreeMb,
                 gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
         }
         else
         {
-            // sysfs card matched but no GTT info — fall back to system RAM
+            // No GTT info — fall back to system RAM
             gpu.gpuAccessibleRamMb=m_systemInfo.totalRamMb;
             gpu.gpuAccessibleRamFreeMb=m_systemInfo.freeRamMb;
 
-            spdlog::info("Unified memory GPU {}: {} — no GTT info, "
-                "falling back to system RAM ({}MB total, {}MB free) as GPU-accessible pool",
+            spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+                "Unified memory GPU {}: {} — no GTT info, "
+                "falling back to system RAM ({}MB total, {}MB free)",
                 gpu.index, gpu.name,
                 gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
         }
