@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG DOCKER_VERSION=1.2.0
+ARG DOCKER_VERSION=1.2.1
 FROM ubuntu:24.04
 
 # Install basic build tools, Python 3, and GPU libraries.
