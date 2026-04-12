@@ -4,8 +4,9 @@ FROM ubuntu:24.04
 
 # Install basic build tools, Python 3, and GPU libraries.
 # Vulkan headers + glslc are needed at build time for llama.cpp's Vulkan backend.
-# At runtime, GPU inference requires a Vulkan ICD on the host; without one
-# llama.cpp falls back to CPU-only.
+# ROCm HIP SDK is needed at build time for llama.cpp's HIP/ROCm backend.
+# At runtime, GPU inference requires a Vulkan ICD or ROCm driver on the host;
+# without one llama.cpp falls back to CPU-only.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -34,7 +35,24 @@ RUN apt-get update && apt-get install -y \
     mesa-vulkan-drivers \
     glslc \
     glslang-tools \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install ROCm HIP SDK (build-time only — no kernel driver needed in container)
+# Use hiplibsdk usecase to get HIP development libraries and CMake configs
+# (the plain "hip" usecase only installs runtime, missing hip-lang-config.cmake)
+RUN wget -q https://repo.radeon.com/amdgpu-install/7.2.1/ubuntu/noble/amdgpu-install_7.2.1.70201-1_all.deb && \
+    apt-get update && \
+    apt-get install -y ./amdgpu-install_7.2.1.70201-1_all.deb && \
+    apt-get update && \
+    amdgpu-install -y --usecase=hiplibsdk --no-dkms && \
+    rm -f amdgpu-install_7.2.1.70201-1_all.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV ROCM_PATH=/opt/rocm
+ENV HIP_PATH=/opt/rocm
+ENV PATH="${ROCM_PATH}/bin:${PATH}"
+ENV CMAKE_PREFIX_PATH="${ROCM_PATH}:${CMAKE_PREFIX_PATH}"
 
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y nodejs && \

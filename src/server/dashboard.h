@@ -554,7 +554,7 @@ td
         </div>
     </div>
     <div class="card" style="margin-bottom:20px;">
-        <h2>Loaded Models</h2>
+        <h2>Loaded Models <a href="/dashboard/storage" style="float:right;font-size:12px;color:#7c8aff;text-decoration:none;font-weight:normal;text-transform:none;letter-spacing:normal;">Downloaded Models &rarr;</a></h2>
         <table>
             <thead>
                 <tr>
@@ -575,41 +575,27 @@ td
         </table>
     </div>
     <div class="card" style="margin-bottom:20px;">
-        <h2>Downloaded Models</h2>
-        <div id="storageBarSection">
-            <div class="storage-info">
-                <span id="storageUsedLabel">Used: -</span>
-                <span id="storageLimitLabel">Limit: -</span>
-            </div>
-            <div class="storage-bar-outer">
-                <div class="storage-bar-fill" id="storageBarFill" style="width:0%"></div>
-                <div class="storage-bar-text" id="storageBarText">-</div>
-            </div>
-            <div class="storage-info">
-                <span id="storageCleanupLabel">Auto-cleanup: -</span>
-                <span id="storageCandidatesLabel"></span>
-            </div>
-        </div>
+        <h2>Active Requests</h2>
         <div id="downloadProgressSection" style="margin:8px 0;"></div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Model</th>
-                    <th>Variant</th>
-                    <th>Size</th>
-                    <th>Downloaded</th>
-                    <th>Last Used</th>
-                    <th>Uses</th>
-                    <th>State</th>
-                    <th>Hot Ready</th>
-                    <th>Protected</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="downloadedModelTable">
-                <tr><td colspan="10" style="color:#666;text-align:center;">No downloaded models</td></tr>
-            </tbody>
-        </table>
+        <div style="max-height:360px;overflow-y:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Status</th>
+                        <th>Input Tokens</th>
+                        <th>Output Tokens</th>
+                        <th>Prompt t/s</th>
+                        <th>Gen t/s</th>
+                        <th>Latency</th>
+                        <th>Total Time</th>
+                    </tr>
+                </thead>
+                <tbody id="activeRequestTable">
+                    <tr><td colspan="8" style="color:#666;text-align:center;">No recent requests</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
     <div class="grid">
         <div class="card">
@@ -1136,7 +1122,6 @@ async function toggleHotReady(name, variant, currentlyHotReady)
     const method=currentlyHotReady?"DELETE":"POST";
     const url="/api/models/"+encodeURIComponent(name)+"/variants/"+encodeURIComponent(variant)+"/hot-ready";
     await fetch(url, {method});
-    await refreshStorage();
 }
 
 async function toggleProtected(name, variant, currentlyProtected)
@@ -1144,37 +1129,6 @@ async function toggleProtected(name, variant, currentlyProtected)
     const method=currentlyProtected?"DELETE":"POST";
     const url="/api/models/"+encodeURIComponent(name)+"/variants/"+encodeURIComponent(variant)+"/protected";
     await fetch(url, {method});
-    await refreshStorage();
-}
-
-async function deleteModelFile(name, variant)
-{
-    if(!confirm("Delete "+name+" "+variant+"? This cannot be undone.")) return;
-    const url="/api/models/"+encodeURIComponent(name)+"/files"+(variant?"?variant="+encodeURIComponent(variant):"");
-    const resp=await fetch(url, {method:"DELETE"});
-    if(resp.status===409)
-    {
-        const data=await resp.json();
-        alert(data.error?.message||"Cannot delete: variant is guarded");
-    }
-    await refreshStorage();
-}
-
-function renderStorageBar(storage)
-{
-    if(!storage) return;
-
-    const used=storage.used_by_models_bytes||0;
-    const limit=storage.storage_limit_bytes;
-    const free=storage.free_disk_bytes||0;
-    const total=limit>0?limit:(used+free);
-    const pct=total>0?(used/total*100):0;
-
-    document.getElementById("storageUsedLabel").textContent="Used: "+formatBytesJs(used);
-    document.getElementById("storageLimitLabel").textContent=limit>0?"Limit: "+formatBytesJs(limit):"Limit: All free space";
-    document.getElementById("storageBarFill").style.width=pct.toFixed(1)+"%";
-    document.getElementById("storageBarText").textContent=formatBytesJs(used)+" / "+formatBytesJs(total)+" ("+pct.toFixed(1)+"%)";
-    document.getElementById("storageCleanupLabel").textContent="Auto-cleanup: "+(storage.cleanup_enabled?"ON":"OFF");
 }
 
 function renderDownloadProgress(downloads)
@@ -1213,64 +1167,46 @@ function renderDownloadProgress(downloads)
     el.innerHTML=html;
 }
 
-function renderDownloadedModels(models)
+function renderActiveRequests(history)
 {
-    const el=document.getElementById("downloadedModelTable");
+    const el=document.getElementById("activeRequestTable");
 
-    if(!models||models.length===0)
+    if(!history||history.length===0)
     {
-        el.innerHTML='<tr><td colspan="10" style="color:#666;text-align:center;">No downloaded models</td></tr>';
+        el.innerHTML='<tr><td colspan="8" style="color:#666;text-align:center;">No recent requests</td></tr>';
         return;
     }
 
+    const recent=history.slice(-20).reverse();
     let html="";
-    for(const m of models)
+    for(const s of recent)
     {
-        const ageClass=rowAgeClass(m.last_used_at);
-        const guarded=m.hot_ready||m.protected;
-        const hrClass=m.hot_ready?"btn-toggle active":"btn-toggle";
-        const prClass=m.protected?"btn-toggle active":"btn-toggle";
-        const deleteDisabled=guarded?"btn-disabled":"";
-        const deleteTitle=guarded?"Clear hot_ready and protected first":"Delete model file";
+        const promptTps=s.prompt_tokens_per_second||0;
+        const genTps=s.generation_tokens_per_second||0;
+        const totalMs=s.total_time_ms||0;
+        const latencyMs=s.latency_ms||0;
+        const isActive=(totalMs===0&&latencyMs===0);
 
-        html+=`<tr class="${ageClass}">
-            <td>${m.model}</td>
-            <td>${m.variant||"-"}</td>
-            <td>${m.file_size_display||formatBytesJs(m.file_size_bytes)}</td>
-            <td>${formatDate(m.downloaded_at)}</td>
-            <td>${formatDate(m.last_used_at)}</td>
-            <td>${m.usage_count||0}</td>
-            <td><span class="badge ${stateClass(m.runtime_state)}">${m.runtime_state||"Unloaded"}</span></td>
-            <td><button class="btn ${hrClass}" onclick="toggleHotReady('${m.model}','${m.variant}',${m.hot_ready})">${m.hot_ready?"ON":"OFF"}</button></td>
-            <td><button class="btn ${prClass}" onclick="toggleProtected('${m.model}','${m.variant}',${m.protected})">${m.protected?"ON":"OFF"}</button></td>
-            <td><button class="btn btn-danger ${deleteDisabled}" title="${deleteTitle}" onclick="${guarded?"":`deleteModelFile('${m.model}','${m.variant}')`}" ${guarded?"disabled":""}>Delete</button></td>
+        html+=`<tr>
+            <td>${s.model}</td>
+            <td><span class="badge ${isActive?"badge-downloading":"badge-loaded"}">${isActive?"Running":"Done"}</span></td>
+            <td>${s.prompt_tokens.toLocaleString()}</td>
+            <td>${s.completion_tokens.toLocaleString()}</td>
+            <td>${promptTps.toFixed(1)}</td>
+            <td>${genTps.toFixed(1)}</td>
+            <td>${latencyMs.toFixed(0)} ms</td>
+            <td>${totalMs.toFixed(0)} ms</td>
         </tr>`;
     }
     el.innerHTML=html;
 }
 
-async function refreshStorage()
+async function refreshDownloads()
 {
-    const [storage, storageModels, downloads, cleanupPreview]=await Promise.all([
-        fetchJson("/api/storage"),
-        fetchJson("/api/storage/models"),
-        fetchJson("/api/downloads"),
-        fetchJson("/api/storage/cleanup/preview")
-    ]);
-
-    renderStorageBar(storage);
+    const downloads=await fetchJson("/api/downloads");
 
     if(downloads&&downloads.downloads) renderDownloadProgress(downloads.downloads);
     else renderDownloadProgress([]);
-
-    if(storageModels&&storageModels.models) renderDownloadedModels(storageModels.models);
-    else renderDownloadedModels([]);
-
-    if(cleanupPreview)
-    {
-        const count=cleanupPreview.candidate_count||0;
-        document.getElementById("storageCandidatesLabel").textContent=count>0?count+" cleanup candidate"+(count>1?"s":""):"";
-    }
 }
 
 async function refresh()
@@ -1332,11 +1268,14 @@ async function refresh()
     // Inference history
     if(history) renderInferences(history);
 
+    // Active requests summary
+    if(history) renderActiveRequests(history);
+
     // Swaps
     if(swaps) renderSwaps(swaps);
 
-    // Storage (runs in parallel)
-    refreshStorage();
+    // Active downloads
+    refreshDownloads();
 }
 
 async function loadVersion()
@@ -1357,6 +1296,532 @@ refresh();
 refreshLogs();
 setInterval(refresh, POLL_INTERVAL);
 setInterval(refreshLogs, POLL_INTERVAL);
+</script>
+</body>
+</html>)HTML";
+
+const std::string DASHBOARD_STORAGE_HTML=R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArbiterAI — Downloaded Models</title>
+<style>
+*
+{
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body
+{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1117;
+    color: #e0e0e0;
+    line-height: 1.6;
+}
+.header
+{
+    background: #1a1d27;
+    border-bottom: 1px solid #2a2d3a;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.header h1
+{
+    font-size: 20px;
+    color: #7c8aff;
+}
+.header .status
+{
+    font-size: 13px;
+    color: #888;
+}
+.header .status .dot
+{
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4caf50;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.version-badge
+{
+    font-size: 12px;
+    color: #888;
+    background: #2a2d3a;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 8px;
+    font-weight: normal;
+    vertical-align: middle;
+}
+.back-link
+{
+    color: #7c8aff;
+    text-decoration: none;
+    font-size: 13px;
+    margin-right: 16px;
+}
+.back-link:hover
+{
+    text-decoration: underline;
+}
+.container
+{
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px 24px;
+}
+.card
+{
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+}
+.card h2
+{
+    font-size: 14px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+table
+{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+th
+{
+    text-align: left;
+    padding: 8px 10px;
+    color: #888;
+    font-weight: 500;
+    border-bottom: 1px solid #2a2d3a;
+}
+td
+{
+    padding: 8px 10px;
+    border-bottom: 1px solid #1f2230;
+}
+.badge
+{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.badge-loaded
+{
+    background: #1b3a2a;
+    color: #4caf50;
+}
+.badge-ready
+{
+    background: #2a3040;
+    color: #7c8aff;
+}
+.badge-unloaded
+{
+    background: #2a2020;
+    color: #888;
+}
+.badge-downloading
+{
+    background: #2a2a10;
+    color: #f0c040;
+}
+.btn
+{
+    padding: 4px 12px;
+    border: 1px solid #2a2d3a;
+    background: #1a1d27;
+    color: #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-right: 4px;
+}
+.btn:hover
+{
+    background: #252838;
+    color: #fff;
+}
+.btn-danger
+{
+    border-color: #5a2020;
+}
+.btn-danger:hover
+{
+    background: #3a1515;
+    color: #ff6060;
+}
+.btn-disabled
+{
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.btn-toggle
+{
+    padding: 2px 8px;
+    font-size: 11px;
+}
+.btn-toggle.active
+{
+    background: #1b3a2a;
+    border-color: #4caf50;
+    color: #4caf50;
+}
+.storage-bar-outer
+{
+    background: #1f2230;
+    border-radius: 4px;
+    height: 24px;
+    margin: 8px 0;
+    overflow: hidden;
+    position: relative;
+}
+.storage-bar-fill
+{
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #4a6cf7, #7c8aff);
+    transition: width 0.5s ease;
+}
+.storage-bar-text
+{
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: #e0e0e0;
+    font-weight: 500;
+}
+.storage-info
+{
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 4px;
+}
+.row-fresh
+{
+    border-left: 3px solid #4caf50;
+}
+.row-stale
+{
+    border-left: 3px solid #f0c040;
+}
+.row-old
+{
+    border-left: 3px solid #ff4444;
+}
+.progress-inline
+{
+    display: inline-block;
+    width: 120px;
+    height: 12px;
+    background: #1f2230;
+    border-radius: 3px;
+    overflow: hidden;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+.progress-inline-fill
+{
+    height: 100%;
+    background: linear-gradient(90deg, #4a6cf7, #7c8aff);
+    transition: width 0.3s ease;
+}
+</style>
+</head>
+<body>
+<div class="header">
+    <div>
+        <a href="/dashboard" class="back-link">&larr; Dashboard</a>
+        <span style="font-size:20px;color:#7c8aff;font-weight:600;">Downloaded Models</span>
+        <span id="versionBadge" class="version-badge"></span>
+    </div>
+    <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connected</span></div>
+</div>
+<div class="container">
+    <div class="card">
+        <h2>Storage</h2>
+        <div id="storageBarSection">
+            <div class="storage-info">
+                <span id="storageUsedLabel">Used: -</span>
+                <span id="storageLimitLabel">Limit: -</span>
+            </div>
+            <div class="storage-bar-outer">
+                <div class="storage-bar-fill" id="storageBarFill" style="width:0%"></div>
+                <div class="storage-bar-text" id="storageBarText">-</div>
+            </div>
+            <div class="storage-info">
+                <span id="storageCleanupLabel">Auto-cleanup: -</span>
+                <span id="storageCandidatesLabel"></span>
+            </div>
+        </div>
+    </div>
+    <div id="downloadProgressCard"></div>
+    <div class="card">
+        <h2>Model Files</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>Variant</th>
+                    <th>Size</th>
+                    <th>Downloaded</th>
+                    <th>Last Used</th>
+                    <th>Uses</th>
+                    <th>State</th>
+                    <th>Hot Ready</th>
+                    <th>Protected</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="downloadedModelTable">
+                <tr><td colspan="10" style="color:#666;text-align:center;">No downloaded models</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+<script>
+const POLL_INTERVAL=3000;
+
+function formatBytesJs(bytes)
+{
+    if(bytes>=1073741824) return (bytes/1073741824).toFixed(1)+" GB";
+    if(bytes>=1048576) return (bytes/1048576).toFixed(1)+" MB";
+    return bytes+" B";
+}
+
+function formatDate(isoStr)
+{
+    if(!isoStr) return "-";
+    const d=new Date(isoStr);
+    return d.toLocaleDateString();
+}
+
+function daysSince(isoStr)
+{
+    if(!isoStr) return 999;
+    const d=new Date(isoStr);
+    const now=new Date();
+    return Math.floor((now-d)/(1000*60*60*24));
+}
+
+function rowAgeClass(lastUsed)
+{
+    const days=daysSince(lastUsed);
+    if(days>30) return "row-old";
+    if(days>14) return "row-stale";
+    return "row-fresh";
+}
+
+function stateClass(state)
+{
+    const map={"Loaded":"loaded", "Ready":"ready", "Unloaded":"unloaded", "Downloading":"downloading", "Unloading":"unloaded"};
+    return "badge-"+(map[state]||"unloaded");
+}
+
+async function fetchJson(url)
+{
+    try
+    {
+        const resp=await fetch(url);
+        if(!resp.ok) return null;
+        return await resp.json();
+    }
+    catch(e)
+    {
+        return null;
+    }
+}
+
+async function toggleHotReady(name, variant, currentlyHotReady)
+{
+    const method=currentlyHotReady?"DELETE":"POST";
+    const url="/api/models/"+encodeURIComponent(name)+"/variants/"+encodeURIComponent(variant)+"/hot-ready";
+    await fetch(url, {method});
+    await refreshStorage();
+}
+
+async function toggleProtected(name, variant, currentlyProtected)
+{
+    const method=currentlyProtected?"DELETE":"POST";
+    const url="/api/models/"+encodeURIComponent(name)+"/variants/"+encodeURIComponent(variant)+"/protected";
+    await fetch(url, {method});
+    await refreshStorage();
+}
+
+async function deleteModelFile(name, variant)
+{
+    if(!confirm("Delete "+name+" "+variant+"? This cannot be undone.")) return;
+    const url="/api/models/"+encodeURIComponent(name)+"/files"+(variant?"?variant="+encodeURIComponent(variant):"");
+    const resp=await fetch(url, {method:"DELETE"});
+    if(resp.status===409)
+    {
+        const data=await resp.json();
+        alert(data.error?.message||"Cannot delete: variant is guarded");
+    }
+    await refreshStorage();
+}
+
+function renderStorageBar(storage)
+{
+    if(!storage) return;
+
+    const used=storage.used_by_models_bytes||0;
+    const limit=storage.storage_limit_bytes;
+    const free=storage.free_disk_bytes||0;
+    const total=limit>0?limit:(used+free);
+    const pct=total>0?(used/total*100):0;
+
+    document.getElementById("storageUsedLabel").textContent="Used: "+formatBytesJs(used);
+    document.getElementById("storageLimitLabel").textContent=limit>0?"Limit: "+formatBytesJs(limit):"Limit: All free space";
+    document.getElementById("storageBarFill").style.width=pct.toFixed(1)+"%";
+    document.getElementById("storageBarText").textContent=formatBytesJs(used)+" / "+formatBytesJs(total)+" ("+pct.toFixed(1)+"%)";
+    document.getElementById("storageCleanupLabel").textContent="Auto-cleanup: "+(storage.cleanup_enabled?"ON":"OFF");
+}
+
+function renderDownloadProgress(downloads)
+{
+    const el=document.getElementById("downloadProgressCard");
+    if(!downloads||downloads.length===0)
+    {
+        el.innerHTML="";
+        return;
+    }
+
+    let html='<div class="card"><h2>Active Downloads</h2>';
+    for(const dl of downloads)
+    {
+        const pct=dl.percent_complete||0;
+        const downloaded=dl.bytes_downloaded||0;
+        const total=dl.total_bytes||0;
+        const speed=dl.speed_mbps||0;
+        const eta=dl.eta_seconds||0;
+
+        html+=`<div style="padding:6px 0;border-bottom:1px solid #1f2230;">
+            <span style="font-weight:500;">${dl.model}</span>
+            <span style="color:#888;margin-left:4px;">${dl.variant||""}</span>
+            <span class="badge badge-downloading" style="margin-left:8px;">Downloading</span>
+            <div style="margin-top:4px;">
+                <div class="progress-inline"><div class="progress-inline-fill" style="width:${pct.toFixed(1)}%"></div></div>
+                <span style="font-size:12px;color:#ccc;">${pct.toFixed(1)}%</span>
+                ${total>0?`<span style="font-size:12px;color:#888;margin-left:8px;">${formatBytesJs(downloaded)} / ${formatBytesJs(total)}</span>`:""}
+                ${speed>0?`<span style="font-size:12px;color:#888;margin-left:8px;">${speed.toFixed(1)} MB/s</span>`:""}
+                ${eta>0?`<span style="font-size:12px;color:#888;margin-left:8px;">~${eta}s left</span>`:""}
+            </div>
+        </div>`;
+    }
+    html+="</div>";
+    el.innerHTML=html;
+}
+
+function renderDownloadedModels(models)
+{
+    const el=document.getElementById("downloadedModelTable");
+
+    if(!models||models.length===0)
+    {
+        el.innerHTML='<tr><td colspan="10" style="color:#666;text-align:center;">No downloaded models</td></tr>';
+        return;
+    }
+
+    let html="";
+    for(const m of models)
+    {
+        const ageClass=rowAgeClass(m.last_used_at);
+        const guarded=m.hot_ready||m.protected;
+        const hrClass=m.hot_ready?"btn-toggle active":"btn-toggle";
+        const prClass=m.protected?"btn-toggle active":"btn-toggle";
+        const deleteDisabled=guarded?"btn-disabled":"";
+        const deleteTitle=guarded?"Clear hot_ready and protected first":"Delete model file";
+
+        html+=`<tr class="${ageClass}">
+            <td>${m.model}</td>
+            <td>${m.variant||"-"}</td>
+            <td>${m.file_size_display||formatBytesJs(m.file_size_bytes)}</td>
+            <td>${formatDate(m.downloaded_at)}</td>
+            <td>${formatDate(m.last_used_at)}</td>
+            <td>${m.usage_count||0}</td>
+            <td><span class="badge ${stateClass(m.runtime_state)}">${m.runtime_state||"Unloaded"}</span></td>
+            <td><button class="btn ${hrClass}" onclick="toggleHotReady('${m.model}','${m.variant}',${m.hot_ready})">${m.hot_ready?"ON":"OFF"}</button></td>
+            <td><button class="btn ${prClass}" onclick="toggleProtected('${m.model}','${m.variant}',${m.protected})">${m.protected?"ON":"OFF"}</button></td>
+            <td><button class="btn btn-danger ${deleteDisabled}" title="${deleteTitle}" onclick="${guarded?"":`deleteModelFile('${m.model}','${m.variant}')`}" ${guarded?"disabled":""}>Delete</button></td>
+        </tr>`;
+    }
+    el.innerHTML=html;
+}
+
+async function refreshStorage()
+{
+    const [storage, storageModels, downloads, cleanupPreview]=await Promise.all([
+        fetchJson("/api/storage"),
+        fetchJson("/api/storage/models"),
+        fetchJson("/api/downloads"),
+        fetchJson("/api/storage/cleanup/preview")
+    ]);
+
+    const dot=document.getElementById("statusDot");
+    const statusText=document.getElementById("statusText");
+
+    if(!storage)
+    {
+        dot.style.background="#ff4444";
+        statusText.textContent="Disconnected";
+    }
+    else
+    {
+        dot.style.background="#4caf50";
+        statusText.textContent="Connected";
+    }
+
+    renderStorageBar(storage);
+
+    if(downloads&&downloads.downloads) renderDownloadProgress(downloads.downloads);
+    else renderDownloadProgress([]);
+
+    if(storageModels&&storageModels.models) renderDownloadedModels(storageModels.models);
+    else renderDownloadedModels([]);
+
+    if(cleanupPreview)
+    {
+        const count=cleanupPreview.candidate_count||0;
+        document.getElementById("storageCandidatesLabel").textContent=count>0?count+" cleanup candidate"+(count>1?"s":""):"";
+    }
+}
+
+async function loadVersion()
+{
+    const data=await fetchJson("/api/version");
+    if(data)
+    {
+        document.getElementById("versionBadge").textContent="v"+data.version;
+    }
+}
+
+loadVersion();
+refreshStorage();
+setInterval(refreshStorage, POLL_INTERVAL);
 </script>
 </body>
 </html>)HTML";

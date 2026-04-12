@@ -62,6 +62,18 @@ bool ModelVariant::isSplit() const
     return files.size()>1;
 }
 
+void RuntimeOptions::mergeFrom(const RuntimeOptions &other)
+{
+    if(other.flashAttn.has_value()) flashAttn=other.flashAttn;
+    if(other.kvCacheTypeK.has_value()) kvCacheTypeK=other.kvCacheTypeK;
+    if(other.kvCacheTypeV.has_value()) kvCacheTypeV=other.kvCacheTypeV;
+    if(other.noMmap.has_value()) noMmap=other.noMmap;
+    if(other.reasoningBudget.has_value()) reasoningBudget=other.reasoningBudget;
+    if(other.swaFull.has_value()) swaFull=other.swaFull;
+    if(other.nGpuLayers.has_value()) nGpuLayers=other.nGpuLayers;
+    if(other.overrideTensor.has_value()) overrideTensor=other.overrideTensor;
+}
+
 ModelManager &ModelManager::instance()
 {
     static ModelManager instance;
@@ -103,6 +115,13 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
                     }
                 }
             }
+        }
+
+        // Load GPU backend rules from the config repo
+        auto backendsPath=m_configDownloader.getLocalPath()/"configs"/"defaults"/"backends"/"gpu_backends.json";
+        if(std::filesystem::exists(backendsPath))
+        {
+            loadGpuBackendRules(backendsPath);
         }
     }
     else
@@ -347,6 +366,53 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
                 }
             }
             info.variants.push_back(variant);
+        }
+    }
+
+    // Runtime options (llama.cpp model load/inference parameters)
+    if(modelJson.contains("runtime_options")&&modelJson["runtime_options"].is_object())
+    {
+        auto &ro=modelJson["runtime_options"];
+
+        if(ro.contains("flash_attn")&&ro["flash_attn"].is_boolean())
+            info.runtimeOptions.flashAttn=ro["flash_attn"].get<bool>();
+        if(ro.contains("kv_cache_type_k")&&ro["kv_cache_type_k"].is_string())
+            info.runtimeOptions.kvCacheTypeK=ro["kv_cache_type_k"].get<std::string>();
+        if(ro.contains("kv_cache_type_v")&&ro["kv_cache_type_v"].is_string())
+            info.runtimeOptions.kvCacheTypeV=ro["kv_cache_type_v"].get<std::string>();
+        if(ro.contains("no_mmap")&&ro["no_mmap"].is_boolean())
+            info.runtimeOptions.noMmap=ro["no_mmap"].get<bool>();
+        if(ro.contains("reasoning_budget")&&ro["reasoning_budget"].is_number_integer())
+            info.runtimeOptions.reasoningBudget=ro["reasoning_budget"].get<int>();
+        if(ro.contains("swa_full")&&ro["swa_full"].is_boolean())
+            info.runtimeOptions.swaFull=ro["swa_full"].get<bool>();
+        if(ro.contains("n_gpu_layers")&&ro["n_gpu_layers"].is_number_integer())
+            info.runtimeOptions.nGpuLayers=ro["n_gpu_layers"].get<int>();
+        if(ro.contains("override_tensor")&&ro["override_tensor"].is_string())
+            info.runtimeOptions.overrideTensor=ro["override_tensor"].get<std::string>();
+    }
+
+    // Backend priority (ordered preference for GPU compute backends)
+    if(modelJson.contains("backend_priority")&&modelJson["backend_priority"].is_array())
+    {
+        for(const auto &bp:modelJson["backend_priority"])
+        {
+            if(bp.is_string())
+            {
+                info.backendPriority.push_back(bp.get<std::string>());
+            }
+        }
+    }
+
+    // Disabled backends (model-level override to exclude specific backends)
+    if(modelJson.contains("disabled_backends")&&modelJson["disabled_backends"].is_array())
+    {
+        for(const auto &db:modelJson["disabled_backends"])
+        {
+            if(db.is_string())
+            {
+                info.disabledBackends.push_back(db.get<std::string>());
+            }
         }
     }
 
@@ -632,6 +698,7 @@ bool ModelManager::addModelFromJson(const nlohmann::json &modelJson, std::string
     m_models.push_back(info);
     m_modelProviderMap[info.model]=info.provider;
     m_runtimeModels.insert(info.model);
+    saveInjectedConfig(info.model);
     return true;
 }
 
@@ -683,6 +750,7 @@ bool ModelManager::updateModelFromJson(const nlohmann::json &modelJson, std::str
 
     m_modelProviderMap[info.model]=info.provider;
     m_runtimeModels.insert(info.model);
+    saveInjectedConfig(info.model);
     return true;
 }
 
@@ -696,8 +764,127 @@ bool ModelManager::removeModel(const std::string &modelName)
 
     m_models.erase(it);
     m_modelProviderMap.erase(modelName);
-    m_runtimeModels.erase(modelName);
+
+    if(m_runtimeModels.count(modelName))
+    {
+        m_runtimeModels.erase(modelName);
+        removeInjectedConfig(modelName);
+    }
+
     return true;
+}
+
+bool ModelManager::loadGpuBackendRules(const std::filesystem::path &filePath)
+{
+    spdlog::info("Loading GPU backend rules from: {}", filePath.string());
+
+    try
+    {
+        std::ifstream file(filePath);
+
+        if(!file.is_open())
+        {
+            spdlog::warn("Cannot open GPU backend rules file: {}", filePath.string());
+            return false;
+        }
+
+        nlohmann::json j=nlohmann::json::parse(file, nullptr, true, true);
+
+        if(!j.contains("gpu_backends")||!j["gpu_backends"].is_array())
+        {
+            spdlog::warn("GPU backend rules file missing 'gpu_backends' array");
+            return false;
+        }
+
+        m_gpuBackendRules.clear();
+
+        for(const nlohmann::json &entry:j["gpu_backends"])
+        {
+            GpuBackendRule rule;
+            rule.name=entry.value("name", "");
+
+            if(entry.contains("match")&&entry["match"].is_array())
+            {
+                for(const nlohmann::json &m:entry["match"])
+                {
+                    rule.match.push_back(m.get<std::string>());
+                }
+            }
+
+            if(entry.contains("disabled_backends")&&entry["disabled_backends"].is_array())
+            {
+                for(const nlohmann::json &d:entry["disabled_backends"])
+                {
+                    rule.disabledBackends.push_back(d.get<std::string>());
+                }
+            }
+
+            if(entry.contains("backend_priority")&&entry["backend_priority"].is_array())
+            {
+                for(const nlohmann::json &bp:entry["backend_priority"])
+                {
+                    rule.backendPriority.push_back(bp.get<std::string>());
+                }
+            }
+
+            rule.notes=entry.value("notes", "");
+
+            if(!rule.match.empty())
+            {
+                spdlog::info("  GPU backend rule '{}': match=[{}], priority=[{}], disabled=[{}]",
+                    rule.name,
+                    [&]()
+                    {
+                        std::string s;
+                        for(const std::string &m:rule.match) { if(!s.empty()) s+=", "; s+=m; }
+                        return s;
+                    }(),
+                    [&]()
+                    {
+                        std::string s;
+                        for(const std::string &p:rule.backendPriority) { if(!s.empty()) s+=", "; s+=p; }
+                        return s;
+                    }(),
+                    [&]()
+                    {
+                        std::string s;
+                        for(const std::string &d:rule.disabledBackends) { if(!s.empty()) s+=", "; s+=d; }
+                        return s;
+                    }());
+                m_gpuBackendRules.push_back(std::move(rule));
+            }
+        }
+
+        spdlog::info("Loaded {} GPU backend rules", m_gpuBackendRules.size());
+        return true;
+    }
+    catch(const std::exception &e)
+    {
+        spdlog::warn("Failed to parse GPU backend rules: {}", e.what());
+        return false;
+    }
+}
+
+std::optional<GpuBackendRule> ModelManager::findGpuBackendRule(const std::string &gpuName) const
+{
+    std::string gpuLower=gpuName;
+    std::transform(gpuLower.begin(), gpuLower.end(), gpuLower.begin(), ::tolower);
+
+    for(const GpuBackendRule &rule:m_gpuBackendRules)
+    {
+        for(const std::string &pattern:rule.match)
+        {
+            std::string patternLower=pattern;
+            std::transform(patternLower.begin(), patternLower.end(), patternLower.begin(), ::tolower);
+
+            if(gpuLower.find(patternLower)!=std::string::npos)
+            {
+                return rule;
+            }
+        }
+    }
+
+    return std::nullopt;
 }
 
 nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
@@ -802,6 +989,41 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
         j["variants"]=variants;
     }
 
+    // Runtime options
+    {
+        nlohmann::json ro;
+        if(info.runtimeOptions.flashAttn.has_value())
+            ro["flash_attn"]=info.runtimeOptions.flashAttn.value();
+        if(info.runtimeOptions.kvCacheTypeK.has_value())
+            ro["kv_cache_type_k"]=info.runtimeOptions.kvCacheTypeK.value();
+        if(info.runtimeOptions.kvCacheTypeV.has_value())
+            ro["kv_cache_type_v"]=info.runtimeOptions.kvCacheTypeV.value();
+        if(info.runtimeOptions.noMmap.has_value())
+            ro["no_mmap"]=info.runtimeOptions.noMmap.value();
+        if(info.runtimeOptions.reasoningBudget.has_value())
+            ro["reasoning_budget"]=info.runtimeOptions.reasoningBudget.value();
+        if(info.runtimeOptions.swaFull.has_value())
+            ro["swa_full"]=info.runtimeOptions.swaFull.value();
+        if(info.runtimeOptions.nGpuLayers.has_value())
+            ro["n_gpu_layers"]=info.runtimeOptions.nGpuLayers.value();
+        if(info.runtimeOptions.overrideTensor.has_value())
+            ro["override_tensor"]=info.runtimeOptions.overrideTensor.value();
+        if(!ro.empty())
+            j["runtime_options"]=ro;
+    }
+
+    // Backend priority
+    if(!info.backendPriority.empty())
+    {
+        j["backend_priority"]=info.backendPriority;
+    }
+
+    // Disabled backends
+    if(!info.disabledBackends.empty())
+    {
+        j["disabled_backends"]=info.disabledBackends;
+    }
+
     return j;
 }
 
@@ -844,6 +1066,179 @@ bool ModelManager::saveOverrides(const std::filesystem::path &overridePath) cons
         spdlog::error("Failed to rename override file: {}", ec.message());
         std::filesystem::remove(tempPath, ec);
         return false;
+    }
+
+    return true;
+}
+
+std::string ModelManager::sanitizeFilename(const std::string &name)
+{
+    std::string result;
+    result.reserve(name.size());
+
+    for(char c:name)
+    {
+        if(std::isalnum(static_cast<unsigned char>(c))||c=='-'||c=='_'||c=='.')
+        {
+            result+=c;
+        }
+        else
+        {
+            result+='_';
+        }
+    }
+
+    return result;
+}
+
+void ModelManager::setInjectedConfigDir(const std::filesystem::path &dir)
+{
+    m_injectedConfigDir=dir;
+
+    if(!dir.empty())
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+
+        if(ec)
+        {
+            spdlog::error("Failed to create injected config directory '{}': {}", dir.string(), ec.message());
+        }
+        else
+        {
+            spdlog::info("Injected model configs will be persisted to: {}", dir.string());
+        }
+    }
+}
+
+int ModelManager::loadInjectedConfigs()
+{
+    if(m_injectedConfigDir.empty()||!std::filesystem::exists(m_injectedConfigDir))
+    {
+        return 0;
+    }
+
+    int loaded=0;
+
+    for(const auto &entry:std::filesystem::directory_iterator(m_injectedConfigDir))
+    {
+        if(entry.path().extension()!=".json")
+            continue;
+
+        try
+        {
+            std::ifstream file(entry.path());
+            if(!file.is_open())
+            {
+                spdlog::warn("Failed to open injected config: {}", entry.path().string());
+                continue;
+            }
+
+            nlohmann::json j=nlohmann::json::parse(file);
+
+            if(!j.contains("model")||!j["model"].is_string())
+            {
+                spdlog::warn("Injected config missing 'model' field: {}", entry.path().string());
+                continue;
+            }
+
+            std::string modelName=j["model"].get<std::string>();
+
+            // Skip if a model with this name already exists (repo configs take precedence)
+            auto existing=std::find_if(m_models.begin(), m_models.end(),
+                [&modelName](const ModelInfo &info) { return info.model==modelName; });
+
+            if(existing!=m_models.end())
+            {
+                spdlog::debug("Skipping injected config for '{}' — already loaded from config repo", modelName);
+                continue;
+            }
+
+            std::string error;
+            if(addModelFromJson(j, error))
+            {
+                spdlog::info("Restored injected model config: {}", modelName);
+                ++loaded;
+            }
+            else
+            {
+                spdlog::warn("Failed to restore injected config '{}': {}", modelName, error);
+            }
+        }
+        catch(const nlohmann::json::parse_error &e)
+        {
+            spdlog::warn("Failed to parse injected config '{}': {}", entry.path().string(), e.what());
+        }
+    }
+
+    if(loaded>0)
+    {
+        spdlog::info("Restored {} injected model config(s) from {}", loaded, m_injectedConfigDir.string());
+    }
+
+    return loaded;
+}
+
+bool ModelManager::saveInjectedConfig(const std::string &modelName) const
+{
+    if(m_injectedConfigDir.empty())
+        return true; // no persistence configured — not an error
+
+    // Find the model info
+    auto it=std::find_if(m_models.begin(), m_models.end(),
+        [&modelName](const ModelInfo &info) { return info.model==modelName; });
+
+    if(it==m_models.end())
+        return false;
+
+    nlohmann::json j=modelInfoToJson(*it);
+
+    std::string filename=sanitizeFilename(modelName)+".json";
+    std::filesystem::path filePath=m_injectedConfigDir/filename;
+    std::filesystem::path tempPath=filePath.string()+".tmp";
+
+    std::ofstream file(tempPath);
+    if(!file.is_open())
+    {
+        spdlog::error("Failed to write injected config for '{}': cannot open {}", modelName, tempPath.string());
+        return false;
+    }
+
+    file<<j.dump(4);
+    file.close();
+
+    std::error_code ec;
+    std::filesystem::rename(tempPath, filePath, ec);
+
+    if(ec)
+    {
+        spdlog::error("Failed to persist injected config for '{}': {}", modelName, ec.message());
+        std::filesystem::remove(tempPath, ec);
+        return false;
+    }
+
+    spdlog::info("Persisted injected model config: {} -> {}", modelName, filePath.string());
+    return true;
+}
+
+bool ModelManager::removeInjectedConfig(const std::string &modelName) const
+{
+    if(m_injectedConfigDir.empty())
+        return true;
+
+    std::string filename=sanitizeFilename(modelName)+".json";
+    std::filesystem::path filePath=m_injectedConfigDir/filename;
+
+    std::error_code ec;
+    if(std::filesystem::exists(filePath, ec))
+    {
+        std::filesystem::remove(filePath, ec);
+        if(ec)
+        {
+            spdlog::error("Failed to remove injected config for '{}': {}", modelName, ec.message());
+            return false;
+        }
+        spdlog::info("Removed injected model config: {}", filePath.string());
     }
 
     return true;

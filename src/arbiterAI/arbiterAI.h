@@ -34,6 +34,7 @@ struct ModelFit;
 struct LoadedModel;
 struct SystemSnapshot;
 struct InferenceStats;
+struct RuntimeOptions;
 
 /**
  * @struct VersionInfo
@@ -241,6 +242,42 @@ inline void from_json(const nlohmann::json &j, ToolCall &t)
  * - "assistant": may include tool_calls when the model invokes tools
  * - "tool": includes tool_call_id linking the result back to a specific tool call
  */
+
+/// Extract text from an OpenAI `content` field.
+/// The spec allows content as either a plain string or an array of content
+/// parts (e.g. [{"type":"text","text":"..."},{"type":"image_url",...}]).
+/// This helper concatenates all "text" parts and ignores non-text entries.
+inline std::string contentToString(const nlohmann::json &contentJson)
+{
+    if(contentJson.is_string())
+        return contentJson.get<std::string>();
+
+    if(contentJson.is_array())
+    {
+        std::string result;
+        for(const nlohmann::json &part:contentJson)
+        {
+            if(part.is_string())
+            {
+                if(!result.empty()) result+=' ';
+                result+=part.get<std::string>();
+            }
+            else if(part.is_object()
+                && part.contains("type")
+                && part.at("type").get<std::string>()=="text"
+                && part.contains("text"))
+            {
+                if(!result.empty()) result+=' ';
+                result+=part.at("text").get<std::string>();
+            }
+            // Skip non-text parts (image_url, etc.)
+        }
+        return result;
+    }
+
+    return {};
+}
+
 struct Message
 {
     std::string role;
@@ -262,7 +299,7 @@ inline void from_json(const nlohmann::json &j, Message &m)
 {
     j.at("role").get_to(m.role);
     if(j.contains("content") && !j.at("content").is_null())
-        j.at("content").get_to(m.content);
+        m.content=contentToString(j.at("content"));
     if(j.contains("tool_call_id"))
         m.toolCallId=j.at("tool_call_id").get<std::string>();
     if(j.contains("tool_calls"))
@@ -605,9 +642,11 @@ public:
      * @param model Model name
      * @param variant Quantization variant (empty = auto-select)
      * @param contextSize Context size (0 = model default)
+     * @param optionsOverride Optional runtime options to merge on top of model config defaults (nullptr = use config defaults)
      * @return ErrorCode indicating success, ModelDownloading, or failure
      */
-    ErrorCode loadModel(const std::string &model, const std::string &variant="", int contextSize=0);
+    ErrorCode loadModel(const std::string &model, const std::string &variant="", int contextSize=0,
+        const RuntimeOptions *optionsOverride=nullptr);
 
     /**
      * @brief Download model files without loading into VRAM

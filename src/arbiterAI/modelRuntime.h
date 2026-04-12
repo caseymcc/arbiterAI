@@ -42,7 +42,8 @@ enum class LoadFailureReason {
     InsufficientRam,    // not enough system RAM
     ContextTooLarge,    // requested context exceeds model or hardware limits
     UnsupportedArch,    // model architecture not supported by this llama.cpp build
-    BackendError        // llama.cpp internal error
+    BackendError,       // llama.cpp internal error
+    VulkanDeviceLost    // Vulkan device lost — GPU driver reset or hung pipeline
 };
 
 /// Convert a LoadFailureReason to a stable, snake_case string for API responses.
@@ -72,6 +73,7 @@ struct LoadedModel {
     bool pinned=false;
     llama_model *llamaModel=nullptr;
     llama_context *llamaCtx=nullptr;
+    RuntimeOptions activeOptions; // llama.cpp options active for this loaded model
 };
 
 class ModelRuntime {
@@ -86,11 +88,13 @@ public:
     /// @param model     Model name from ModelManager.
     /// @param variant   Quantization variant (empty = auto-select best fitting).
     /// @param contextSize  Context size (0 = use model default).
+    /// @param optionsOverride  Optional runtime options to merge on top of model config defaults.
     /// @return ErrorCode::Success, ModelDownloading, ModelNotFound, ModelLoadError.
     ErrorCode loadModel(
         const std::string &model,
         const std::string &variant="",
-        int contextSize=0);
+        int contextSize=0,
+        const RuntimeOptions &optionsOverride=RuntimeOptions{});
 
     /// Download model files without loading into VRAM.
     /// Launches an async background download that respects the concurrent
@@ -121,7 +125,8 @@ public:
     ErrorCode swapModel(
         const std::string &newModel,
         const std::string &variant="",
-        int contextSize=0);
+        int contextSize=0,
+        const RuntimeOptions &optionsOverride=RuntimeOptions{});
 
     /// Get the state of all tracked models.
     std::vector<LoadedModel> getModelStates() const;
@@ -144,6 +149,14 @@ public:
 
     /// Get the current RAM budget for "Ready" tier models.
     int getReadyRamBudget() const;
+
+    /// Set the default backend priority used when a model config does not
+    /// specify its own backend_priority.  E.g. ["vulkan"] to force Vulkan
+    /// on systems where ROCm is unstable.
+    void setDefaultBackendPriority(const std::vector<std::string> &priority);
+
+    /// Get the current default backend priority.
+    std::vector<std::string> getDefaultBackendPriority() const;
 
     /// Evict least-recently-used non-pinned models to free VRAM.
     void evictIfNeeded(int requiredVramMb);
@@ -197,15 +210,30 @@ private:
     /// Initialize the llama.cpp backend (called once on first local model load).
     void initLlamaBackend();
 
+    /// Resolve the effective backend priority for a model, applying layered
+    /// rules: (1) model config, (2) architecture rule from config repo matched
+    /// against GPU name, (3) server default.  Disabled backends from all layers
+    /// are removed from the result.
+    std::vector<std::string> resolveBackendPriority(const ModelInfo &model) const;
+
+    /// Tear down and reinitialize the llama.cpp backend.
+    /// Used to recover from Vulkan device-lost errors.
+    void reinitLlamaBackend();
+
     /// Load a GGUF file into llama.cpp.
     /// @param contextSize      Requested context (0 = use model's native training context).
     /// @param maxHardwareContext  Hardware-fit limit (0 = no limit).
+    /// @param options           Resolved runtime options to apply.
+    /// @param backendPriority   Ordered backend preference (e.g. ["vulkan","rocm"]).
+    ///                          Empty = use all available backends (default).
     ErrorCode loadLlamaModel(
         const std::string &model,
         const std::string &filePath,
         int contextSize,
         const std::vector<int> &gpuIndices,
-        int maxHardwareContext=0);
+        int maxHardwareContext=0,
+        const RuntimeOptions &options=RuntimeOptions{},
+        const std::vector<std::string> &backendPriority={});
 
     /// Free llama.cpp resources for a model.
     void freeLlamaModel(LoadedModel &entry);
@@ -222,6 +250,7 @@ private:
     std::map<std::string, LoadedModel> m_models;
     mutable std::mutex m_mutex;
     int m_readyRamBudgetMb=0;
+    std::vector<std::string> m_defaultBackendPriority;
     std::atomic<bool> m_inferenceActive{false};
     std::string m_inferenceModel;
     bool m_llamaInitialized=false;
@@ -230,6 +259,7 @@ private:
         std::string model;
         std::string variant;
         int contextSize=0;
+        RuntimeOptions optionsOverride;
     };
     std::queue<SwapRequest> m_pendingSwaps;
 

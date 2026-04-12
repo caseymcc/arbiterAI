@@ -1,10 +1,12 @@
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/hardwareDetector.h"
+#include "arbiterAI/modelManager.h"
 #include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/storageManager.h"
 
 #include <llama.h>
 #include <ggml.h>
+#include <ggml-backend.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <filesystem>
@@ -13,6 +15,23 @@
 
 namespace arbiterAI
 {
+
+/// Map a string KV cache type name to the corresponding ggml_type enum value.
+/// Returns GGML_TYPE_COUNT if the string is not recognized.
+static ggml_type parseGgmlType(const std::string &name)
+{
+    if(name=="f32")  return GGML_TYPE_F32;
+    if(name=="f16")  return GGML_TYPE_F16;
+    if(name=="bf16") return GGML_TYPE_BF16;
+    if(name=="q8_0") return GGML_TYPE_Q8_0;
+    if(name=="q4_0") return GGML_TYPE_Q4_0;
+    if(name=="q4_1") return GGML_TYPE_Q4_1;
+    if(name=="q5_0") return GGML_TYPE_Q5_0;
+    if(name=="q5_1") return GGML_TYPE_Q5_1;
+
+    spdlog::warn("Unknown ggml type '{}', ignoring", name);
+    return GGML_TYPE_COUNT;
+}
 
 ModelRuntime &ModelRuntime::instance()
 {
@@ -151,6 +170,7 @@ const char *loadFailureReasonToString(LoadFailureReason reason)
         case LoadFailureReason::ContextTooLarge:   return "context_too_large";
         case LoadFailureReason::UnsupportedArch:   return "unsupported_arch";
         case LoadFailureReason::BackendError:      return "backend_error";
+        case LoadFailureReason::VulkanDeviceLost:  return "vulkan_device_lost";
         default:                                   return "unknown";
     }
 }
@@ -193,6 +213,23 @@ LoadErrorDetail ModelRuntime::classifyLoadFailure(
         detail.suggestion="Delete the file and re-download it. "
             "The download may have been interrupted or the file was partially written.";
         detail.action="delete_and_redownload";
+        detail.recoverable=true;
+        return detail;
+    }
+
+    // Check for Vulkan device lost (GPU driver reset or hung pipeline)
+    if(logLower.find("errordevicelost")!=std::string::npos||
+        logLower.find("error_device_lost")!=std::string::npos||
+        logLower.find("device lost")!=std::string::npos||
+        logLower.find("vk_error_device_lost")!=std::string::npos||
+        logLower.find("vk::queue::submit")!=std::string::npos&&logLower.find("lost")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::VulkanDeviceLost;
+        detail.summary="Vulkan device lost during model load — the GPU driver may have reset";
+        detail.suggestion="The Vulkan backend will be reinitialized automatically. "
+            "If this persists, restart the server. Possible causes: GPU overheating, "
+            "driver bug, or another process crashing the GPU.";
+        detail.action="reinit_backend";
         detail.recoverable=true;
         return detail;
     }
@@ -299,7 +336,8 @@ int ModelRuntime::getMaxConcurrentDownloads() const
 ErrorCode ModelRuntime::loadModel(
     const std::string &model,
     const std::string &variant,
-    int contextSize)
+    int contextSize,
+    const RuntimeOptions &optionsOverride)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -471,9 +509,17 @@ ErrorCode ModelRuntime::loadModel(
             // Actually load llama.cpp model for local providers
             if(modelInfo->provider=="llama")
             {
+                // Resolve runtime options: model config defaults + API override
+                RuntimeOptions resolvedOptions=modelInfo->runtimeOptions;
+                resolvedOptions.mergeFrom(optionsOverride);
+                entry.activeOptions=resolvedOptions;
+
+                // Resolve backend priority: model config > architecture rule > server default
+                std::vector<std::string> effectiveBackendPriority=resolveBackendPriority(*modelInfo);
+
                 std::string filePath="/models/"+primaryFilename;
                 ErrorCode loadResult=loadLlamaModel(model, filePath, entry.contextSize, entry.gpuIndices,
-                    fit.maxContextSize);
+                    fit.maxContextSize, resolvedOptions, effectiveBackendPriority);
                 if(loadResult!=ErrorCode::Success)
                 {
                     m_models.erase(model);
@@ -831,7 +877,8 @@ ErrorCode ModelRuntime::unpinModel(const std::string &model)
 ErrorCode ModelRuntime::swapModel(
     const std::string &newModel,
     const std::string &variant,
-    int contextSize)
+    int contextSize,
+    const RuntimeOptions &optionsOverride)
 {
     if(m_inferenceActive)
     {
@@ -841,6 +888,7 @@ ErrorCode ModelRuntime::swapModel(
         req.model=newModel;
         req.variant=variant;
         req.contextSize=contextSize;
+        req.optionsOverride=optionsOverride;
         m_pendingSwaps.push(req);
         spdlog::info("Swap to '{}' queued (inference active)", newModel);
         return ErrorCode::ModelDownloading; // "queued" status
@@ -879,7 +927,7 @@ ErrorCode ModelRuntime::swapModel(
         }
     }
 
-    ErrorCode result=loadModel(newModel, variant, contextSize);
+    ErrorCode result=loadModel(newModel, variant, contextSize, optionsOverride);
 
     // Record swap telemetry
     std::chrono::steady_clock::time_point swapEnd=std::chrono::steady_clock::now();
@@ -941,6 +989,142 @@ int ModelRuntime::getReadyRamBudget() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_readyRamBudgetMb;
+}
+
+void ModelRuntime::setDefaultBackendPriority(const std::vector<std::string> &priority)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_defaultBackendPriority=priority;
+
+    if(!priority.empty())
+    {
+        std::string joined;
+        for(const std::string &p:priority)
+        {
+            if(!joined.empty()) joined+=", ";
+            joined+=p;
+        }
+        spdlog::info("Default backend priority set to [{}]", joined);
+    }
+    else
+    {
+        spdlog::info("Default backend priority cleared (all backends)");
+    }
+}
+
+std::vector<std::string> ModelRuntime::getDefaultBackendPriority() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_defaultBackendPriority;
+}
+
+std::vector<std::string> ModelRuntime::resolveBackendPriority(const ModelInfo &model) const
+{
+    // Layered resolution:
+    //   1. Model config backend_priority (highest priority)
+    //   2. GPU architecture rule from config repo (matched by GPU name)
+    //   3. Server default_backend_priority (lowest priority)
+    //
+    // disabled_backends are collected from all layers (union) and removed
+    // from the final priority list.
+
+    std::vector<std::string> priority;
+    std::vector<std::string> disabled;
+
+    // Collect disabled backends from model config
+    for(const std::string &d:model.disabledBackends)
+    {
+        std::string lower=d;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        disabled.push_back(lower);
+    }
+
+    // Look up architecture rule based on detected GPU names
+    std::optional<GpuBackendRule> archRule;
+    std::vector<GpuInfo> gpus=HardwareDetector::instance().getGpus();
+
+    for(const GpuInfo &gpu:gpus)
+    {
+        archRule=ModelManager::instance().findGpuBackendRule(gpu.name);
+        if(archRule)
+        {
+            spdlog::debug("GPU '{}' matched architecture rule '{}'", gpu.name, archRule->name);
+            break;
+        }
+    }
+
+    // Collect disabled backends from architecture rule
+    if(archRule)
+    {
+        for(const std::string &d:archRule->disabledBackends)
+        {
+            std::string lower=d;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if(std::find(disabled.begin(), disabled.end(), lower)==disabled.end())
+                disabled.push_back(lower);
+        }
+    }
+
+    // Determine priority: model config > architecture rule > server default
+    if(!model.backendPriority.empty())
+    {
+        priority=model.backendPriority;
+    }
+    else if(archRule&&!archRule->backendPriority.empty())
+    {
+        priority=archRule->backendPriority;
+    }
+    else
+    {
+        priority=m_defaultBackendPriority;
+    }
+
+    // Remove disabled backends from the priority list
+    if(!disabled.empty()&&!priority.empty())
+    {
+        std::vector<std::string> filtered;
+
+        for(const std::string &p:priority)
+        {
+            std::string lower=p;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+            // Also check rocm/hip aliasing
+            bool isDisabled=false;
+            for(const std::string &d:disabled)
+            {
+                if(lower==d) { isDisabled=true; break; }
+                if((lower=="rocm"||lower=="hip")&&(d=="rocm"||d=="hip")) { isDisabled=true; break; }
+            }
+
+            if(!isDisabled)
+                filtered.push_back(p);
+        }
+
+        priority=filtered;
+    }
+
+    if(!priority.empty()||!disabled.empty())
+    {
+        spdlog::info("Backend resolution for '{}': priority=[{}], disabled=[{}], source={}",
+            model.model,
+            [&]()
+            {
+                std::string s;
+                for(const std::string &p:priority) { if(!s.empty()) s+=", "; s+=p; }
+                return s.empty()?"(all)":s;
+            }(),
+            [&]()
+            {
+                std::string s;
+                for(const std::string &d:disabled) { if(!s.empty()) s+=", "; s+=d; }
+                return s.empty()?"(none)":s;
+            }(),
+            !model.backendPriority.empty()?"model config":
+                (archRule?"architecture rule '"+archRule->name+"'":"server default"));
+    }
+
+    return priority;
 }
 
 void ModelRuntime::evictIfNeeded(int requiredVramMb)
@@ -1113,7 +1297,7 @@ void ModelRuntime::drainPendingSwaps()
 
     // Release lock before calling swapModel (it acquires its own lock)
     m_mutex.unlock();
-    swapModel(latest.model, latest.variant, latest.contextSize);
+    swapModel(latest.model, latest.variant, latest.contextSize, latest.optionsOverride);
     m_mutex.lock();
 }
 
@@ -1189,94 +1373,310 @@ void ModelRuntime::initLlamaBackend()
     }
 }
 
+void ModelRuntime::reinitLlamaBackend()
+{
+    spdlog::warn("Reinitializing llama.cpp backend (Vulkan device recovery)");
+
+    if(m_llamaInitialized)
+    {
+        llama_backend_free();
+        m_llamaInitialized=false;
+    }
+
+    // Brief pause to let the GPU driver settle after a device-lost event
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    llama_backend_init();
+    m_llamaInitialized=true;
+
+    spdlog::info("llama.cpp backend reinitialized successfully");
+}
+
 ErrorCode ModelRuntime::loadLlamaModel(
     const std::string &model,
     const std::string &filePath,
     int contextSize,
     const std::vector<int> &gpuIndices,
-    int maxHardwareContext)
+    int maxHardwareContext,
+    const RuntimeOptions &options,
+    const std::vector<std::string> &backendPriority)
 {
     initLlamaBackend();
 
-    // Start capturing llama.cpp log output for diagnostics
-    beginLlamaLogCapture();
-
-    llama_model_params mparams=llama_model_default_params();
-    mparams.n_gpu_layers=99; // offload all layers to GPU by default
-
-    llama_model *llamaModel=llama_model_load_from_file(filePath.c_str(), mparams);
-    if(!llamaModel)
+    // Log available backend devices matching backendPriority for diagnostics.
+    // NOTE: We intentionally do NOT set mparams.devices — llama.cpp's default
+    // device selection (devices=NULL) produces much better tensor placement on
+    // UMA/iGPU systems. When an explicit device list is provided that includes
+    // both GPU and CPU, llama.cpp treats them as co-equal allocation targets and
+    // splits model tensors and KV cache across both, which dramatically hurts
+    // performance on unified-memory architectures. Leaving devices=NULL lets
+    // llama.cpp's internal logic keep everything on the GPU device.
+    if(!backendPriority.empty())
     {
-        std::string captured=m_llamaLogCapture.str();
-        endLlamaLogCapture();
+        size_t devCount=ggml_backend_dev_count();
+        std::vector<std::string> matchedDevices;
 
-        m_lastLoadError=classifyLoadFailure(captured, model, filePath, contextSize);
-        spdlog::error("Failed to load llama model from: {} — {}", filePath, m_lastLoadError.summary);
-        return ErrorCode::ModelLoadError;
-    }
-
-    // Query native training context from GGUF metadata
-    int nativeContext=llama_model_n_ctx_train(llamaModel);
-
-    // Resolve actual context to allocate:
-    //   contextSize > 0  → user/config requested explicit size
-    //   contextSize == 0 → use model's native training context
-    // In both cases, cap by the hardware-fit maximum.
-    int actualContext=contextSize;
-    if(actualContext<=0)
-    {
-        actualContext=nativeContext;
-    }
-    if(maxHardwareContext>0&&actualContext>maxHardwareContext)
-    {
-        spdlog::info("Capping context from {} to {} (hardware limit) for model '{}'",
-            actualContext, maxHardwareContext, model);
-        actualContext=maxHardwareContext;
-    }
-
-    llama_context_params cparams=llama_context_default_params();
-    cparams.n_ctx=static_cast<uint32_t>(actualContext);
-    cparams.n_threads=std::thread::hardware_concurrency();
-    cparams.n_threads_batch=std::thread::hardware_concurrency();
-
-    llama_context *llamaCtx=llama_init_from_model(llamaModel, cparams);
-    if(!llamaCtx)
-    {
-        std::string captured=m_llamaLogCapture.str();
-        endLlamaLogCapture();
-
-        m_lastLoadError=classifyLoadFailure(captured, model, filePath, actualContext);
-
-        // If classification didn't catch a specific VRAM/context issue,
-        // context creation failure is almost always a memory issue
-        if(m_lastLoadError.reason==LoadFailureReason::Unknown||
-            m_lastLoadError.reason==LoadFailureReason::BackendError)
+        for(const std::string &preferred:backendPriority)
         {
-            m_lastLoadError.reason=LoadFailureReason::InsufficientVram;
-            m_lastLoadError.summary="Failed to create context (size="+std::to_string(actualContext)+
-                ") — likely insufficient GPU memory";
-            m_lastLoadError.suggestion="Try a smaller context size or use a smaller quantization variant. "
-                "You can also unload other models to free VRAM.";
-            m_lastLoadError.action="reduce_context";
-            m_lastLoadError.recoverable=true;
+            std::string prefLower=preferred;
+            std::transform(prefLower.begin(), prefLower.end(), prefLower.begin(), ::tolower);
+
+            for(size_t i=0; i<devCount; ++i)
+            {
+                ggml_backend_dev_t dev=ggml_backend_dev_get(i);
+                enum ggml_backend_dev_type devType=ggml_backend_dev_type(dev);
+
+                if(devType==GGML_BACKEND_DEVICE_TYPE_CPU)
+                    continue;
+
+                ggml_backend_reg_t reg=ggml_backend_dev_backend_reg(dev);
+                if(!reg)
+                    continue;
+
+                std::string regName=ggml_backend_reg_name(reg);
+                std::string regLower=regName;
+                std::transform(regLower.begin(), regLower.end(), regLower.begin(), ::tolower);
+
+                bool match=(regLower==prefLower);
+                if(!match&&(prefLower=="rocm"||prefLower=="hip"))
+                    match=(regLower=="rocm"||regLower=="hip");
+                if(!match&&prefLower=="cuda")
+                    match=(regLower=="cuda");
+
+                if(match)
+                {
+                    std::string desc=std::string(ggml_backend_dev_name(dev))
+                        +" ("+ggml_backend_dev_description(dev)+") ["+regName+"]";
+                    matchedDevices.push_back(desc);
+                }
+            }
         }
 
-        spdlog::error("Failed to create llama context for model: {} — {}", model, m_lastLoadError.summary);
-        llama_model_free(llamaModel);
-        return ErrorCode::ModelLoadError;
+        if(!matchedDevices.empty())
+        {
+            spdlog::info("Backend priority for '{}': [{}] — {} GPU device(s) available",
+                model,
+                [&]()
+                {
+                    std::string s;
+                    for(const std::string &p:backendPriority)
+                    {
+                        if(!s.empty()) s+=", ";
+                        s+=p;
+                    }
+                    return s;
+                }(),
+                matchedDevices.size());
+
+            for(size_t i=0; i<matchedDevices.size(); ++i)
+            {
+                spdlog::info("  device[{}]: {}", i, matchedDevices[i]);
+            }
+        }
+        else
+        {
+            spdlog::warn("Backend priority for '{}': no GPU devices matched [{}]",
+                model,
+                [&]()
+                {
+                    std::string s;
+                    for(const std::string &p:backendPriority)
+                    {
+                        if(!s.empty()) s+=", ";
+                        s+=p;
+                    }
+                    return s;
+                }());
+        }
     }
 
-    endLlamaLogCapture();
+    int maxAttempts=2; // 1 normal + 1 retry after backend reinit
 
-    LoadedModel &entry=m_models[model];
-    entry.llamaModel=llamaModel;
-    entry.llamaCtx=llamaCtx;
-    entry.maxContextSize=nativeContext;
-    entry.contextSize=static_cast<int>(llama_n_ctx(llamaCtx));
+    for(int attempt=0; attempt<maxAttempts; ++attempt)
+    {
+        if(attempt>0)
+        {
+            spdlog::warn("Retrying model load for '{}' (attempt {}/{})", model, attempt+1, maxAttempts);
+        }
 
-    spdlog::info("llama.cpp model loaded: {} (context={}, maxContext={})",
-        model, entry.contextSize, entry.maxContextSize);
-    return ErrorCode::Success;
+        // Start capturing llama.cpp log output for diagnostics
+        beginLlamaLogCapture();
+
+        llama_model_params mparams=llama_model_default_params();
+        mparams.n_gpu_layers=options.nGpuLayers.value_or(99);
+
+        if(options.noMmap.has_value()&&options.noMmap.value())
+        {
+            mparams.use_mmap=false;
+        }
+
+        // On UMA/iGPU systems (e.g. AMD APUs), mmap causes model tensors to be
+        // imported as host-visible "CPU_Mapped" buffers via VK_EXT_external_memory_host
+        // instead of being allocated as device-local memory. This bypasses the Vulkan
+        // backend's normal allocation path and results in dramatically slower GPU access.
+        // Auto-disable mmap when any active GPU is a unified-memory device, unless
+        // the user explicitly set no_mmap=false.
+        if(!options.noMmap.has_value()&&mparams.use_mmap)
+        {
+            std::vector<GpuInfo> gpus=HardwareDetector::instance().getGpus();
+
+            for(const GpuInfo &gpu:gpus)
+            {
+                if(gpu.unifiedMemory)
+                {
+                    spdlog::info("UMA device detected ({}), disabling mmap for model '{}' "
+                        "to ensure device-local memory allocation",
+                        gpu.name, model);
+                    mparams.use_mmap=false;
+                    break;
+                }
+            }
+        }
+
+        // NOTE: mparams.devices is intentionally left as NULL (default).
+        // See comment above about why explicit device lists hurt UMA performance.
+
+        llama_model *llamaModel=llama_model_load_from_file(filePath.c_str(), mparams);
+        if(!llamaModel)
+        {
+            std::string captured=m_llamaLogCapture.str();
+            endLlamaLogCapture();
+
+            m_lastLoadError=classifyLoadFailure(captured, model, filePath, contextSize);
+            spdlog::error("Failed to load llama model from: {} — {}", filePath, m_lastLoadError.summary);
+
+            // If Vulkan device lost and we haven't retried yet, reinit and try again
+            if(m_lastLoadError.reason==LoadFailureReason::VulkanDeviceLost&&attempt+1<maxAttempts)
+            {
+                spdlog::warn("Vulkan device lost detected during model load — "
+                    "reinitializing backend and retrying");
+                reinitLlamaBackend();
+                continue;
+            }
+
+            return ErrorCode::ModelLoadError;
+        }
+
+        // Query native training context from GGUF metadata
+        int nativeContext=llama_model_n_ctx_train(llamaModel);
+
+        // Resolve actual context to allocate:
+        //   contextSize > 0  → user/config requested explicit size
+        //   contextSize == 0 → use model's native training context
+        // In both cases, cap by the hardware-fit maximum.
+        int actualContext=contextSize;
+        if(actualContext<=0)
+        {
+            actualContext=nativeContext;
+        }
+        if(maxHardwareContext>0&&actualContext>maxHardwareContext)
+        {
+            spdlog::info("Capping context from {} to {} (hardware limit) for model '{}'",
+                actualContext, maxHardwareContext, model);
+            actualContext=maxHardwareContext;
+        }
+
+        llama_context_params cparams=llama_context_default_params();
+        cparams.n_ctx=static_cast<uint32_t>(actualContext);
+        cparams.n_threads=std::thread::hardware_concurrency();
+        cparams.n_threads_batch=std::thread::hardware_concurrency();
+
+        // Apply runtime options to context params
+        if(options.flashAttn.has_value())
+        {
+            cparams.flash_attn_type=options.flashAttn.value()
+                ?LLAMA_FLASH_ATTN_TYPE_ENABLED
+                :LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        }
+
+        if(options.kvCacheTypeK.has_value())
+        {
+            ggml_type kType=parseGgmlType(options.kvCacheTypeK.value());
+            if(kType!=GGML_TYPE_COUNT)
+            {
+                cparams.type_k=kType;
+            }
+        }
+
+        if(options.kvCacheTypeV.has_value())
+        {
+            ggml_type vType=parseGgmlType(options.kvCacheTypeV.value());
+            if(vType!=GGML_TYPE_COUNT)
+            {
+                cparams.type_v=vType;
+            }
+        }
+
+        if(options.swaFull.has_value())
+        {
+            cparams.swa_full=options.swaFull.value();
+        }
+
+        llama_context *llamaCtx=llama_init_from_model(llamaModel, cparams);
+        if(!llamaCtx)
+        {
+            std::string captured=m_llamaLogCapture.str();
+            endLlamaLogCapture();
+
+            m_lastLoadError=classifyLoadFailure(captured, model, filePath, actualContext);
+
+            // If Vulkan device lost and we haven't retried yet, reinit and try again
+            if(m_lastLoadError.reason==LoadFailureReason::VulkanDeviceLost&&attempt+1<maxAttempts)
+            {
+                spdlog::warn("Vulkan device lost detected during context creation — "
+                    "reinitializing backend and retrying");
+                llama_model_free(llamaModel);
+                reinitLlamaBackend();
+                continue;
+            }
+
+            // If classification didn't catch a specific VRAM/context issue,
+            // context creation failure is almost always a memory issue
+            if(m_lastLoadError.reason==LoadFailureReason::Unknown||
+                m_lastLoadError.reason==LoadFailureReason::BackendError)
+            {
+                m_lastLoadError.reason=LoadFailureReason::InsufficientVram;
+                m_lastLoadError.summary="Failed to create context (size="+std::to_string(actualContext)+
+                    ") — likely insufficient GPU memory";
+                m_lastLoadError.suggestion="Try a smaller context size or use a smaller quantization variant. "
+                    "You can also unload other models to free VRAM.";
+                m_lastLoadError.action="reduce_context";
+                m_lastLoadError.recoverable=true;
+            }
+
+            spdlog::error("Failed to create llama context for model: {} — {}", model, m_lastLoadError.summary);
+            llama_model_free(llamaModel);
+            return ErrorCode::ModelLoadError;
+        }
+
+        endLlamaLogCapture();
+
+        LoadedModel &entry=m_models[model];
+        entry.llamaModel=llamaModel;
+        entry.llamaCtx=llamaCtx;
+        entry.maxContextSize=nativeContext;
+        entry.contextSize=static_cast<int>(llama_n_ctx(llamaCtx));
+
+        spdlog::info("llama.cpp model loaded: {} (context={}, maxContext={}, ngl={}, flash_attn={}, mmap={}, backend_filter={})",
+            model, entry.contextSize, entry.maxContextSize,
+            options.nGpuLayers.value_or(99),
+            options.flashAttn.has_value()?(options.flashAttn.value()?"enabled":"disabled"):"auto",
+            mparams.use_mmap?"on":"off",
+            backendPriority.empty()?"all":[&]()
+            {
+                std::string s;
+                for(const std::string &p:backendPriority)
+                {
+                    if(!s.empty()) s+=",";
+                    s+=p;
+                }
+                return s;
+            }());
+        return ErrorCode::Success;
+    }
+
+    // Should not reach here, but just in case
+    return ErrorCode::ModelLoadError;
 }
 
 void ModelRuntime::freeLlamaModel(LoadedModel &entry)

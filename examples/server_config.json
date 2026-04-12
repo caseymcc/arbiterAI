@@ -24,7 +24,8 @@
     },
 
     "hardware": {
-        "vram_overrides": {}
+        "vram_overrides": {},
+        "default_backend_priority": []
     },
 
     "logging": {

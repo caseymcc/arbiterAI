@@ -1,7 +1,7 @@
 {
     "name": "llama-cpp",
-    "version": "8573",
-    "port-version": 1,
+    "version": "8748",
+    "port-version": 0,
     "description": "LLM inference in C/C++",
     "homepage": "https://github.com/ggml-org/llama.cpp",
     "license": "MIT",
@@ -14,5 +14,10 @@
         "name": "vcpkg-cmake-config",
         "host": true
       }
-    ]
+    ],
+    "features": {
+      "head": {
+        "description": "Build from latest master HEAD instead of a pinned release tag"
+      }
+    }
   }
