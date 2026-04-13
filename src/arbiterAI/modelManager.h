@@ -40,6 +40,22 @@ struct VariantDownload {
     std::string filename;
 };
 
+/// Runtime options that control llama.cpp model loading and inference behavior.
+/// These can be set per-model in the config and overridden at load time via the API.
+struct RuntimeOptions {
+    std::optional<bool> flashAttn;              // -fa: enable/disable flash attention
+    std::optional<std::string> kvCacheTypeK;    // -ctk: KV cache type for keys (e.g. "f16", "q8_0", "q4_0")
+    std::optional<std::string> kvCacheTypeV;    // -ctv: KV cache type for values
+    std::optional<bool> noMmap;                 // --no-mmap: disable memory mapping
+    std::optional<int> reasoningBudget;         // --reasoning-budget: reasoning token budget (0=disabled)
+    std::optional<bool> swaFull;                // --swa-full: full SWA (sliding window attention)
+    std::optional<int> nGpuLayers;              // -ngl: number of GPU layers (99=all)
+    std::optional<std::string> overrideTensor;  // -ot: tensor override pattern (e.g. "per_layer_token_embd.weight=CPU")
+
+    /// Merge another set of options on top of this one (override only non-empty fields).
+    void mergeFrom(const RuntimeOptions &other);
+};
+
 struct ModelVariant {
     std::string quantization;
     int fileSizeMb=0;
@@ -103,9 +119,22 @@ struct ModelInfo
     std::optional<HardwareRequirements> hardwareRequirements;
     std::optional<ContextScaling> contextScaling;
     std::vector<ModelVariant> variants;
+    RuntimeOptions runtimeOptions;              // Per-model llama.cpp runtime options
+    std::vector<std::string> backendPriority;   // Ordered preference: ["vulkan", "rocm", "cuda"]
+    std::vector<std::string> disabledBackends;  // Backends to exclude (model-level override)
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;
+};
+
+/// GPU architecture backend configuration entry.
+/// Matched against detected GPU names to determine default backend behavior.
+struct GpuBackendRule {
+    std::string name;                           // Human-readable name (e.g. "AMD RDNA 3.5 (Strix Point)")
+    std::vector<std::string> match;             // Case-insensitive substrings to match against GPU name
+    std::vector<std::string> disabledBackends;  // Backends to disable for this architecture
+    std::vector<std::string> backendPriority;   // Preferred backend order
+    std::string notes;                          // Human-readable notes
 };
 
 class ModelManager
@@ -129,6 +158,24 @@ public:
     static nlohmann::json modelInfoToJson(const ModelInfo &info);
     bool saveOverrides(const std::filesystem::path &overridePath) const;
 
+    /// Set the directory where injected model configs are persisted as individual
+    /// JSON files. Each file is named after the model (sanitized). On add/update
+    /// the file is written; on delete the file is removed. Call loadInjectedConfigs()
+    /// after initialize() to restore previously injected models.
+    void setInjectedConfigDir(const std::filesystem::path &dir);
+
+    /// Load all previously persisted injected model configs from the injected
+    /// config directory. Models that already exist (from the config repo) are
+    /// skipped — injected configs never shadow repo configs.
+    int loadInjectedConfigs();
+
+    /// Find the first GpuBackendRule whose match patterns hit the given GPU name.
+    /// Returns nullopt if no rule matches.
+    std::optional<GpuBackendRule> findGpuBackendRule(const std::string &gpuName) const;
+
+    /// Get all loaded GPU backend rules (for diagnostics / API).
+    const std::vector<GpuBackendRule> &getGpuBackendRules() const { return m_gpuBackendRules; }
+
 public:
     static int compareVersions(const std::string &v1, const std::string &v2);
 
@@ -140,11 +187,24 @@ private:
     bool validateModelJson(const nlohmann::json &modelJson, std::string &error) const;
     void mergeModelInfo(ModelInfo &existing, const ModelInfo &source, const nlohmann::json &sourceJson) const;
 
+    /// Persist a single injected model config to the injected config directory.
+    bool saveInjectedConfig(const std::string &modelName) const;
+
+    /// Remove a single injected model config file from the injected config directory.
+    bool removeInjectedConfig(const std::string &modelName) const;
+
+    /// Sanitize a model name into a safe filename (alphanumeric, hyphens, underscores).
+    static std::string sanitizeFilename(const std::string &name);
+
     std::vector<ModelInfo> m_models;
     std::map<std::string, std::string> m_modelProviderMap;
     std::set<std::string> m_runtimeModels;
+    std::vector<GpuBackendRule> m_gpuBackendRules;
     ConfigDownloader m_configDownloader;
+    std::filesystem::path m_injectedConfigDir;
     bool m_initialized{ false };
+
+    bool loadGpuBackendRules(const std::filesystem::path &filePath);
 };
 
 } // namespace arbiterAI

@@ -59,6 +59,10 @@ void handleGetHardware(const httplib::Request &req, httplib::Response &res);
 void handleSetVramOverride(const httplib::Request &req, httplib::Response &res);
 void handleClearVramOverride(const httplib::Request &req, httplib::Response &res);
 
+// ========== Runtime Options ==========
+
+void handleGetRuntimeOptions(const httplib::Request &req, httplib::Response &res);
+
 // ========== Logs ==========
 
 void handleGetLogs(const httplib::Request &req, httplib::Response &res);
@@ -84,6 +88,7 @@ void handleGetActiveDownloads(const httplib::Request &req, httplib::Response &re
 // ========== Dashboard ==========
 
 void handleDashboard(const httplib::Request &req, httplib::Response &res);
+void handleDashboardStorage(const httplib::Request &req, httplib::Response &res);
 
 } // namespace server
 } // namespace arbiterAI

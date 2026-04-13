@@ -195,20 +195,24 @@ ConfigDownloadStatus ConfigDownloader::checkoutVersion()
 
     spdlog::info("Checking out version: {}", m_version);
 
-    // Try to resolve the version as a direct ref, remote branch, or tag
+    // Try to resolve the version — prefer remote branch refs first so that
+    // a fetch+checkout always picks up the latest remote commit rather than
+    // a stale local branch ref that was never fast-forwarded.
     git_object *obj=nullptr;
-    error=git_revparse_single(&obj, repo, m_version.c_str());
+
+    // 1. Try as a remote-tracking branch (most common path after fetch)
+    std::string remoteBranch="refs/remotes/origin/"+m_version;
+    error=git_revparse_single(&obj, repo, remoteBranch.c_str());
 
     if(error!=0)
     {
-        // Try as a remote branch
-        std::string remoteBranch="refs/remotes/origin/"+m_version;
-        error=git_revparse_single(&obj, repo, remoteBranch.c_str());
+        // 2. Try as a direct ref / local branch / SHA
+        error=git_revparse_single(&obj, repo, m_version.c_str());
     }
 
     if(error!=0)
     {
-        // Try as a tag
+        // 3. Try as a tag
         std::string tag="refs/tags/"+m_version;
         error=git_revparse_single(&obj, repo, tag.c_str());
     }

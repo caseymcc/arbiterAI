@@ -77,7 +77,8 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
     "hardware": {
         "vram_overrides": {
             "0": 32000
-        }
+        },
+        "default_backend_priority": ["vulkan"]
     },
     "logging": {
         "level": "info",
@@ -116,6 +117,7 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `vram_overrides` | `object` | `{}` | GPU index → VRAM MB overrides (e.g., `{"0": 32000}`) |
+| `default_backend_priority` | `string[]` | `[]` | Default GPU backend preference for models without their own `backend_priority` (e.g., `["vulkan"]`). Empty = all backends. |
 
 **`logging` object:**
 

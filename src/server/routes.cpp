@@ -111,7 +111,23 @@ nlohmann::json systemInfoToJson(const SystemInfo &hw)
     nlohmann::json gpus=nlohmann::json::array();
     for(const GpuInfo &gpu:hw.gpus)
     {
-        gpus.push_back(gpuInfoToJson(gpu));
+        nlohmann::json gpuJson=gpuInfoToJson(gpu);
+
+        // Attach matched architecture rule (if any)
+        std::optional<GpuBackendRule> rule=ModelManager::instance().findGpuBackendRule(gpu.name);
+        if(rule)
+        {
+            nlohmann::json ruleJson={
+                {"name", rule->name}
+            };
+            if(!rule->disabledBackends.empty())
+                ruleJson["disabled_backends"]=rule->disabledBackends;
+            if(!rule->backendPriority.empty())
+                ruleJson["backend_priority"]=rule->backendPriority;
+            gpuJson["architecture_rule"]=ruleJson;
+        }
+
+        gpus.push_back(gpuJson);
     }
 
     return {
@@ -136,6 +152,54 @@ std::string modelStateToString(ModelState state)
     }
 }
 
+nlohmann::json runtimeOptionsToJson(const RuntimeOptions &opts)
+{
+    nlohmann::json j=nlohmann::json::object();
+
+    if(opts.flashAttn.has_value())
+        j["flash_attn"]=opts.flashAttn.value();
+    if(opts.kvCacheTypeK.has_value())
+        j["kv_cache_type_k"]=opts.kvCacheTypeK.value();
+    if(opts.kvCacheTypeV.has_value())
+        j["kv_cache_type_v"]=opts.kvCacheTypeV.value();
+    if(opts.noMmap.has_value())
+        j["no_mmap"]=opts.noMmap.value();
+    if(opts.reasoningBudget.has_value())
+        j["reasoning_budget"]=opts.reasoningBudget.value();
+    if(opts.swaFull.has_value())
+        j["swa_full"]=opts.swaFull.value();
+    if(opts.nGpuLayers.has_value())
+        j["n_gpu_layers"]=opts.nGpuLayers.value();
+    if(opts.overrideTensor.has_value())
+        j["override_tensor"]=opts.overrideTensor.value();
+
+    return j;
+}
+
+RuntimeOptions parseRuntimeOptions(const nlohmann::json &j)
+{
+    RuntimeOptions opts;
+
+    if(j.contains("flash_attn")&&j["flash_attn"].is_boolean())
+        opts.flashAttn=j["flash_attn"].get<bool>();
+    if(j.contains("kv_cache_type_k")&&j["kv_cache_type_k"].is_string())
+        opts.kvCacheTypeK=j["kv_cache_type_k"].get<std::string>();
+    if(j.contains("kv_cache_type_v")&&j["kv_cache_type_v"].is_string())
+        opts.kvCacheTypeV=j["kv_cache_type_v"].get<std::string>();
+    if(j.contains("no_mmap")&&j["no_mmap"].is_boolean())
+        opts.noMmap=j["no_mmap"].get<bool>();
+    if(j.contains("reasoning_budget")&&j["reasoning_budget"].is_number_integer())
+        opts.reasoningBudget=j["reasoning_budget"].get<int>();
+    if(j.contains("swa_full")&&j["swa_full"].is_boolean())
+        opts.swaFull=j["swa_full"].get<bool>();
+    if(j.contains("n_gpu_layers")&&j["n_gpu_layers"].is_number_integer())
+        opts.nGpuLayers=j["n_gpu_layers"].get<int>();
+    if(j.contains("override_tensor")&&j["override_tensor"].is_string())
+        opts.overrideTensor=j["override_tensor"].get<std::string>();
+
+    return opts;
+}
+
 nlohmann::json loadedModelToJson(const LoadedModel &m)
 {
     nlohmann::json gpuIndices=nlohmann::json::array();
@@ -144,7 +208,7 @@ nlohmann::json loadedModelToJson(const LoadedModel &m)
         gpuIndices.push_back(idx);
     }
 
-    return {
+    nlohmann::json j={
         {"model", m.modelName},
         {"variant", m.variant},
         {"state", modelStateToString(m.state)},
@@ -156,6 +220,14 @@ nlohmann::json loadedModelToJson(const LoadedModel &m)
         {"gpu_indices", gpuIndices},
         {"pinned", m.pinned}
     };
+
+    nlohmann::json activeOpts=runtimeOptionsToJson(m.activeOptions);
+    if(!activeOpts.empty())
+    {
+        j["runtime_options"]=activeOpts;
+    }
+
+    return j;
 }
 
 nlohmann::json inferenceStatsToJson(const InferenceStats &s)
@@ -224,6 +296,33 @@ std::string errorCodeToString(ErrorCode code)
         case ErrorCode::ApiKeyNotFound:      return "api_key_not_found";
         default:                             return "unknown_error";
     }
+}
+
+/// Parse a model identifier that may contain a ":variant" suffix.
+/// Examples:
+///   "Qwen3.5-27B:Q4_K_M" → ("Qwen3.5-27B", "Q4_K_M")
+///   "gpt-4"               → ("gpt-4", "")
+///   "gpt-oss-120b:Q8_0"   → ("gpt-oss-120b", "Q8_0")
+/// Uses rfind to handle model names that may themselves contain colons.
+std::pair<std::string, std::string> parseModelVariant(const std::string &modelId)
+{
+    // Only split on ':' if the suffix looks like a quantization variant
+    // (starts with Q, F, IQ, or BF — e.g. Q4_K_M, F16, IQ4_XS, BF16).
+    // This avoids breaking model names that contain colons for other reasons.
+    size_t pos=modelId.rfind(':');
+    if(pos!=std::string::npos&&pos+1<modelId.size())
+    {
+        std::string suffix=modelId.substr(pos+1);
+        char first=suffix[0];
+
+        if(first=='Q'||first=='q'||first=='F'||first=='f'
+            ||(suffix.size()>=2&&(suffix.substr(0, 2)=="IQ"||suffix.substr(0, 2)=="iq"
+                ||suffix.substr(0, 2)=="BF"||suffix.substr(0, 2)=="bf")))
+        {
+            return {modelId.substr(0, pos), suffix};
+        }
+    }
+    return {modelId, ""};
 }
 
 } // anonymous namespace
@@ -312,6 +411,9 @@ void registerRoutes(httplib::Server &server)
     // Logs
     server.Get("/api/logs", handleGetLogs);
 
+    // Runtime options
+    server.Get("/api/runtime-options", handleGetRuntimeOptions);
+
     // Storage management
     server.Get("/api/storage", handleGetStorage);
     server.Get("/api/storage/models", handleGetStorageModels);
@@ -330,6 +432,7 @@ void registerRoutes(httplib::Server &server)
     server.Get("/api/downloads", handleGetActiveDownloads);
 
     // Dashboard
+    server.Get("/dashboard/storage", handleDashboardStorage);
     server.Get("/dashboard", handleDashboard);
 
     spdlog::info("Registered all HTTP routes");
@@ -358,6 +461,31 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
     {
         arbiterRequest.model=requestJson.at("model");
 
+        // Parse "model:variant" syntax (e.g. "Qwen3.5-27B:Q4_K_M")
+        // Strip the variant from the model name so the core API gets the bare
+        // model name.  If a variant was specified, pre-load it so the llama
+        // provider uses the right quantization.
+        auto [baseName, requestedVariant]=parseModelVariant(arbiterRequest.model);
+        arbiterRequest.model=baseName;
+
+        if(!requestedVariant.empty())
+        {
+            ErrorCode loadErr=ArbiterAI::instance().loadModel(baseName, requestedVariant);
+            if(loadErr==ErrorCode::ModelDownloading)
+            {
+                res.status=503;
+                res.set_content(errorJson("Model '"+baseName+"' variant '"+requestedVariant
+                    +"' is still downloading", "server_error", "model", "model_downloading").dump(),
+                    "application/json");
+                return;
+            }
+            if(loadErr!=ErrorCode::Success)
+            {
+                spdlog::warn("Failed to pre-load model '{}' variant '{}' (error={})",
+                    baseName, requestedVariant, errorCodeToString(loadErr));
+            }
+        }
+
         // Parse messages with full OpenAI message format support
         for(const nlohmann::json &msg:requestJson.at("messages"))
         {
@@ -365,8 +493,9 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
             m.role=msg.at("role").get<std::string>();
 
             // content can be null for assistant messages with tool_calls
+            // content can be a string or an array of content parts (OpenAI spec)
             if(msg.contains("content") && !msg.at("content").is_null())
-                m.content=msg.at("content").get<std::string>();
+                m.content=contentToString(msg.at("content"));
 
             // tool_call_id for role="tool" messages
             if(msg.contains("tool_call_id"))
@@ -466,6 +595,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
     bool stream=requestJson.value("stream", false);
     std::string requestId=generateId("chatcmpl-");
     auto created=std::time(nullptr);
+    std::string responseModelId=requestJson.at("model").get<std::string>();
 
     // Check for stream_options.include_usage
     bool includeUsage=false;
@@ -478,14 +608,14 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
     {
         res.set_chunked_content_provider(
             "text/event-stream",
-            [arbiterRequest, requestId, created, includeUsage](size_t, httplib::DataSink &sink)
+            [arbiterRequest, requestId, created, includeUsage, responseModelId](size_t, httplib::DataSink &sink)
             {
                 // Send initial chunk with role
                 nlohmann::json roleChunk={
                     {"id", requestId},
                     {"object", "chat.completion.chunk"},
                     {"created", created},
-                    {"model", arbiterRequest.model},
+                    {"model", responseModelId},
                     {"system_fingerprint", nullptr},
                     {"choices", {{
                         {"index", 0},
@@ -503,7 +633,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         {"id", requestId},
                         {"object", "chat.completion.chunk"},
                         {"created", created},
-                        {"model", arbiterRequest.model},
+                        {"model", responseModelId},
                         {"system_fingerprint", nullptr},
                         {"choices", {{
                             {"index", 0},
@@ -529,7 +659,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                     {"id", requestId},
                     {"object", "chat.completion.chunk"},
                     {"created", created},
-                    {"model", arbiterRequest.model},
+                    {"model", responseModelId},
                     {"system_fingerprint", nullptr},
                     {"choices", {{
                         {"index", 0},
@@ -547,7 +677,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         {"id", requestId},
                         {"object", "chat.completion.chunk"},
                         {"created", created},
-                        {"model", arbiterRequest.model},
+                        {"model", responseModelId},
                         {"system_fingerprint", nullptr},
                         {"choices", nlohmann::json::array()},
                         {"usage", {
@@ -636,7 +766,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
             {"id", requestId},
             {"object", "chat.completion"},
             {"created", created},
-            {"model", arbiterResponse.model},
+            {"model", responseModelId},
             {"system_fingerprint", nullptr},
             {"choices", {{
                 {"index", 0},
@@ -664,6 +794,7 @@ void handleListModelsV1(const httplib::Request &, httplib::Response &res)
     nlohmann::json data=nlohmann::json::array();
     for(const std::string &name:modelNames)
     {
+        // Always emit the bare model name
         data.push_back({
             {"id", name},
             {"object", "model"},
@@ -671,6 +802,23 @@ void handleListModelsV1(const httplib::Request &, httplib::Response &res)
             {"owned_by", "arbiterai"},
             {"permission", nlohmann::json::array()}
         });
+
+        // For models with variants, also emit "model:variant" entries
+        ModelInfo info;
+        if(ArbiterAI::instance().getModelInfo(name, info)==ErrorCode::Success
+            &&!info.variants.empty())
+        {
+            for(const ModelVariant &v:info.variants)
+            {
+                data.push_back({
+                    {"id", name+":"+v.quantization},
+                    {"object", "model"},
+                    {"created", created},
+                    {"owned_by", "arbiterai"},
+                    {"permission", nlohmann::json::array()}
+                });
+            }
+        }
     }
 
     nlohmann::json response={
@@ -684,18 +832,29 @@ void handleListModelsV1(const httplib::Request &, httplib::Response &res)
 void handleGetModelV1(const httplib::Request &req, httplib::Response &res)
 {
     std::string modelId=req.matches[1];
+    auto [baseName, variantName]=parseModelVariant(modelId);
 
-    std::vector<std::string> modelNames;
-    ArbiterAI::instance().getAvailableModels(modelNames);
+    ModelInfo info;
+    bool found=(ArbiterAI::instance().getModelInfo(baseName, info)==ErrorCode::Success);
 
-    bool found=false;
-    for(const std::string &name:modelNames)
+    // If a variant was specified, verify it exists on this model
+    if(found&&!variantName.empty()&&!info.variants.empty())
     {
-        if(name==modelId)
+        bool variantFound=false;
+        for(const ModelVariant &v:info.variants)
         {
-            found=true;
-            break;
+            if(v.quantization==variantName)
+            {
+                variantFound=true;
+                break;
+            }
         }
+        if(!variantFound) found=false;
+    }
+    else if(!variantName.empty()&&info.variants.empty())
+    {
+        // Variant requested but model has no variants
+        found=false;
     }
 
     if(!found)
@@ -830,7 +989,24 @@ void handleGetModels(const httplib::Request &, httplib::Response &res)
     // Add models with hardware fit info
     for(const ModelFit &f:fits)
     {
-        models.push_back(modelFitToJson(f));
+        nlohmann::json modelJson=modelFitToJson(f);
+
+        // Include runtime_options and backend_priority from model config
+        ModelInfo info;
+        if(ArbiterAI::instance().getModelInfo(f.model, info)==ErrorCode::Success)
+        {
+            nlohmann::json opts=runtimeOptionsToJson(info.runtimeOptions);
+            if(!opts.empty())
+            {
+                modelJson["runtime_options"]=opts;
+            }
+            if(!info.backendPriority.empty())
+            {
+                modelJson["backend_priority"]=info.backendPriority;
+            }
+        }
+
+        models.push_back(modelJson);
     }
 
     // Add cloud models (no fit data)
@@ -844,7 +1020,7 @@ void handleGetModels(const httplib::Request &, httplib::Response &res)
     {
         if(fitModels.find(name)==fitModels.end())
         {
-            models.push_back({
+            nlohmann::json modelJson={
                 {"model", name},
                 {"variant", ""},
                 {"can_run", true},
@@ -852,7 +1028,23 @@ void handleGetModels(const httplib::Request &, httplib::Response &res)
                 {"limiting_factor", ""},
                 {"estimated_vram_mb", 0},
                 {"gpu_indices", nlohmann::json::array()}
-            });
+            };
+
+            ModelInfo info;
+            if(ArbiterAI::instance().getModelInfo(name, info)==ErrorCode::Success)
+            {
+                nlohmann::json opts=runtimeOptionsToJson(info.runtimeOptions);
+                if(!opts.empty())
+                {
+                    modelJson["runtime_options"]=opts;
+                }
+                if(!info.backendPriority.empty())
+                {
+                    modelJson["backend_priority"]=info.backendPriority;
+                }
+            }
+
+            models.push_back(modelJson);
         }
     }
 
@@ -879,6 +1071,7 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
         std::string modelName=req.matches[1];
         std::string variant;
         int contextSize=0;
+        RuntimeOptions optionsOverride;
 
         // Accept parameters from query string
         if(req.has_param("variant"))
@@ -898,6 +1091,8 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
                     contextSize=body["context"].get<int>();
                 if(body.contains("context_size")&&body["context_size"].is_number_integer())
                     contextSize=body["context_size"].get<int>();
+                if(body.contains("runtime_options")&&body["runtime_options"].is_object())
+                    optionsOverride=parseRuntimeOptions(body["runtime_options"]);
             }
             catch(const nlohmann::json::parse_error &)
             {
@@ -907,7 +1102,7 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
 
         spdlog::info("Load request: model='{}' variant='{}' context={}", modelName, variant, contextSize);
 
-        ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize);
+        ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize, &optionsOverride);
 
         if(err==ErrorCode::Success)
         {
@@ -919,6 +1114,12 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
             {
                 response["context_size"]=state->contextSize;
                 response["max_context_size"]=state->maxContextSize;
+
+                nlohmann::json activeOpts=runtimeOptionsToJson(state->activeOptions);
+                if(!activeOpts.empty())
+                {
+                    response["runtime_options"]=activeOpts;
+                }
             }
 
             res.set_content(response.dump(), "application/json");
@@ -1247,7 +1448,7 @@ void handleAddModelConfig(const httplib::Request &req, httplib::Response &res)
         added.push_back(modelJson["model"].get<std::string>());
     }
 
-    // Persist if override path is set
+    // Legacy: persist to single override file if configured
     if(!g_overridePath.empty())
     {
         mm.saveOverrides(g_overridePath);
@@ -1315,7 +1516,7 @@ void handleUpdateModelConfig(const httplib::Request &req, httplib::Response &res
             created.push_back(modelName);
     }
 
-    // Persist if override path is set
+    // Legacy: persist to single override file if configured
     if(!g_overridePath.empty())
     {
         mm.saveOverrides(g_overridePath);
@@ -1358,7 +1559,7 @@ void handleDeleteModelConfig(const httplib::Request &req, httplib::Response &res
         return;
     }
 
-    // Persist if override path is set
+    // Legacy: persist to single override file if configured
     if(!g_overridePath.empty())
     {
         mm.saveOverrides(g_overridePath);
@@ -1430,7 +1631,15 @@ void handleGetHardware(const httplib::Request &, httplib::Response &res)
     HardwareDetector::instance().refresh();
     SystemInfo hw=HardwareDetector::instance().getSystemInfo();
 
-    res.set_content(systemInfoToJson(hw).dump(), "application/json");
+    nlohmann::json j=systemInfoToJson(hw);
+
+    std::vector<std::string> defaultBP=ModelRuntime::instance().getDefaultBackendPriority();
+    if(!defaultBP.empty())
+    {
+        j["default_backend_priority"]=defaultBP;
+    }
+
+    res.set_content(j.dump(), "application/json");
 }
 
 void handleSetVramOverride(const httplib::Request &req, httplib::Response &res)
@@ -1989,6 +2198,78 @@ void handleGetActiveDownloads(const httplib::Request &, httplib::Response &res)
     res.set_content(nlohmann::json{{"downloads", downloads}}.dump(), "application/json");
 }
 
+// ========== Runtime Options ==========
+
+void handleGetRuntimeOptions(const httplib::Request &, httplib::Response &res)
+{
+    // Return a schema describing all available runtime options, their types,
+    // defaults, and valid values — so callers know what can be set.
+    nlohmann::json options=nlohmann::json::array();
+
+    options.push_back({
+        {"name", "flash_attn"},
+        {"type", "boolean"},
+        {"description", "Enable or disable flash attention (-fa). Some models crash with it enabled."},
+        {"default", nullptr}
+    });
+    options.push_back({
+        {"name", "kv_cache_type_k"},
+        {"type", "string"},
+        {"description", "KV cache data type for keys (-ctk). Lower precision uses less VRAM."},
+        {"valid_values", {"f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"}},
+        {"default", "f16"}
+    });
+    options.push_back({
+        {"name", "kv_cache_type_v"},
+        {"type", "string"},
+        {"description", "KV cache data type for values (-ctv). Lower precision uses less VRAM."},
+        {"valid_values", {"f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"}},
+        {"default", "f16"}
+    });
+    options.push_back({
+        {"name", "no_mmap"},
+        {"type", "boolean"},
+        {"description", "Disable memory-mapped file I/O (--no-mmap). Required for some models/systems."},
+        {"default", false}
+    });
+    options.push_back({
+        {"name", "reasoning_budget"},
+        {"type", "integer"},
+        {"description", "Reasoning token budget (--reasoning-budget). 0 disables reasoning/thinking tokens."},
+        {"default", nullptr}
+    });
+    options.push_back({
+        {"name", "swa_full"},
+        {"type", "boolean"},
+        {"description", "Use full-size sliding window attention cache (--swa-full)."},
+        {"default", nullptr}
+    });
+    options.push_back({
+        {"name", "n_gpu_layers"},
+        {"type", "integer"},
+        {"description", "Number of layers to offload to GPU (-ngl). 99 offloads all layers."},
+        {"default", 99}
+    });
+    options.push_back({
+        {"name", "override_tensor"},
+        {"type", "string"},
+        {"description", "Tensor override pattern (-ot). Advanced: route specific tensors to CPU/GPU."},
+        {"default", nullptr}
+    });
+
+    nlohmann::json backendPriorityInfo={
+        {"name", "backend_priority"},
+        {"type", "array of strings"},
+        {"description", "Ordered preference for GPU backends. First available backend is used."},
+        {"valid_values", {"vulkan", "rocm", "cuda"}}
+    };
+
+    res.set_content(nlohmann::json{
+        {"runtime_options", options},
+        {"backend_priority", backendPriorityInfo}
+    }.dump(), "application/json");
+}
+
 // ========== Logs ==========
 
 void handleGetLogs(const httplib::Request &req, httplib::Response &res)
@@ -2052,6 +2333,11 @@ void handleGetLogs(const httplib::Request &req, httplib::Response &res)
 void handleDashboard(const httplib::Request &, httplib::Response &res)
 {
     res.set_content(DASHBOARD_HTML, "text/html");
+}
+
+void handleDashboardStorage(const httplib::Request &, httplib::Response &res)
+{
+    res.set_content(DASHBOARD_STORAGE_HTML, "text/html");
 }
 
 } // namespace server

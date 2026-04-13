@@ -21,11 +21,12 @@ A C++17 library providing a unified interface for multiple LLM providers.
 
 1. **All commands** must go through `./runDocker.sh ...`.
 2. **All development** (building, testing, running) must be done inside the Docker container. The host environment is not guaranteed to have the correct tools or dependencies.
-3. **Do not** use `python`, `pip`, `pytest` — the host may not have the correct Python version or dependencies.
-4. **Do not** create or use a virtualenv on the host. The container is the virtualenv.
-5. The project source is **bind-mounted** at `/app` inside the container. Edits to files on the host are immediately visible inside the container.
-6. If you change the `Dockerfile`, run `./runDocker.sh --rebuild`.
-7. Don't launch the server, ask the user to launch so that its not running in the agents terminal.
+3. **Do not** run commands in the terminal with `2>&1` as the user cannot verify the command is running or not.
+4. **Do not** use `python`, `pip`, `pytest` — the host may not have the correct Python version or dependencies.
+5. **Do not** create or use a virtualenv on the host. The container is the virtualenv.
+6. The project source is **bind-mounted** at `/app` inside the container. Edits to files on the host are immediately visible inside the container.
+7. If you change the `Dockerfile`, run `./runDocker.sh --rebuild`.
+8. Don't launch the server, ask the user to launch so that its not running in the agents terminal.
 
 ## Active Tasks
 

@@ -1,0 +1,3 @@
+[submodule "arbiterAI_config"]
+	path = arbiterAI_config
+	url = https://github.com/caseymcc/arbiterAI_config.git

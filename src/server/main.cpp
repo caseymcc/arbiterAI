@@ -138,6 +138,7 @@ int main(int argc, char *argv[])
     std::string defaultModel=cfg.value("default_model", "");
     std::string defaultVariant=cfg.value("default_variant", "");
     std::string overridePath=cfg.value("override_path", "");
+    std::string injectedConfigDir=cfg.value("injected_config_dir", "");
     int ramBudget=cfg.value("ram_budget_mb", 0);
     int maxDownloads=cfg.value("max_concurrent_downloads", 2);
 
@@ -151,6 +152,15 @@ int main(int argc, char *argv[])
     // Hardware
     nlohmann::json hwCfg=cfg.value("hardware", nlohmann::json::object());
     nlohmann::json vramOverrides=hwCfg.value("vram_overrides", nlohmann::json::object());
+
+    std::vector<std::string> defaultBackendPriority;
+    if(hwCfg.contains("default_backend_priority")&&hwCfg["default_backend_priority"].is_array())
+    {
+        for(const nlohmann::json &bp:hwCfg["default_backend_priority"])
+        {
+            defaultBackendPriority.push_back(bp.get<std::string>());
+        }
+    }
 
     // Logging
     nlohmann::json logCfg=cfg.value("logging", nlohmann::json::object());
@@ -220,6 +230,17 @@ int main(int argc, char *argv[])
 
     spdlog::info("ArbiterAI initialized successfully");
 
+    // ── Restore injected model configs ───────────────────────────
+    if(!injectedConfigDir.empty())
+    {
+        arbiterAI::ModelManager::instance().setInjectedConfigDir(injectedConfigDir);
+        int restored=arbiterAI::ModelManager::instance().loadInjectedConfigs();
+        if(restored>0)
+        {
+            spdlog::info("Restored {} injected model config(s)", restored);
+        }
+    }
+
     // ── Apply VRAM overrides ─────────────────────────────────────
     for(auto it=vramOverrides.begin(); it!=vramOverrides.end(); ++it)
     {
@@ -258,6 +279,12 @@ int main(int argc, char *argv[])
     {
         arbiterAI::ModelRuntime::instance().setReadyRamBudget(ramBudget);
         spdlog::info("Ready model RAM budget set to {} MB", ramBudget);
+    }
+
+    // ── Default backend priority ─────────────────────────────────
+    if(!defaultBackendPriority.empty())
+    {
+        arbiterAI::ModelRuntime::instance().setDefaultBackendPriority(defaultBackendPriority);
     }
 
     // ── Concurrent download limit ────────────────────────────────

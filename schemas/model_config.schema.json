@@ -247,6 +247,58 @@
                 }
               }
             }
+          },
+          "runtime_options": {
+            "type": "object",
+            "description": "Runtime options for llama.cpp model loading and inference. Applied as defaults; can be overridden at load time via the API.",
+            "properties": {
+              "flash_attn": {
+                "type": "boolean",
+                "description": "Enable or disable flash attention (-fa)"
+              },
+              "kv_cache_type_k": {
+                "type": "string",
+                "description": "KV cache data type for keys (-ctk)",
+                "enum": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"]
+              },
+              "kv_cache_type_v": {
+                "type": "string",
+                "description": "KV cache data type for values (-ctv)",
+                "enum": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"]
+              },
+              "no_mmap": {
+                "type": "boolean",
+                "description": "Disable memory-mapped file I/O (--no-mmap)"
+              },
+              "reasoning_budget": {
+                "type": "integer",
+                "description": "Reasoning token budget (--reasoning-budget). 0 disables reasoning tokens.",
+                "minimum": 0
+              },
+              "swa_full": {
+                "type": "boolean",
+                "description": "Use full-size sliding window attention cache (--swa-full)"
+              },
+              "n_gpu_layers": {
+                "type": "integer",
+                "description": "Number of layers to offload to GPU (-ngl). 99 offloads all.",
+                "minimum": 0
+              },
+              "override_tensor": {
+                "type": "string",
+                "description": "Tensor override pattern (-ot) for routing tensors to CPU/GPU"
+              }
+            },
+            "additionalProperties": false
+          },
+          "backend_priority": {
+            "type": "array",
+            "description": "Ordered preference for GPU backends. First available backend is used.",
+            "items": {
+              "type": "string",
+              "enum": ["vulkan", "rocm", "cuda"]
+            },
+            "uniqueItems": true
           }
         }
       }
