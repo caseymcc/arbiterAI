@@ -263,6 +263,12 @@ ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
         response.finishReason = choice["finish_reason"].get<std::string>();
     }
 
+    // Extract reasoning_content (chain-of-thought from reasoning models)
+    if(message.contains("reasoning_content") && !message["reasoning_content"].is_null())
+    {
+        response.reasoningContent = message["reasoning_content"].get<std::string>();
+    }
+
     // Extract content (may be empty/null for tool_calls responses)
     if(message.contains("content") && !message["content"].is_null())
     {
@@ -327,6 +333,13 @@ ErrorCode OpenAI::parseResponse(const cpr::Response &rawResponse,
         response.usage.completion_tokens=jsonResponse["usage"]["completion_tokens"];
     }
 
+    // If content is empty but we have reasoning, use reasoning as the text
+    // so callers that only read .text still get the model output
+    if(response.text.empty() && !response.reasoningContent.empty() && response.toolCalls.empty())
+    {
+        response.text = response.reasoningContent;
+    }
+
     return ErrorCode::Success;
 }
 
@@ -366,12 +379,16 @@ ErrorCode OpenAI::streamingCompletion(const CompletionRequest &request,
 
                     auto json=nlohmann::json::parse(jsonStr);
                     if(json.contains("choices")&&!json["choices"].empty()&&
-                        json["choices"][0].contains("delta")&&
-                        json["choices"][0]["delta"].contains("content"))
+                        json["choices"][0].contains("delta"))
                     {
-
-                        std::string content=json["choices"][0]["delta"]["content"];
-                        callback(content);
+                        const auto &delta = json["choices"][0]["delta"];
+                        std::string chunk;
+                        if(delta.contains("reasoning_content") && !delta["reasoning_content"].is_null())
+                            chunk += delta["reasoning_content"].get<std::string>();
+                        if(delta.contains("content") && !delta["content"].is_null())
+                            chunk += delta["content"].get<std::string>();
+                        if(!chunk.empty())
+                            callback(chunk);
                     }
                 }
             }

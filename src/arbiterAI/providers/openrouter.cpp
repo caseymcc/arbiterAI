@@ -66,7 +66,17 @@ ErrorCode OpenRouter_LLM::parseResponse(const cpr::Response &rawResponse, Comple
     {
         nlohmann::json jsonResponse=nlohmann::json::parse(rawResponse.text);
         const auto &choice=jsonResponse["choices"][0];
-        response.text=choice["message"]["content"];
+        const auto &message=choice["message"];
+
+        if(message.contains("reasoning_content") && !message["reasoning_content"].is_null())
+            response.reasoningContent=message["reasoning_content"].get<std::string>();
+
+        if(message.contains("content") && !message["content"].is_null())
+            response.text=message["content"].get<std::string>();
+
+        if(response.text.empty() && !response.reasoningContent.empty())
+            response.text=response.reasoningContent;
+
         response.model=jsonResponse["model"];
         if(jsonResponse.contains("usage"))
         {
