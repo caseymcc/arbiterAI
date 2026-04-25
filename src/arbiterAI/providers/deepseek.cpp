@@ -112,13 +112,31 @@ ErrorCode Deepseek::parseResponse(const cpr::Response &rawResponse,
     // Extract the response text from the first choice
     if(!jsonResponse.contains("choices")||
         jsonResponse["choices"].empty()||
-        !jsonResponse["choices"][0].contains("message")||
-        !jsonResponse["choices"][0]["message"].contains("content"))
+        !jsonResponse["choices"][0].contains("message"))
     {
         return ErrorCode::InvalidResponse;
     }
 
-    response.text=jsonResponse["choices"][0]["message"]["content"];
+    const auto &message = jsonResponse["choices"][0]["message"];
+
+    // Extract reasoning_content (chain-of-thought)
+    if(message.contains("reasoning_content") && !message["reasoning_content"].is_null())
+    {
+        response.reasoningContent = message["reasoning_content"].get<std::string>();
+    }
+
+    // Extract content
+    if(message.contains("content") && !message["content"].is_null())
+    {
+        response.text = message["content"].get<std::string>();
+    }
+
+    // Fallback: use reasoning as text if content is empty
+    if(response.text.empty() && !response.reasoningContent.empty())
+    {
+        response.text = response.reasoningContent;
+    }
+
     response.provider="deepseek";
 
     if(jsonResponse.contains("model"))

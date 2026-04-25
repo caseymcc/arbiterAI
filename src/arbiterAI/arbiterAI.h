@@ -359,6 +359,7 @@ struct CompletionRequest
     std::optional<std::vector<std::string>> stop;
     std::optional<std::vector<ToolDefinition>> tools;  ///< Available tools for the model
     std::optional<std::string> tool_choice;            ///< Tool selection mode: "auto", "none", or specific tool name
+    std::optional<std::map<std::string, double>> logit_bias;  ///< Token ID to bias value
 };
 
 inline void to_json(nlohmann::json &j, const CompletionRequest &r)
@@ -429,6 +430,7 @@ inline void from_json(const nlohmann::json &j, Usage &u)
 struct CompletionResponse
 {
     std::string text;
+    std::string reasoningContent;      ///< Chain-of-thought / reasoning (e.g. DeepSeek reasoning_content)
     std::string model;
     Usage usage;
     std::string provider;  // "openai", "anthropic", etc.
@@ -449,6 +451,7 @@ inline void to_json(nlohmann::json &j, const CompletionResponse &r)
         {"finish_reason", r.finishReason},
         {"from_cache", r.fromCache}
     };
+    if (!r.reasoningContent.empty()) j["reasoning_content"] = r.reasoningContent;
     if (!r.toolCalls.empty()) j["tool_calls"] = r.toolCalls;
 }
 
@@ -458,6 +461,7 @@ inline void from_json(const nlohmann::json &j, CompletionResponse &r)
     j.at("model").get_to(r.model);
     j.at("usage").get_to(r.usage);
     j.at("provider").get_to(r.provider);
+    if (j.contains("reasoning_content")) j.at("reasoning_content").get_to(r.reasoningContent);
     if (j.contains("cost")) j.at("cost").get_to(r.cost);
     if (j.contains("tool_calls")) j.at("tool_calls").get_to(r.toolCalls);
     if (j.contains("finish_reason")) j.at("finish_reason").get_to(r.finishReason);
