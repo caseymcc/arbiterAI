@@ -72,6 +72,7 @@ void RuntimeOptions::mergeFrom(const RuntimeOptions &other)
     if(other.swaFull.has_value()) swaFull=other.swaFull;
     if(other.nGpuLayers.has_value()) nGpuLayers=other.nGpuLayers;
     if(other.overrideTensor.has_value()) overrideTensor=other.overrideTensor;
+    if(other.vulkanNoHostVisibleVram.has_value()) vulkanNoHostVisibleVram=other.vulkanNoHostVisibleVram;
 }
 
 ModelManager &ModelManager::instance()

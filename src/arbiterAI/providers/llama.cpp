@@ -60,7 +60,7 @@ ErrorCode Llama::completion(const CompletionRequest &request,
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
     double totalTimeMs=std::chrono::duration<double, std::milli>(endTime-startTime).count();
 
-    runtime.endInference();
+    runtime.endInference(request.model);
 
     if(code==ErrorCode::Success)
     {
@@ -135,7 +135,7 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
     double totalTimeMs=std::chrono::duration<double, std::milli>(endTime-startTime).count();
 
-    runtime.endInference();
+    runtime.endInference(request.model);
 
     if(code==ErrorCode::Success)
     {
@@ -209,24 +209,34 @@ ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
     }
     tokens.resize(nTokens);
 
-    llama_batch batch=llama_batch_init(nTokens, 0, 1);
+    int nBatch=static_cast<int>(llama_n_batch(llamaCtx));
+    llama_batch batch=llama_batch_init(std::max(nBatch, 512), 0, 1);
 
-    batch.n_tokens=nTokens;
-    for(int32_t i=0; i<batch.n_tokens; i++)
+    for(int start=0; start<nTokens; start+=nBatch)
     {
-        batch.token[i]=tokens[i];
-        batch.pos[i]=i;
-        batch.n_seq_id[i]=1;
-        batch.seq_id[i][0]=0;
-        batch.logits[i]=0;
-    }
-    batch.logits[batch.n_tokens-1]=1;
+        int chunkSize=std::min(nBatch, nTokens-start);
+        bool isLastChunk=(start+chunkSize>=nTokens);
 
-    if(llama_decode(llamaCtx, batch)!=0)
-    {
-        spdlog::error("llama_decode failed for embeddings");
-        llama_batch_free(batch);
-        return ErrorCode::GenerationError;
+        batch.n_tokens=chunkSize;
+        for(int32_t i=0; i<chunkSize; i++)
+        {
+            batch.token[i]=tokens[start+i];
+            batch.pos[i]=start+i;
+            batch.n_seq_id[i]=1;
+            batch.seq_id[i][0]=0;
+            batch.logits[i]=0;
+        }
+        if(isLastChunk)
+        {
+            batch.logits[chunkSize-1]=1;
+        }
+
+        if(llama_decode(llamaCtx, batch)!=0)
+        {
+            spdlog::error("llama_decode failed for embeddings (chunk at offset {})", start);
+            llama_batch_free(batch);
+            return ErrorCode::GenerationError;
+        }
     }
 
     const float *embeddingsPtr=llama_get_embeddings(llamaCtx);
@@ -373,28 +383,38 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     // Clear KV cache for fresh inference
     llama_memory_clear(llama_get_memory(ctx), true);
 
-    llama_batch batch=llama_batch_init(std::max(nTokens, 512), 0, 1);
+    int nBatch=static_cast<int>(llama_n_batch(ctx));
+    llama_batch batch=llama_batch_init(std::max(nBatch, 512), 0, 1);
 
-    // Fill batch with prompt tokens
-    batch.n_tokens=nTokens;
-    for(int32_t i=0; i<batch.n_tokens; i++)
-    {
-        batch.token[i]=tokensList[i];
-        batch.pos[i]=i;
-        batch.n_seq_id[i]=1;
-        batch.seq_id[i][0]=0;
-        batch.logits[i]=0;
-    }
-    batch.logits[batch.n_tokens-1]=1;
-
-    // Process prompt (timed)
+    // Process prompt (timed) — chunk into n_batch-sized pieces
     std::chrono::steady_clock::time_point promptStart=std::chrono::steady_clock::now();
 
-    if(llama_decode(ctx, batch)!=0)
+    for(int start=0; start<nTokens; start+=nBatch)
     {
-        spdlog::error("llama_decode failed during prompt processing");
-        llama_batch_free(batch);
-        return ErrorCode::GenerationError;
+        int chunkSize=std::min(nBatch, nTokens-start);
+        bool isLastChunk=(start+chunkSize>=nTokens);
+
+        batch.n_tokens=chunkSize;
+        for(int32_t i=0; i<chunkSize; i++)
+        {
+            batch.token[i]=tokensList[start+i];
+            batch.pos[i]=start+i;
+            batch.n_seq_id[i]=1;
+            batch.seq_id[i][0]=0;
+            batch.logits[i]=0;
+        }
+        // Only request logits for the very last token of the prompt
+        if(isLastChunk)
+        {
+            batch.logits[chunkSize-1]=1;
+        }
+
+        if(llama_decode(ctx, batch)!=0)
+        {
+            spdlog::error("llama_decode failed during prompt processing (chunk at offset {})", start);
+            llama_batch_free(batch);
+            return ErrorCode::GenerationError;
+        }
     }
 
     std::chrono::steady_clock::time_point promptEnd=std::chrono::steady_clock::now();

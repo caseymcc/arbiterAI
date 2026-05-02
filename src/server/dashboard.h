@@ -37,10 +37,32 @@ body
     align-items: center;
     justify-content: space-between;
 }
+.header-title-block
+{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
 .header h1
 {
     font-size: 20px;
     color: #7c8aff;
+}
+.header-links
+{
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.header-link
+{
+    color: #7c8aff;
+    text-decoration: none;
+    font-size: 13px;
+}
+.header-link:hover
+{
+    text-decoration: underline;
 }
 .header .status
 {
@@ -482,6 +504,72 @@ td
 {
     accent-color: #7c8aff;
 }
+.settings-note
+{
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 12px;
+}
+.settings-grid
+{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+}
+.settings-row
+{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.settings-label-row
+{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+.settings-label-row label
+{
+    color: #ccc;
+    font-weight: 500;
+}
+.settings-hint
+{
+    color: #777;
+}
+.settings-select
+{
+    background: #11141c;
+    color: #ddd;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+}
+.settings-actions
+{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+}
+.settings-message
+{
+    min-height: 18px;
+    font-size: 12px;
+    color: #7c8aff;
+}
+.settings-message.error
+{
+    color: #ff8080;
+}
+.settings-message.success
+{
+    color: #7bd88f;
+}
 .card-header-row
 {
     display: flex;
@@ -509,7 +597,13 @@ td
 </head>
 <body>
 <div class="header">
-    <h1>ArbiterAI Dashboard <span id="versionBadge" class="version-badge"></span><span id="llamaBadge" class="version-badge"></span></h1>
+    <div class="header-title-block">
+        <h1>ArbiterAI Dashboard <span id="versionBadge" class="version-badge"></span><span id="llamaBadge" class="version-badge"></span></h1>
+        <div class="header-links">
+            <a href="/dashboard/config" class="header-link">Configuration</a>
+            <a href="/dashboard/storage" class="header-link">Downloaded Models</a>
+        </div>
+    </div>
     <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connected</span></div>
 </div>
 <div class="container">
@@ -563,6 +657,7 @@ td
                     <th>State</th>
                     <th>Context</th>
                     <th>Max Context</th>
+                    <th>GPU(s)</th>
                     <th>VRAM (MB)</th>
                     <th>RAM (MB)</th>
                     <th>Pinned</th>
@@ -570,7 +665,7 @@ td
                 </tr>
             </thead>
             <tbody id="modelTable">
-                <tr><td colspan="8" style="color:#666;text-align:center;">No models loaded</td></tr>
+                <tr><td colspan="10" style="color:#666;text-align:center;">No models loaded</td></tr>
             </tbody>
         </table>
     </div>
@@ -648,6 +743,13 @@ const MAX_TPS_POINTS=60;
 let hasActiveDownloads=false;
 let logPanelOpen=true;
 let lastLogEpoch=0;
+let availableModelOptions=[];
+let serverConfigState=null;
+const STARTUP_ACCELERATORS=[
+    {key: "cpu", label: "CPU", selectId: "startupDefaultCpu", statusId: "startupDefaultCpuStatus"},
+    {key: "cuda", label: "CUDA", selectId: "startupDefaultCuda", statusId: "startupDefaultCudaStatus"},
+    {key: "vulkan", label: "Vulkan", selectId: "startupDefaultVulkan", statusId: "startupDefaultVulkanStatus"}
+];
 
 function toggleLogPanel()
 {
@@ -692,6 +794,220 @@ function escapeHtml(text)
     const el=document.createElement("span");
     el.textContent=text;
     return el.innerHTML;
+}
+
+function encodeStartupModelValue(model, variant)
+{
+    return encodeURIComponent(JSON.stringify({model, variant: variant||""}));
+}
+
+function decodeStartupModelValue(value)
+{
+    if(!value) return {model: "", variant: ""};
+
+    try
+    {
+        return JSON.parse(decodeURIComponent(value));
+    }
+    catch(e)
+    {
+        return {model: "", variant: ""};
+    }
+}
+
+function formatStartupModelLabel(model, variant)
+{
+    return variant?`${model} (${variant})`:model;
+}
+
+function formatAcceleratorLabel(accelerator)
+{
+    const match=STARTUP_ACCELERATORS.find((item) => item.key===accelerator);
+    if(match) return match.label;
+    if(accelerator==="legacy") return "Legacy Default";
+    return accelerator?accelerator.toUpperCase():"Unknown";
+}
+
+function buildAvailableModelOptions(models)
+{
+    const seen=new Set();
+    const options=[];
+
+    if(!models) return options;
+
+    for(const model of models)
+    {
+        const modelName=model.model||"";
+        const variant=model.variant||"";
+        if(!modelName) continue;
+
+        const key=modelName+"\u0000"+variant;
+        if(seen.has(key)) continue;
+        seen.add(key);
+
+        options.push({
+            model: modelName,
+            variant,
+            sortKey: modelName.toLowerCase()+"\u0000"+variant.toLowerCase(),
+            label: formatStartupModelLabel(modelName, variant)
+        });
+    }
+
+    options.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+    return options;
+}
+
+function showStartupDefaultsMessage(text, state)
+{
+    const el=document.getElementById("startupDefaultsMessage");
+    if(!el) return;
+
+    el.textContent=text||"";
+    el.className="settings-message";
+
+    if(state==="error") el.classList.add("error");
+    if(state==="success") el.classList.add("success");
+}
+
+function getStartupDefaultEntry(accelerator)
+{
+    if(!serverConfigState||!serverConfigState.startup_defaults)
+    {
+        return {model: "", variant: ""};
+    }
+
+    const entry=serverConfigState.startup_defaults[accelerator];
+    return {
+        model: entry&&entry.model?entry.model:"",
+        variant: entry&&entry.variant?entry.variant:""
+    };
+}
+
+function isAcceleratorDetected(accelerator)
+{
+    if(!serverConfigState||!serverConfigState.detected_accelerators)
+    {
+        return accelerator==="cpu";
+    }
+
+    return serverConfigState.detected_accelerators.includes(accelerator);
+}
+
+function renderStartupSettings()
+{
+    if(!serverConfigState)
+    {
+        showStartupDefaultsMessage("Loading startup defaults...", "");
+        return;
+    }
+
+    const effective=serverConfigState.effective_startup_default||{};
+    const effectiveLabel=document.getElementById("startupDefaultsEffective");
+    if(effective.model)
+    {
+        effectiveLabel.textContent=`Next restart: ${formatAcceleratorLabel(effective.accelerator)} -> ${formatStartupModelLabel(effective.model, effective.variant||"")}`;
+    }
+    else
+    {
+        effectiveLabel.textContent="Next restart: no startup default configured";
+    }
+
+    for(const accelerator of STARTUP_ACCELERATORS)
+    {
+        const select=document.getElementById(accelerator.selectId);
+        const status=document.getElementById(accelerator.statusId);
+        const selectedEntry=getStartupDefaultEntry(accelerator.key);
+        const selectedValue=selectedEntry.model?encodeStartupModelValue(selectedEntry.model, selectedEntry.variant):"";
+
+        let html=`<option value=""${selectedValue?"":" selected"}>Do not auto-load</option>`;
+        let hasSelected=!selectedValue;
+
+        for(const option of availableModelOptions)
+        {
+            const value=encodeStartupModelValue(option.model, option.variant);
+            const selected=value===selectedValue?" selected":"";
+            if(selected) hasSelected=true;
+            html+=`<option value="${value}"${selected}>${escapeHtml(option.label)}</option>`;
+        }
+
+        if(selectedValue&&!hasSelected)
+        {
+            html+=`<option value="${selectedValue}" selected>${escapeHtml(formatStartupModelLabel(selectedEntry.model, selectedEntry.variant)+(availableModelOptions.length?" [missing from catalog]":""))}</option>`;
+        }
+
+        select.innerHTML=html;
+        status.textContent=isAcceleratorDetected(accelerator.key)?"Detected":"Not detected";
+    }
+
+    const saveButton=document.getElementById("saveStartupDefaultsBtn");
+    saveButton.disabled=!serverConfigState;
+}
+
+async function loadStartupSettings()
+{
+    const [modelsResponse, configResponse]=await Promise.all([
+        fetchJson("/api/models"),
+        fetchJson("/api/server/config")
+    ]);
+
+    if(modelsResponse&&modelsResponse.models)
+    {
+        availableModelOptions=buildAvailableModelOptions(modelsResponse.models);
+    }
+
+    if(configResponse)
+    {
+        serverConfigState=configResponse;
+    }
+
+    renderStartupSettings();
+}
+
+async function saveStartupDefaults()
+{
+    const saveButton=document.getElementById("saveStartupDefaultsBtn");
+    const startupDefaults={};
+
+    for(const accelerator of STARTUP_ACCELERATORS)
+    {
+        const value=decodeStartupModelValue(document.getElementById(accelerator.selectId).value);
+        startupDefaults[accelerator.key]={
+            model: value.model||"",
+            variant: value.variant||""
+        };
+    }
+
+    saveButton.disabled=true;
+    showStartupDefaultsMessage("Saving startup defaults...", "");
+
+    try
+    {
+        const response=await fetch("/api/server/config", {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({startup_defaults: startupDefaults})
+        });
+        const data=await response.json();
+
+        if(!response.ok)
+        {
+            showStartupDefaultsMessage(data.error?.message||"Failed to save startup defaults.", "error");
+            return;
+        }
+
+        serverConfigState=data;
+        renderStartupSettings();
+        showStartupDefaultsMessage("Startup defaults saved. They will be used on the next server restart.", "success");
+    }
+    catch(e)
+    {
+        console.error("Saving startup defaults failed:", e);
+        showStartupDefaultsMessage("Failed to save startup defaults.", "error");
+    }
+    finally
+    {
+        saveButton.disabled=false;
+    }
 }
 
 async function refreshLogs(force)
@@ -929,7 +1245,7 @@ function buildHeapTooltip(gpu)
     return lines.join("<br>");
 }
 
-function renderGpus(gpus)
+function renderGpus(gpus, models)
 {
     const el=document.getElementById("gpuList");
 
@@ -937,6 +1253,25 @@ function renderGpus(gpus)
     {
         el.innerHTML='<span style="color:#666;">No GPUs detected</span>';
         return;
+    }
+
+    // Build per-GPU model assignments from loaded models
+    const gpuModels={};
+    if(models&&models.length>0)
+    {
+        for(const m of models)
+        {
+            if(m.state!=="Loaded") continue;
+            const indices=m.gpu_indices||[];
+            const perGpu=m.per_gpu_vram_mb||{};
+
+            for(const idx of indices)
+            {
+                if(!gpuModels[idx]) gpuModels[idx]=[];
+                const vram=perGpu[String(idx)]||m.estimated_vram_mb||0;
+                gpuModels[idx].push({name:m.model, vram:vram});
+            }
+        }
     }
 
     let html="";
@@ -989,10 +1324,22 @@ function renderGpus(gpus)
         const overrideBtn=`<button class="btn" style="font-size:0.7em;padding:2px 6px;margin-left:6px;" onclick="promptVramOverride(${gpu.index}, ${memTotal})" title="Override reported VRAM">✏</button>`;
         const clearBtn=gpu.vram_overridden?`<button class="btn btn-danger" style="font-size:0.7em;padding:2px 6px;margin-left:2px;" onclick="clearVramOverride(${gpu.index})" title="Clear VRAM override">✕</button>`:"";
 
+        // Show models loaded on this GPU
+        let modelsHtml="";
+        const assignedModels=gpuModels[gpu.index]||[];
+        if(assignedModels.length>0)
+        {
+            const modelTags=assignedModels.map(m=>
+                `<span style="display:inline-block;background:#2a2d40;border:1px solid #444;border-radius:4px;padding:1px 6px;margin:2px 2px 0 0;font-size:0.8em;">${m.name} <span style="color:#7c8aff;">${m.vram}MB</span></span>`
+            ).join("");
+            modelsHtml=`<div style="margin-top:4px;">${modelTags}</div>`;
+        }
+
         html+=`<div class="gpu-row">
             <div class="gpu-label"><span>${gpu.name} (${gpu.backend})${gpu.unified_memory?" ⚡ Unified":""}${overrideTag}${overrideBtn}${clearBtn}</span>${memSpan}</div>
             <div class="gpu-bar"><div class="gpu-bar-fill gpu-bar-vram" style="width:${memPct.toFixed(1)}%"></div></div>
             ${utilHtml}
+            ${modelsHtml}
         </div>`;
     }
     el.innerHTML=html;
@@ -1004,7 +1351,7 @@ function renderModels(models)
 
     if(!models||models.length===0)
     {
-        el.innerHTML='<tr><td colspan="9" style="color:#666;text-align:center;">No models loaded</td></tr>';
+        el.innerHTML='<tr><td colspan="10" style="color:#666;text-align:center;">No models loaded</td></tr>';
         return;
     }
 
@@ -1020,13 +1367,52 @@ function renderModels(models)
         const ctxDisplay=m.context_size? m.context_size.toLocaleString() : "-";
         const maxCtxDisplay=m.max_context_size? m.max_context_size.toLocaleString() : "-";
 
+        let gpuDisplay="-";
+        if(m.gpu_indices&&m.gpu_indices.length>0)
+        {
+            gpuDisplay=m.gpu_indices.join(", ");
+        }
+
+        let vramDisplay=`${m.estimated_vram_mb||m.vram_usage_mb||0}`;
+
+        // Show device allocation breakdown if available
+        if(m.device_allocations&&Object.keys(m.device_allocations).length>0)
+        {
+            let allocHtml='<div style="margin-top:4px;font-size:0.82em;color:#aaa;">';
+            for(const [devKey,alloc] of Object.entries(m.device_allocations))
+            {
+                const devName=alloc.device_name||devKey;
+                allocHtml+=`<div style="margin-bottom:2px;"><span style="color:#64b5f6;">${devName}</span>: `
+                    +`Model ${alloc.model_buffer_mb||0} MB`
+                    +` | KV ${alloc.kv_cache_buffer_mb||0} MB`
+                    +` | Compute ${alloc.compute_buffer_mb||0} MB`
+                    +` | <b>${alloc.total_mb||0} MB total</b></div>`;
+            }
+            if(m.cpu_mapped_buffer_mb&&m.cpu_mapped_buffer_mb>0)
+            {
+                allocHtml+=`<div style="margin-bottom:2px;"><span style="color:#ffb74d;">CPU</span>: ${m.cpu_mapped_buffer_mb} MB mapped</div>`;
+            }
+            if(m.graph_splits&&m.graph_splits>1)
+            {
+                allocHtml+=`<div style="color:#ce93d8;">Graph splits: ${m.graph_splits}</div>`;
+            }
+            allocHtml+='</div>';
+            vramDisplay+=allocHtml;
+        }
+        else if(m.per_gpu_vram_mb&&Object.keys(m.per_gpu_vram_mb).length>1)
+        {
+            const parts=Object.entries(m.per_gpu_vram_mb).map(([k,v])=>`GPU${k}:${v}`);
+            vramDisplay+=` <span style="color:#888;font-size:0.85em;">(${parts.join(", ")})</span>`;
+        }
+
         html+=`<tr>
             <td>${m.model}</td>
             <td>${m.variant||"-"}</td>
             <td><span class="badge ${stateClass(m.state)}">${m.state}</span></td>
             <td>${ctxDisplay}</td>
             <td>${maxCtxDisplay}</td>
-            <td>${m.vram_usage_mb||0}</td>
+            <td>${gpuDisplay}</td>
+            <td>${vramDisplay}</td>
             <td>${m.ram_usage_mb||0}</td>
             <td>${m.pinned?"Yes":"No"}</td>
             <td>${actions.join("")}</td>
@@ -1259,8 +1645,8 @@ async function refresh()
     }
 
     // GPUs
-    if(hw&&hw.gpus) renderGpus(hw.gpus);
-    else if(stats.hardware&&stats.hardware.gpus) renderGpus(stats.hardware.gpus);
+    if(hw&&hw.gpus) renderGpus(hw.gpus, stats.models||[]);
+    else if(stats.hardware&&stats.hardware.gpus) renderGpus(stats.hardware.gpus, stats.models||[]);
 
     // Models
     if(stats.models) renderModels(stats.models);

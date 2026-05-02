@@ -9,6 +9,7 @@
 #include <ggml-backend.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <thread>
 #include <regex>
@@ -72,8 +73,7 @@ void ModelRuntime::reset()
     }
 
     rt.m_models.clear();
-    rt.m_inferenceActive=false;
-    rt.m_inferenceModel.clear();
+    rt.m_activeInference.clear();
     while(!rt.m_pendingSwaps.empty())
     {
         rt.m_pendingSwaps.pop();
@@ -337,7 +337,8 @@ ErrorCode ModelRuntime::loadModel(
     const std::string &model,
     const std::string &variant,
     int contextSize,
-    const RuntimeOptions &optionsOverride)
+    const RuntimeOptions &optionsOverride,
+    const std::vector<int> &targetDevices)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -428,6 +429,26 @@ ErrorCode ModelRuntime::loadModel(
         if(selectedVar)
         {
             ModelFit fit=ModelFitCalculator::calculateModelFit(modelInfo.value(), *selectedVar, hw);
+
+            // If caller specified target devices, override the auto-selected GPU indices
+            if(!targetDevices.empty())
+            {
+                fit.gpuIndices=targetDevices;
+                // Recalculate available VRAM for target devices only
+                int targetVram=ModelFitCalculator::sumFreeVram(hw, targetDevices);
+                if(targetVram>0)
+                {
+                    fit.canRun=true;
+                    fit.limitingFactor.clear();
+                    // Recalculate max context for the specified devices
+                    int targetTotalVram=ModelFitCalculator::sumTotalVram(hw, targetDevices);
+                    if(fit.maxContextSize<=0&&targetTotalVram>0)
+                    {
+                        fit.maxContextSize=fit.maxContextSize;
+                    }
+                }
+            }
+
             if(!fit.canRun)
             {
                 m_lastLoadError.reason=(fit.limitingFactor=="ram")
@@ -444,8 +465,12 @@ ErrorCode ModelRuntime::loadModel(
                 return ErrorCode::ModelLoadError;
             }
 
-            // Evict if needed to make room
-            evictIfNeeded(selectedVar->minVramMb);
+            // Evict if needed to make room on each assigned GPU
+            for(int gpuIdx:fit.gpuIndices)
+            {
+                int perGpuVram=selectedVar->minVramMb/static_cast<int>(fit.gpuIndices.size());
+                evictIfNeeded(perGpuVram, gpuIdx);
+            }
 
             // Check if all model files exist, initiate async download for any missing ones
             std::vector<VariantDownload> allFiles=selectedVar->getAllFiles();
@@ -505,6 +530,19 @@ ErrorCode ModelRuntime::loadModel(
             entry.estimatedVramUsageMb=fit.estimatedVramUsageMb;
             entry.gpuIndices=fit.gpuIndices;
             entry.lastUsed=std::chrono::steady_clock::now();
+
+            // Distribute estimated VRAM usage across assigned GPUs
+            entry.perGpuVramMb.clear();
+            if(!fit.gpuIndices.empty())
+            {
+                int perGpu=fit.estimatedVramUsageMb/static_cast<int>(fit.gpuIndices.size());
+                int remainder=fit.estimatedVramUsageMb%static_cast<int>(fit.gpuIndices.size());
+
+                for(size_t i=0; i<fit.gpuIndices.size(); ++i)
+                {
+                    entry.perGpuVramMb[fit.gpuIndices[i]]=perGpu+(static_cast<int>(i)<remainder?1:0);
+                }
+            }
 
             // Actually load llama.cpp model for local providers
             if(modelInfo->provider=="llama")
@@ -838,6 +876,7 @@ ErrorCode ModelRuntime::unloadModel(const std::string &model)
         entry.state=ModelState::Unloaded;
         entry.vramUsageMb=0;
         entry.ramUsageMb=0;
+        entry.perGpuVramMb.clear();
         spdlog::info("Model '{}' unloaded", model);
     }
 
@@ -880,7 +919,7 @@ ErrorCode ModelRuntime::swapModel(
     int contextSize,
     const RuntimeOptions &optionsOverride)
 {
-    if(m_inferenceActive)
+    if(!m_activeInference.empty())
     {
         // Queue the swap for when inference completes
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -922,6 +961,7 @@ ErrorCode ModelRuntime::swapModel(
                     pair.second.state=ModelState::Unloaded;
                     pair.second.vramUsageMb=0;
                     pair.second.ramUsageMb=0;
+                    pair.second.perGpuVramMb.clear();
                 }
             }
         }
@@ -1127,9 +1167,72 @@ std::vector<std::string> ModelRuntime::resolveBackendPriority(const ModelInfo &m
     return priority;
 }
 
-void ModelRuntime::evictIfNeeded(int requiredVramMb)
+void ModelRuntime::evictIfNeeded(int requiredVramMb, int gpuIndex)
 {
-    // Calculate current VRAM usage across all loaded models
+    if(gpuIndex>=0)
+    {
+        // Per-GPU eviction: only consider models on this specific GPU
+        int committedOnGpu=getCommittedVramMb(gpuIndex);
+        int estimatedFree=getEstimatedFreeVramMb(gpuIndex);
+
+        if(estimatedFree>=requiredVramMb)
+        {
+            return; // enough VRAM on this GPU
+        }
+
+        int needToFree=requiredVramMb-estimatedFree;
+
+        struct EvictCandidate {
+            std::string model;
+            int vramOnGpu;
+            std::chrono::steady_clock::time_point lastUsed;
+        };
+
+        std::vector<EvictCandidate> candidates;
+        for(const auto &pair:m_models)
+        {
+            if(pair.second.state==ModelState::Loaded&&
+                !pair.second.pinned&&
+                !m_activeInference.count(pair.first))
+            {
+                auto gpuIt=pair.second.perGpuVramMb.find(gpuIndex);
+                if(gpuIt!=pair.second.perGpuVramMb.end()&&gpuIt->second>0)
+                {
+                    candidates.push_back({pair.first, gpuIt->second, pair.second.lastUsed});
+                }
+            }
+        }
+
+        std::sort(candidates.begin(), candidates.end(),
+            [](const EvictCandidate &a, const EvictCandidate &b)
+            {
+                return a.lastUsed<b.lastUsed;
+            });
+
+        int freed=0;
+        for(const EvictCandidate &candidate:candidates)
+        {
+            if(freed>=needToFree)
+            {
+                break;
+            }
+
+            auto it=m_models.find(candidate.model);
+            if(it!=m_models.end())
+            {
+                freeLlamaModel(it->second);
+                it->second.state=ModelState::Unloaded;
+                it->second.vramUsageMb=0;
+                it->second.ramUsageMb=0;
+                it->second.perGpuVramMb.clear();
+                freed+=candidate.vramOnGpu;
+                spdlog::info("Evicted model '{}' to free {}MB VRAM on GPU {}", candidate.model, candidate.vramOnGpu, gpuIndex);
+            }
+        }
+        return;
+    }
+
+    // Global eviction (legacy path): sum across all GPUs
     int currentVramUsage=0;
     for(const auto &pair:m_models)
     {
@@ -1161,7 +1264,7 @@ void ModelRuntime::evictIfNeeded(int requiredVramMb)
     {
         if(pair.second.state==ModelState::Loaded&&
             !pair.second.pinned&&
-            pair.first!=m_inferenceModel)
+            !m_activeInference.count(pair.first))
         {
             candidates.push_back({pair.first, pair.second.estimatedVramUsageMb, pair.second.lastUsed});
         }
@@ -1189,6 +1292,7 @@ void ModelRuntime::evictIfNeeded(int requiredVramMb)
             it->second.state=ModelState::Unloaded;
             it->second.vramUsageMb=0;
             it->second.ramUsageMb=0;
+            it->second.perGpuVramMb.clear();
             freed+=candidate.vramMb;
             spdlog::info("Evicted model '{}' to free {}MB VRAM", candidate.model, candidate.vramMb);
         }
@@ -1197,8 +1301,7 @@ void ModelRuntime::evictIfNeeded(int requiredVramMb)
 
 void ModelRuntime::beginInference(const std::string &model)
 {
-    m_inferenceActive=true;
-    m_inferenceModel=model;
+    m_activeInference.insert(model);
 
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it=m_models.find(model);
@@ -1208,27 +1311,76 @@ void ModelRuntime::beginInference(const std::string &model)
     }
 }
 
-void ModelRuntime::endInference()
+void ModelRuntime::endInference(const std::string &model)
 {
     // Record usage for storage tracking
-    if(!m_inferenceModel.empty())
+    if(!model.empty())
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        auto it=m_models.find(m_inferenceModel);
+        auto it=m_models.find(model);
         if(it!=m_models.end())
         {
-            StorageManager::instance().recordUsage(m_inferenceModel, it->second.variant);
+            StorageManager::instance().recordUsage(model, it->second.variant);
         }
     }
 
-    m_inferenceActive=false;
-    m_inferenceModel.clear();
-    drainPendingSwaps();
+    m_activeInference.erase(model);
+
+    if(m_activeInference.empty())
+    {
+        drainPendingSwaps();
+    }
 }
 
 bool ModelRuntime::isInferenceActive() const
 {
-    return m_inferenceActive;
+    return !m_activeInference.empty();
+}
+
+bool ModelRuntime::isInferenceActive(const std::string &model) const
+{
+    return m_activeInference.count(model)>0;
+}
+
+int ModelRuntime::getActiveInferenceCount() const
+{
+    return static_cast<int>(m_activeInference.size());
+}
+
+int ModelRuntime::getCommittedVramMb(int gpuIndex) const
+{
+    int committed=0;
+    for(const auto &pair:m_models)
+    {
+        if(pair.second.state!=ModelState::Loaded)
+        {
+            continue;
+        }
+
+        auto gpuIt=pair.second.perGpuVramMb.find(gpuIndex);
+        if(gpuIt!=pair.second.perGpuVramMb.end())
+        {
+            committed+=gpuIt->second;
+        }
+    }
+    return committed;
+}
+
+int ModelRuntime::getEstimatedFreeVramMb(int gpuIndex) const
+{
+    SystemInfo hw=HardwareDetector::instance().getSystemInfo();
+
+    if(gpuIndex<0||gpuIndex>=static_cast<int>(hw.gpus.size()))
+    {
+        return 0;
+    }
+
+    const GpuInfo &gpu=hw.gpus[gpuIndex];
+    int totalVram=gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0
+        ?gpu.gpuAccessibleRamMb:gpu.vramTotalMb;
+    int committed=getCommittedVramMb(gpuIndex);
+
+    return std::max(0, totalVram-committed);
 }
 
 std::string ModelRuntime::selectBestVariant(const ModelInfo &model) const
@@ -1401,6 +1553,21 @@ ErrorCode ModelRuntime::loadLlamaModel(
     const RuntimeOptions &options,
     const std::vector<std::string> &backendPriority)
 {
+    // Apply Vulkan environment variable overrides before backend init.
+    // These are read by ggml-vulkan.cpp via getenv() during device initialization.
+    if(options.vulkanNoHostVisibleVram.has_value())
+    {
+        if(options.vulkanNoHostVisibleVram.value())
+        {
+            setenv("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM", "1", 1);
+            spdlog::info("Set GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1 for model '{}'", model);
+        }
+        else
+        {
+            unsetenv("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM");
+        }
+    }
+
     initLlamaBackend();
 
     // Log available backend devices matching backendPriority for diagnostics.
@@ -1533,8 +1700,174 @@ ErrorCode ModelRuntime::loadLlamaModel(
             }
         }
 
-        // NOTE: mparams.devices is intentionally left as NULL (default).
-        // See comment above about why explicit device lists hurt UMA performance.
+        // NOTE: mparams.devices is intentionally left as NULL (default) on
+        // single-GPU / UMA systems. See comment above about why explicit device
+        // lists hurt UMA performance. On multi-GPU discrete systems, we target
+        // specific GPU(s) via mparams.devices — but NEVER include the CPU device,
+        // which would cause llama.cpp to split tensors across GPU and CPU equally.
+        std::vector<ggml_backend_dev_t> targetDevices;
+
+        SystemInfo hw=HardwareDetector::instance().getSystemInfo();
+        bool isMultiGpuDiscrete=hw.gpus.size()>1;
+        bool hasUmaGpu=false;
+        for(const GpuInfo &gpu:hw.gpus)
+        {
+            if(gpu.unifiedMemory)
+            {
+                hasUmaGpu=true;
+                break;
+            }
+        }
+
+        if(isMultiGpuDiscrete&&!hasUmaGpu&&!gpuIndices.empty())
+        {
+            // Build mapping from hardware detector GPU index to ggml backend device.
+            // Match by comparing device descriptions since index spaces differ:
+            // HW detector may skip duplicates (e.g. RTX 3060 via Vulkan when CUDA is primary)
+            // while ggml enumerates all backend devices.
+
+            size_t devCount=ggml_backend_dev_count();
+            struct GgmlGpuDev
+            {
+                ggml_backend_dev_t dev;
+                std::string name;
+                std::string description;
+            };
+            std::vector<GgmlGpuDev> ggmlGpus;
+
+            for(size_t i=0; i<devCount; ++i)
+            {
+                ggml_backend_dev_t dev=ggml_backend_dev_get(i);
+                enum ggml_backend_dev_type devType=ggml_backend_dev_type(dev);
+
+                if(devType==GGML_BACKEND_DEVICE_TYPE_CPU)
+                    continue;
+
+                GgmlGpuDev entry;
+                entry.dev=dev;
+                entry.name=ggml_backend_dev_name(dev);
+
+                entry.description=ggml_backend_dev_description(dev);
+
+                ggmlGpus.push_back(entry);
+                spdlog::debug("ggml GPU device: name='{}' desc='{}'", entry.name, entry.description);
+            }
+
+            // For each requested HW GPU index, find the matching ggml device
+            // by matching the HW GPU name against ggml device description or name
+            for(int idx:gpuIndices)
+            {
+                // Find the HW GPU info for this index
+                const GpuInfo *hwGpu=nullptr;
+                for(const GpuInfo &gpu:hw.gpus)
+                {
+                    if(gpu.index==idx)
+                    {
+                        hwGpu=&gpu;
+                        break;
+                    }
+                }
+
+                if(!hwGpu)
+                {
+                    spdlog::warn("GPU index {} not found in hardware info for model '{}'", idx, model);
+                    continue;
+                }
+
+                // Match against ggml devices by checking if the HW name appears
+                // in the ggml device description, preferring same-backend matches
+                ggml_backend_dev_t bestMatch=nullptr;
+                std::string bestMatchName;
+
+                // Determine expected ggml name prefix for this backend
+                std::string expectedPrefix;
+                if(hwGpu->backend==GpuBackend::CUDA) expectedPrefix="CUDA";
+                else if(hwGpu->backend==GpuBackend::Vulkan) expectedPrefix="Vulkan";
+
+                for(const GgmlGpuDev &ggmlDev:ggmlGpus)
+                {
+                    // Check backend match first
+                    if(!expectedPrefix.empty()&&ggmlDev.name.find(expectedPrefix)==std::string::npos)
+                        continue;
+
+                    // Check if HW GPU name appears in ggml description
+                    // HW name: "AMD Instinct MI50/MI60 (RADV VEGA20)"
+                    // ggml desc: "AMD RADV VEGA20" or similar
+                    // Try matching key substrings
+                    bool matches=false;
+
+                    // Extract key identifiers from both names for matching
+                    if(ggmlDev.description.find(hwGpu->name)!=std::string::npos)
+                    {
+                        matches=true;
+                    }
+                    else
+                    {
+                        // Try partial matching — extract words from HW name and check ggml desc
+                        // Look for distinctive substrings like "VEGA20", "MI50", "RTX 3060", etc.
+                        std::vector<std::string> keywords;
+                        std::string hwName=hwGpu->name;
+
+                        // Extract alphanumeric tokens from HW GPU name
+                        std::string token;
+                        for(char c:hwName)
+                        {
+                            if(std::isalnum(c)||(c=='-'))
+                            {
+                                token+=c;
+                            }
+                            else if(!token.empty())
+                            {
+                                if(token.size()>=3) keywords.push_back(token);
+                                token.clear();
+                            }
+                        }
+                        if(token.size()>=3) keywords.push_back(token);
+
+                        // Check if distinctive keywords from HW name appear in ggml description
+                        int matchCount=0;
+                        for(const std::string &kw:keywords)
+                        {
+                            if(ggmlDev.description.find(kw)!=std::string::npos)
+                            {
+                                ++matchCount;
+                            }
+                        }
+
+                        // Require at least 2 keyword matches or 1 match for short names
+                        if(matchCount>=2||(matchCount>=1&&keywords.size()<=2))
+                        {
+                            matches=true;
+                        }
+                    }
+
+                    if(matches)
+                    {
+                        bestMatch=ggmlDev.dev;
+                        bestMatchName=ggmlDev.name;
+                        break;
+                    }
+                }
+
+                if(bestMatch)
+                {
+                    targetDevices.push_back(bestMatch);
+                    spdlog::info("Targeting GPU hw[{}] '{}': ggml device '{}' for model '{}'",
+                        idx, hwGpu->name, bestMatchName, model);
+                }
+                else
+                {
+                    spdlog::warn("GPU hw[{}] '{}' could not be matched to any ggml device for model '{}'",
+                        idx, hwGpu->name, model);
+                }
+            }
+
+            if(!targetDevices.empty())
+            {
+                targetDevices.push_back(nullptr); // NULL terminator
+                mparams.devices=targetDevices.data();
+            }
+        }
 
         llama_model *llamaModel=llama_model_load_from_file(filePath.c_str(), mparams);
         if(!llamaModel)
@@ -1649,6 +1982,7 @@ ErrorCode ModelRuntime::loadLlamaModel(
             return ErrorCode::ModelLoadError;
         }
 
+        std::string capturedLog=m_llamaLogCapture.str();
         endLlamaLogCapture();
 
         LoadedModel &entry=m_models[model];
@@ -1656,6 +1990,9 @@ ErrorCode ModelRuntime::loadLlamaModel(
         entry.llamaCtx=llamaCtx;
         entry.maxContextSize=nativeContext;
         entry.contextSize=static_cast<int>(llama_n_ctx(llamaCtx));
+
+        // Parse per-device buffer allocations from llama.cpp log output
+        parseDeviceAllocations(entry, capturedLog);
 
         spdlog::info("llama.cpp model loaded: {} (context={}, maxContext={}, ngl={}, flash_attn={}, mmap={}, backend_filter={})",
             model, entry.contextSize, entry.maxContextSize,
@@ -1690,6 +2027,77 @@ void ModelRuntime::freeLlamaModel(LoadedModel &entry)
     {
         llama_model_free(entry.llamaModel);
         entry.llamaModel=nullptr;
+    }
+}
+
+void ModelRuntime::parseDeviceAllocations(LoadedModel &entry, const std::string &logOutput)
+{
+    entry.deviceAllocations.clear();
+    entry.graphSplits=0;
+    entry.cpuMappedBufferMb=0;
+
+    // Parse: "load_tensors:   CPU_Mapped model buffer size =   682.03 MiB"
+    // Parse: "load_tensors:      Vulkan1 model buffer size = 15272.77 MiB"
+    std::regex modelBufRe(R"(load_tensors:\s+(\S+)\s+model buffer size\s*=\s*([\d.]+)\s*MiB)");
+    // Parse: "llama_kv_cache:    Vulkan1 KV buffer size =  8262.00 MiB"
+    std::regex kvBufRe(R"(llama_kv_cache:\s+(\S+)\s+KV buffer size\s*=\s*([\d.]+)\s*MiB)");
+    // Parse: "sched_reserve:    Vulkan1 compute buffer size =   801.28 MiB"
+    std::regex computeBufRe(R"(sched_reserve:\s+(\S+)\s+compute buffer size\s*=\s*([\d.]+)\s*MiB)");
+    // Parse: "sched_reserve: graph splits = 2"
+    std::regex graphSplitsRe(R"(sched_reserve:\s+graph splits\s*=\s*(\d+))");
+
+    std::istringstream stream(logOutput);
+    std::string line;
+
+    while(std::getline(stream, line))
+    {
+        std::smatch match;
+
+        if(std::regex_search(line, match, modelBufRe))
+        {
+            std::string device=match[1].str();
+            int sizeMb=static_cast<int>(std::round(std::stod(match[2].str())));
+
+            if(device=="CPU_Mapped")
+            {
+                entry.cpuMappedBufferMb=sizeMb;
+            }
+            else
+            {
+                entry.deviceAllocations[device].deviceName=device;
+                entry.deviceAllocations[device].modelBufferMb=sizeMb;
+            }
+        }
+        else if(std::regex_search(line, match, kvBufRe))
+        {
+            std::string device=match[1].str();
+            int sizeMb=static_cast<int>(std::round(std::stod(match[2].str())));
+            entry.deviceAllocations[device].deviceName=device;
+            entry.deviceAllocations[device].kvCacheBufferMb=sizeMb;
+        }
+        else if(std::regex_search(line, match, computeBufRe))
+        {
+            std::string device=match[1].str();
+            int sizeMb=static_cast<int>(std::round(std::stod(match[2].str())));
+
+            // Skip host-side compute buffers
+            if(device.find("Host")!=std::string::npos)
+                continue;
+
+            entry.deviceAllocations[device].deviceName=device;
+            entry.deviceAllocations[device].computeBufferMb=sizeMb;
+        }
+        else if(std::regex_search(line, match, graphSplitsRe))
+        {
+            entry.graphSplits=std::stoi(match[1].str());
+        }
+    }
+
+    // Calculate totals for each device
+    for(auto &pair:entry.deviceAllocations)
+    {
+        DeviceAllocation &alloc=pair.second;
+        alloc.totalMb=alloc.modelBufferMb+alloc.kvCacheBufferMb+alloc.computeBufferMb;
     }
 }
 

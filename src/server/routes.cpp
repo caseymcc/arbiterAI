@@ -1,5 +1,6 @@
 #include "routes.h"
 #include "dashboard.h"
+#include "dashboardConfig.h"
 #include "logBuffer.h"
 
 #include "arbiterAI/arbiterAI.h"
@@ -12,10 +13,13 @@
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <ctime>
+#include <fstream>
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
 
 namespace arbiterAI
 {
@@ -26,6 +30,643 @@ namespace
 {
 
 std::string g_overridePath;
+std::string g_serverConfigPath;
+std::mutex g_serverConfigMutex;
+constexpr const char *STARTUP_ACCELERATOR_CPU="cpu";
+constexpr const char *STARTUP_ACCELERATOR_CUDA="cuda";
+constexpr const char *STARTUP_ACCELERATOR_VULKAN="vulkan";
+
+int sanitizeContextSize(int contextSize)
+{
+    return contextSize>0?contextSize:0;
+}
+
+std::string toLowerCopy(const std::string &value)
+{
+    std::string lower=value;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
+    {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower;
+}
+
+std::string normalizeAcceleratorKey(const std::string &value)
+{
+    std::string lower=toLowerCopy(value);
+
+    if(lower==STARTUP_ACCELERATOR_CPU)
+    {
+        return STARTUP_ACCELERATOR_CPU;
+    }
+    if(lower==STARTUP_ACCELERATOR_CUDA)
+    {
+        return STARTUP_ACCELERATOR_CUDA;
+    }
+    if(lower==STARTUP_ACCELERATOR_VULKAN)
+    {
+        return STARTUP_ACCELERATOR_VULKAN;
+    }
+
+    return "";
+}
+
+nlohmann::json defaultStartupDefaultsJson()
+{
+    return {
+        {STARTUP_ACCELERATOR_CPU, {{"model", ""}, {"variant", ""}, {"context_size", 0}, {"runtime_options", nlohmann::json::object()}}},
+        {STARTUP_ACCELERATOR_CUDA, {{"model", ""}, {"variant", ""}, {"context_size", 0}, {"runtime_options", nlohmann::json::object()}}},
+        {STARTUP_ACCELERATOR_VULKAN, {{"model", ""}, {"variant", ""}, {"context_size", 0}, {"runtime_options", nlohmann::json::object()}}}
+    };
+}
+
+nlohmann::json sanitizeStartupDefaults(const nlohmann::json &startupDefaults)
+{
+    nlohmann::json sanitized=defaultStartupDefaultsJson();
+
+    if(!startupDefaults.is_object())
+    {
+        return sanitized;
+    }
+
+    for(auto it=startupDefaults.begin(); it!=startupDefaults.end(); ++it)
+    {
+        std::string key=normalizeAcceleratorKey(it.key());
+        if(key.empty())
+        {
+            continue;
+        }
+
+        if(it.value().is_string())
+        {
+            sanitized[key]={
+                {"model", it.value().get<std::string>()},
+                {"variant", ""},
+                {"context_size", 0},
+                {"runtime_options", nlohmann::json::object()}
+            };
+            continue;
+        }
+
+        if(!it.value().is_object())
+        {
+            continue;
+        }
+
+        sanitized[key]={
+            {"model", it.value().value("model", "")},
+            {"variant", it.value().value("variant", "")},
+            {"context_size", sanitizeContextSize(it.value().value("context_size", 0))},
+            {"runtime_options", it.value().value("runtime_options", nlohmann::json::object())}
+        };
+    }
+
+    return sanitized;
+}
+
+bool hasAccelerator(const SystemInfo &hw, const std::string &accelerator);
+
+int defaultStartupContextSize(const ModelInfo &model)
+{
+    if(model.contextScaling.has_value()&&model.contextScaling->baseContext>0)
+    {
+        return model.contextScaling->baseContext;
+    }
+
+    return model.contextWindow>0?model.contextWindow:0;
+}
+
+int effectiveStartupContextSize(const ModelInfo &model, int requestedContextSize)
+{
+    if(requestedContextSize>0)
+    {
+        return requestedContextSize;
+    }
+
+    return defaultStartupContextSize(model);
+}
+
+SystemInfo filterSystemInfoForAccelerator(const SystemInfo &hw, const std::string &accelerator)
+{
+    SystemInfo filtered=hw;
+    filtered.gpus.clear();
+
+    if(accelerator==STARTUP_ACCELERATOR_CPU)
+    {
+        return filtered;
+    }
+
+    for(const GpuInfo &gpu:hw.gpus)
+    {
+        if(accelerator==STARTUP_ACCELERATOR_CUDA&&gpu.backend==GpuBackend::CUDA)
+        {
+            filtered.gpus.push_back(gpu);
+        }
+        else if(accelerator==STARTUP_ACCELERATOR_VULKAN&&gpu.backend==GpuBackend::Vulkan)
+        {
+            filtered.gpus.push_back(gpu);
+        }
+    }
+
+    return filtered;
+}
+
+int sumEffectiveFreeMemoryMb(const SystemInfo &hw)
+{
+    int total=0;
+
+    for(const GpuInfo &gpu:hw.gpus)
+    {
+        if(gpu.unifiedMemory&&gpu.gpuAccessibleRamFreeMb>0)
+        {
+            total+=gpu.gpuAccessibleRamFreeMb;
+        }
+        else
+        {
+            total+=gpu.vramFreeMb;
+        }
+    }
+
+    return total;
+}
+
+int sumEffectiveTotalMemoryMb(const SystemInfo &hw)
+{
+    int total=0;
+
+    for(const GpuInfo &gpu:hw.gpus)
+    {
+        if(gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0)
+        {
+            total+=gpu.gpuAccessibleRamMb;
+        }
+        else
+        {
+            total+=gpu.vramTotalMb;
+        }
+    }
+
+    return total;
+}
+
+SystemInfo asStartupSystemInfo(const SystemInfo &hw)
+{
+    SystemInfo startup=hw;
+    startup.freeRamMb=hw.totalRamMb;
+
+    for(GpuInfo &gpu:startup.gpus)
+    {
+        gpu.vramFreeMb=gpu.vramTotalMb;
+
+        if(gpu.unifiedMemory&&gpu.gpuAccessibleRamMb>0)
+        {
+            gpu.gpuAccessibleRamFreeMb=gpu.gpuAccessibleRamMb;
+        }
+    }
+
+    return startup;
+}
+
+int estimateStartupRequiredVramMb(
+    const ModelInfo &model,
+    const ModelVariant &variant,
+    int requestedContextSize)
+{
+    int requiredVramMb=variant.minVramMb;
+
+    if(model.contextScaling.has_value()&&model.contextScaling->vramPer1kContextMb>0)
+    {
+        int effectiveContext=effectiveStartupContextSize(model, requestedContextSize);
+        int baseContext=model.contextScaling->baseContext;
+        if(effectiveContext<baseContext)
+        {
+            effectiveContext=baseContext;
+        }
+
+        int extraContext=effectiveContext-baseContext;
+        if(extraContext>0)
+        {
+            int extraChunks=(extraContext+1023)/1024;
+            requiredVramMb+=extraChunks*model.contextScaling->vramPer1kContextMb;
+        }
+    }
+
+    return requiredVramMb;
+}
+
+int estimateStartupRequiredRamMb(
+    const ModelInfo &model,
+    const ModelVariant &variant,
+    int requestedContextSize)
+{
+    int requiredRamMb=std::max(
+        model.hardwareRequirements.has_value()?model.hardwareRequirements->minSystemRamMb:0,
+        variant.fileSizeMb);
+
+    if(model.contextScaling.has_value()&&model.contextScaling->vramPer1kContextMb>0)
+    {
+        int effectiveContext=effectiveStartupContextSize(model, requestedContextSize);
+        int baseContext=model.contextScaling->baseContext;
+        if(effectiveContext<baseContext)
+        {
+            effectiveContext=baseContext;
+        }
+
+        int extraContext=effectiveContext-baseContext;
+        if(extraContext>0)
+        {
+            int extraChunks=(extraContext+1023)/1024;
+            requiredRamMb+=extraChunks*model.contextScaling->vramPer1kContextMb;
+        }
+    }
+
+    return requiredRamMb;
+}
+
+std::string startupCompatibilityLabel(const std::string &compatibility)
+{
+    if(compatibility=="likely")
+    {
+        return "Likely";
+    }
+    if(compatibility=="tight")
+    {
+        return "Tight fit";
+    }
+    if(compatibility=="cloud")
+    {
+        return "Cloud";
+    }
+    if(compatibility=="undetected")
+    {
+        return "No device";
+    }
+
+    return "Unlikely";
+}
+
+int startupCompatibilitySortRank(const std::string &compatibility)
+{
+    if(compatibility=="likely")
+    {
+        return 0;
+    }
+    if(compatibility=="tight")
+    {
+        return 1;
+    }
+    if(compatibility=="cloud")
+    {
+        return 2;
+    }
+    if(compatibility=="unlikely")
+    {
+        return 3;
+    }
+
+    return 4;
+}
+
+nlohmann::json buildStartupOptionJson(
+    const std::string &accelerator,
+    const SystemInfo &hw,
+    const ModelInfo &model,
+    const std::string &variantName,
+    int requestedContextSize)
+{
+    SystemInfo startupHw=asStartupSystemInfo(hw);
+
+    nlohmann::json option={
+        {"model", model.model},
+        {"variant", variantName},
+        {"provider", model.provider},
+        {"requested_context_size", sanitizeContextSize(requestedContextSize)},
+        {"effective_context_size", effectiveStartupContextSize(model, requestedContextSize)},
+        {"max_context_size", 0},
+        {"required_vram_mb", 0},
+        {"required_ram_mb", 0},
+        {"available_vram_mb", 0},
+        {"available_ram_mb", startupHw.freeRamMb},
+        {"can_run", true},
+        {"compatibility", "cloud"},
+        {"compatibility_label", "Cloud"},
+        {"compatibility_reason", "Provider-managed model; no local download or VRAM requirement."},
+        {"sort_rank", startupCompatibilitySortRank("cloud")}
+    };
+
+    if(model.variants.empty())
+    {
+        return option;
+    }
+
+    const ModelVariant *selectedVariant=nullptr;
+    for(const ModelVariant &candidate:model.variants)
+    {
+        if(candidate.quantization==variantName)
+        {
+            selectedVariant=&candidate;
+            break;
+        }
+    }
+
+    if(!selectedVariant)
+    {
+        option["can_run"]=false;
+        option["compatibility"]="unlikely";
+        option["compatibility_label"]=startupCompatibilityLabel("unlikely");
+        option["compatibility_reason"]="Variant metadata is missing from the live model catalog.";
+        option["sort_rank"]=startupCompatibilitySortRank("unlikely");
+        return option;
+    }
+
+    SystemInfo acceleratorHw=filterSystemInfoForAccelerator(startupHw, accelerator);
+    bool acceleratorDetected=hasAccelerator(hw, accelerator);
+    int availableVramMb=sumEffectiveTotalMemoryMb(acceleratorHw);
+    int requiredVramMb=estimateStartupRequiredVramMb(model, *selectedVariant, requestedContextSize);
+    int requiredRamMb=estimateStartupRequiredRamMb(model, *selectedVariant, requestedContextSize);
+    int desiredContextSize=effectiveStartupContextSize(model, requestedContextSize);
+
+    option["required_vram_mb"]=requiredVramMb;
+    option["required_ram_mb"]=requiredRamMb;
+    option["available_vram_mb"]=availableVramMb;
+    option["available_ram_mb"]=startupHw.freeRamMb;
+    option["base_memory_mb"]=static_cast<int>(selectedVariant->minVramMb);
+    option["base_context_size"]=model.contextScaling.has_value()?model.contextScaling->baseContext:0;
+    option["memory_per_1k_context_mb"]=model.contextScaling.has_value()?model.contextScaling->vramPer1kContextMb:0;
+
+    if(accelerator==STARTUP_ACCELERATOR_CPU)
+    {
+        int maxContextSize=model.contextScaling.has_value()
+            ? model.contextScaling->maxContext
+            : model.contextWindow;
+        bool contextFits=maxContextSize<=0||desiredContextSize<=0||desiredContextSize<=maxContextSize;
+        bool canRun=requiredRamMb<=startupHw.freeRamMb&&contextFits;
+        std::string compatibility=canRun
+            ? (requiredRamMb>=static_cast<int>(startupHw.freeRamMb*0.85f)?"tight":"likely")
+            : "unlikely";
+        std::string reason;
+
+        if(canRun)
+        {
+            reason="Fits in total system RAM for CPU startup.";
+        }
+        else if(!contextFits)
+        {
+            reason="Requested context exceeds the CPU startup limit.";
+        }
+        else
+        {
+            reason="Needs more system RAM than the device has for CPU startup.";
+        }
+
+        option["max_context_size"]=maxContextSize;
+        option["can_run"]=canRun;
+        option["compatibility"]=compatibility;
+        option["compatibility_label"]=startupCompatibilityLabel(compatibility);
+        option["compatibility_reason"]=reason;
+        option["sort_rank"]=startupCompatibilitySortRank(compatibility);
+        return option;
+    }
+
+    ModelFit fit=ModelFitCalculator::calculateModelFit(model, *selectedVariant, acceleratorHw);
+    bool contextFits=fit.maxContextSize<=0||desiredContextSize<=0||desiredContextSize<=fit.maxContextSize;
+    bool wouldFallbackToCpu=fit.canRun&&fit.gpuIndices.empty();
+    bool canRun=acceleratorDetected&&fit.canRun&&!wouldFallbackToCpu&&contextFits&&requiredVramMb<=availableVramMb;
+    std::string compatibility;
+    std::string reason;
+
+    if(!acceleratorDetected)
+    {
+        compatibility="undetected";
+        reason="No compatible accelerator is currently detected for this startup slot.";
+    }
+    else if(wouldFallbackToCpu)
+    {
+        compatibility="unlikely";
+        reason="Total VRAM would force a CPU fallback instead of using this accelerator.";
+    }
+    else if(!fit.canRun)
+    {
+        compatibility="unlikely";
+        if(fit.limitingFactor=="ram")
+        {
+            reason="Insufficient system RAM for this model on the device.";
+        }
+        else
+        {
+            reason="Insufficient total VRAM on the device.";
+        }
+    }
+    else if(!contextFits)
+    {
+        compatibility="unlikely";
+        reason="Requested context is higher than the model can sustain on the device.";
+    }
+    else if(requiredVramMb>=static_cast<int>(availableVramMb*0.85f))
+    {
+        compatibility="tight";
+        reason="Fits, but VRAM is tight for the requested context.";
+    }
+    else
+    {
+        compatibility="likely";
+        reason="Fits comfortably on the device for the requested context.";
+    }
+
+    option["max_context_size"]=fit.maxContextSize;
+    option["can_run"]=canRun;
+    option["compatibility"]=compatibility;
+    option["compatibility_label"]=startupCompatibilityLabel(compatibility);
+    option["compatibility_reason"]=reason;
+    option["sort_rank"]=startupCompatibilitySortRank(compatibility);
+    return option;
+}
+
+std::vector<std::string> parseDefaultBackendPriority(const nlohmann::json &cfg)
+{
+    std::vector<std::string> priority;
+
+    nlohmann::json hardwareCfg=cfg.value("hardware", nlohmann::json::object());
+    if(hardwareCfg.contains("default_backend_priority")&&hardwareCfg["default_backend_priority"].is_array())
+    {
+        for(const nlohmann::json &backend:hardwareCfg["default_backend_priority"])
+        {
+            if(backend.is_string())
+            {
+                priority.push_back(toLowerCopy(backend.get<std::string>()));
+            }
+        }
+    }
+
+    return priority;
+}
+
+bool hasAccelerator(const SystemInfo &hw, const std::string &accelerator)
+{
+    if(accelerator==STARTUP_ACCELERATOR_CPU)
+    {
+        return true;
+    }
+
+    for(const GpuInfo &gpu:hw.gpus)
+    {
+        if(accelerator==STARTUP_ACCELERATOR_CUDA&&gpu.backend==GpuBackend::CUDA)
+        {
+            return true;
+        }
+        if(accelerator==STARTUP_ACCELERATOR_VULKAN&&gpu.backend==GpuBackend::Vulkan)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::vector<std::string> buildStartupAcceleratorOrder(
+    const SystemInfo &hw,
+    const std::vector<std::string> &defaultBackendPriority)
+{
+    std::vector<std::string> order;
+
+    auto appendIfAvailable=[&order, &hw](const std::string &accelerator)
+    {
+        if(accelerator.empty()||!hasAccelerator(hw, accelerator))
+        {
+            return;
+        }
+        if(std::find(order.begin(), order.end(), accelerator)==order.end())
+        {
+            order.push_back(accelerator);
+        }
+    };
+
+    for(const std::string &backend:defaultBackendPriority)
+    {
+        appendIfAvailable(normalizeAcceleratorKey(backend));
+    }
+
+    appendIfAvailable(STARTUP_ACCELERATOR_CUDA);
+    appendIfAvailable(STARTUP_ACCELERATOR_VULKAN);
+    appendIfAvailable(STARTUP_ACCELERATOR_CPU);
+
+    return order;
+}
+
+nlohmann::json resolveEffectiveStartupDefault(const nlohmann::json &cfg, const SystemInfo &hw)
+{
+    nlohmann::json startupDefaults=sanitizeStartupDefaults(cfg.value("startup_defaults", nlohmann::json::object()));
+    std::vector<std::string> acceleratorOrder=buildStartupAcceleratorOrder(hw, parseDefaultBackendPriority(cfg));
+
+    for(const std::string &accelerator:acceleratorOrder)
+    {
+        nlohmann::json entry=startupDefaults.value(accelerator, nlohmann::json::object());
+        std::string model=entry.value("model", "");
+        if(!model.empty())
+        {
+            return {
+                {"accelerator", accelerator},
+                {"model", model},
+                {"variant", entry.value("variant", "")},
+                {"context_size", sanitizeContextSize(entry.value("context_size", 0))},
+                {"runtime_options", entry.value("runtime_options", nlohmann::json::object())}
+            };
+        }
+    }
+
+    return {
+        {"accelerator", "legacy"},
+        {"model", cfg.value("default_model", "")},
+        {"variant", cfg.value("default_variant", "")},
+        {"context_size", 0}
+    };
+}
+
+bool loadServerConfigJson(nlohmann::json &cfg, std::string &error)
+{
+    if(g_serverConfigPath.empty())
+    {
+        error="Server config path is not set";
+        return false;
+    }
+
+    std::ifstream file(g_serverConfigPath);
+    if(!file.is_open())
+    {
+        error="Cannot open server config file";
+        return false;
+    }
+
+    try
+    {
+        cfg=nlohmann::json::parse(file, nullptr, true, true);
+    }
+    catch(const std::exception &e)
+    {
+        error=e.what();
+        return false;
+    }
+
+    if(!cfg.is_object())
+    {
+        error="Server config root must be a JSON object";
+        return false;
+    }
+
+    return true;
+}
+
+bool saveServerConfigJson(const nlohmann::json &cfg, std::string &error)
+{
+    if(g_serverConfigPath.empty())
+    {
+        error="Server config path is not set";
+        return false;
+    }
+
+    std::ofstream file(g_serverConfigPath, std::ios::trunc);
+    if(!file.is_open())
+    {
+        error="Cannot open server config file for writing";
+        return false;
+    }
+
+    file<<cfg.dump(4)<<std::endl;
+    if(!file.good())
+    {
+        error="Failed to write server config file";
+        return false;
+    }
+
+    return true;
+}
+
+nlohmann::json buildServerConfigResponse(const nlohmann::json &cfg)
+{
+    HardwareDetector::instance().refresh();
+    SystemInfo hw=HardwareDetector::instance().getSystemInfo();
+
+    nlohmann::json detectedAccelerators=nlohmann::json::array();
+    for(const std::string &accelerator:buildStartupAcceleratorOrder(hw, parseDefaultBackendPriority(cfg)))
+    {
+        detectedAccelerators.push_back(accelerator);
+    }
+
+    nlohmann::json response={
+        {"default_model", cfg.value("default_model", "")},
+        {"default_variant", cfg.value("default_variant", "")},
+        {"startup_defaults", sanitizeStartupDefaults(cfg.value("startup_defaults", nlohmann::json::object()))},
+        {"detected_accelerators", detectedAccelerators},
+        {"effective_startup_default", resolveEffectiveStartupDefault(cfg, hw)}
+    };
+
+    if(cfg.contains("startup_models")&&cfg["startup_models"].is_array())
+    {
+        response["startup_models"]=cfg["startup_models"];
+    }
+
+    return response;
+}
 
 /// Generate a unique ID with the given prefix (e.g., "chatcmpl-").
 std::string generateId(const std::string &prefix="chatcmpl-")
@@ -172,6 +813,8 @@ nlohmann::json runtimeOptionsToJson(const RuntimeOptions &opts)
         j["n_gpu_layers"]=opts.nGpuLayers.value();
     if(opts.overrideTensor.has_value())
         j["override_tensor"]=opts.overrideTensor.value();
+    if(opts.vulkanNoHostVisibleVram.has_value())
+        j["vulkan_no_host_visible_vram"]=opts.vulkanNoHostVisibleVram.value();
 
     return j;
 }
@@ -196,6 +839,8 @@ RuntimeOptions parseRuntimeOptions(const nlohmann::json &j)
         opts.nGpuLayers=j["n_gpu_layers"].get<int>();
     if(j.contains("override_tensor")&&j["override_tensor"].is_string())
         opts.overrideTensor=j["override_tensor"].get<std::string>();
+    if(j.contains("vulkan_no_host_visible_vram")&&j["vulkan_no_host_visible_vram"].is_boolean())
+        opts.vulkanNoHostVisibleVram=j["vulkan_no_host_visible_vram"].get<bool>();
 
     return opts;
 }
@@ -218,8 +863,36 @@ nlohmann::json loadedModelToJson(const LoadedModel &m)
         {"context_size", m.contextSize},
         {"max_context_size", m.maxContextSize},
         {"gpu_indices", gpuIndices},
-        {"pinned", m.pinned}
+        {"pinned", m.pinned},
+        {"graph_splits", m.graphSplits},
+        {"cpu_mapped_buffer_mb", m.cpuMappedBufferMb}
     };
+
+    if(!m.perGpuVramMb.empty())
+    {
+        nlohmann::json perGpuJson=nlohmann::json::object();
+        for(const auto &pair:m.perGpuVramMb)
+        {
+            perGpuJson[std::to_string(pair.first)]=pair.second;
+        }
+        j["per_gpu_vram_mb"]=perGpuJson;
+    }
+
+    if(!m.deviceAllocations.empty())
+    {
+        nlohmann::json allocations=nlohmann::json::object();
+        for(const auto &pair:m.deviceAllocations)
+        {
+            allocations[pair.first]={
+                {"device_name", pair.second.deviceName},
+                {"model_buffer_mb", pair.second.modelBufferMb},
+                {"kv_cache_buffer_mb", pair.second.kvCacheBufferMb},
+                {"compute_buffer_mb", pair.second.computeBufferMb},
+                {"total_mb", pair.second.totalMb}
+            };
+        }
+        j["device_allocations"]=allocations;
+    }
 
     nlohmann::json activeOpts=runtimeOptionsToJson(m.activeOptions);
     if(!activeOpts.empty())
@@ -329,6 +1002,12 @@ std::pair<std::string, std::string> parseModelVariant(const std::string &modelId
 
 // ========== Override Path ==========
 
+void setServerConfigPath(const std::string &path)
+{
+    std::lock_guard<std::mutex> lock(g_serverConfigMutex);
+    g_serverConfigPath=path;
+}
+
 void setOverridePath(const std::string &path)
 {
     g_overridePath=path;
@@ -355,7 +1034,7 @@ void registerRoutes(httplib::Server &server)
     server.Options(R"(.*)", [](const httplib::Request &, httplib::Response &res)
     {
         res.set_header("Access-Control-Allow-Origin", "*");
-        res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+        res.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS, DELETE");
         res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
         res.set_header("Access-Control-Max-Age", "86400");
         res.status=204;
@@ -375,6 +1054,11 @@ void registerRoutes(httplib::Server &server)
 
     // Version
     server.Get("/api/version", handleGetVersion);
+
+    // Server config
+    server.Get("/api/server/config", handleGetServerConfig);
+    server.Put("/api/server/config", handleSetServerConfig);
+    server.Get("/api/server/startup-options", handleGetStartupOptions);
 
     // Chat completions (OpenAI-compatible)
     server.Post("/v1/chat/completions", handleChatCompletions);
@@ -432,6 +1116,7 @@ void registerRoutes(httplib::Server &server)
     server.Get("/api/downloads", handleGetActiveDownloads);
 
     // Dashboard
+    server.Get("/dashboard/config", handleDashboardConfig);
     server.Get("/dashboard/storage", handleDashboardStorage);
     server.Get("/dashboard", handleDashboard);
 
@@ -976,6 +1661,181 @@ void handleGetVersion(const httplib::Request &, httplib::Response &res)
     res.set_content(j.dump(), "application/json");
 }
 
+// ========== Server Config ==========
+
+void handleGetServerConfig(const httplib::Request &, httplib::Response &res)
+{
+    std::lock_guard<std::mutex> lock(g_serverConfigMutex);
+
+    nlohmann::json cfg;
+    std::string error;
+    if(!loadServerConfigJson(cfg, error))
+    {
+        res.status=500;
+        res.set_content(errorJson("Failed to load server config: "+error).dump(), "application/json");
+        return;
+    }
+
+    res.set_content(buildServerConfigResponse(cfg).dump(), "application/json");
+}
+
+void handleSetServerConfig(const httplib::Request &req, httplib::Response &res)
+{
+    nlohmann::json body;
+    try
+    {
+        body=nlohmann::json::parse(req.body);
+    }
+    catch(const std::exception &)
+    {
+        res.status=400;
+        res.set_content(errorJson("Invalid JSON body", "invalid_request_error", "", "parse_error").dump(), "application/json");
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_serverConfigMutex);
+
+    nlohmann::json cfg;
+    std::string error;
+    if(!loadServerConfigJson(cfg, error))
+    {
+        res.status=500;
+        res.set_content(errorJson("Failed to load server config: "+error).dump(), "application/json");
+        return;
+    }
+
+    if(body.contains("default_model"))
+    {
+        if(!body["default_model"].is_string())
+        {
+            res.status=400;
+            res.set_content(errorJson("'default_model' must be a string", "invalid_request_error", "default_model", "invalid_type").dump(), "application/json");
+            return;
+        }
+        cfg["default_model"]=body["default_model"].get<std::string>();
+    }
+
+    if(body.contains("default_variant"))
+    {
+        if(!body["default_variant"].is_string())
+        {
+            res.status=400;
+            res.set_content(errorJson("'default_variant' must be a string", "invalid_request_error", "default_variant", "invalid_type").dump(), "application/json");
+            return;
+        }
+        cfg["default_variant"]=body["default_variant"].get<std::string>();
+    }
+
+    if(body.contains("startup_defaults"))
+    {
+        if(!body["startup_defaults"].is_object())
+        {
+            res.status=400;
+            res.set_content(errorJson("'startup_defaults' must be an object", "invalid_request_error", "startup_defaults", "invalid_type").dump(), "application/json");
+            return;
+        }
+
+        cfg["startup_defaults"]=sanitizeStartupDefaults(body["startup_defaults"]);
+    }
+
+    if(body.contains("startup_models"))
+    {
+        if(!body["startup_models"].is_array())
+        {
+            res.status=400;
+            res.set_content(errorJson("'startup_models' must be an array", "invalid_request_error", "startup_models", "invalid_type").dump(), "application/json");
+            return;
+        }
+
+        cfg["startup_models"]=body["startup_models"];
+    }
+
+    if(!saveServerConfigJson(cfg, error))
+    {
+        res.status=500;
+        res.set_content(errorJson("Failed to save server config: "+error).dump(), "application/json");
+        return;
+    }
+
+    res.set_content(buildServerConfigResponse(cfg).dump(), "application/json");
+}
+
+void handleGetStartupOptions(const httplib::Request &req, httplib::Response &res)
+{
+    std::string accelerator=normalizeAcceleratorKey(req.has_param("accelerator")
+        ? req.get_param_value("accelerator")
+        : "");
+    if(accelerator.empty())
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing or invalid 'accelerator' query parameter", "invalid_request_error", "accelerator", "invalid_value").dump(), "application/json");
+        return;
+    }
+
+    int contextSize=0;
+    if(req.has_param("context_size"))
+    {
+        try
+        {
+            contextSize=sanitizeContextSize(std::stoi(req.get_param_value("context_size")));
+        }
+        catch(const std::exception &)
+        {
+            res.status=400;
+            res.set_content(errorJson("'context_size' must be an integer", "invalid_request_error", "context_size", "invalid_value").dump(), "application/json");
+            return;
+        }
+    }
+
+    HardwareDetector::instance().refresh();
+    SystemInfo hw=HardwareDetector::instance().getSystemInfo();
+
+    std::vector<ModelInfo> models=ModelManager::instance().getModelsByRanking();
+    std::vector<nlohmann::json> options;
+    options.reserve(models.size());
+
+    for(const ModelInfo &model:models)
+    {
+        if(model.variants.empty())
+        {
+            options.push_back(buildStartupOptionJson(accelerator, hw, model, "", contextSize));
+            continue;
+        }
+
+        for(const ModelVariant &variant:model.variants)
+        {
+            options.push_back(buildStartupOptionJson(accelerator, hw, model, variant.quantization, contextSize));
+        }
+    }
+
+    std::sort(options.begin(), options.end(), [](const nlohmann::json &left, const nlohmann::json &right)
+    {
+        int leftRank=left.value("sort_rank", 99);
+        int rightRank=right.value("sort_rank", 99);
+        if(leftRank!=rightRank)
+        {
+            return leftRank<rightRank;
+        }
+
+        std::string leftKey=toLowerCopy(left.value("model", ""))+"\u0000"+toLowerCopy(left.value("variant", ""));
+        std::string rightKey=toLowerCopy(right.value("model", ""))+"\u0000"+toLowerCopy(right.value("variant", ""));
+        return leftKey<rightKey;
+    });
+
+    SystemInfo startupHw=asStartupSystemInfo(hw);
+
+    nlohmann::json response={
+        {"accelerator", accelerator},
+        {"detected", hasAccelerator(hw, accelerator)},
+        {"context_size", contextSize},
+        {"available_vram_mb", sumEffectiveTotalMemoryMb(filterSystemInfoForAccelerator(startupHw, accelerator))},
+        {"available_ram_mb", startupHw.freeRamMb},
+        {"options", options}
+    };
+
+    res.set_content(response.dump(), "application/json");
+}
+
 // ========== Model Management ==========
 
 void handleGetModels(const httplib::Request &, httplib::Response &res)
@@ -1072,6 +1932,7 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
         std::string variant;
         int contextSize=0;
         RuntimeOptions optionsOverride;
+        std::vector<int> targetDevices;
 
         // Accept parameters from query string
         if(req.has_param("variant"))
@@ -1093,6 +1954,14 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
                     contextSize=body["context_size"].get<int>();
                 if(body.contains("runtime_options")&&body["runtime_options"].is_object())
                     optionsOverride=parseRuntimeOptions(body["runtime_options"]);
+                if(body.contains("devices")&&body["devices"].is_array())
+                {
+                    for(const auto &d:body["devices"])
+                    {
+                        if(d.is_number_integer())
+                            targetDevices.push_back(d.get<int>());
+                    }
+                }
             }
             catch(const nlohmann::json::parse_error &)
             {
@@ -1100,9 +1969,9 @@ void handleLoadModel(const httplib::Request &req, httplib::Response &res)
             }
         }
 
-        spdlog::info("Load request: model='{}' variant='{}' context={}", modelName, variant, contextSize);
+        spdlog::info("Load request: model='{}' variant='{}' context={} devices={}", modelName, variant, contextSize, targetDevices.size());
 
-        ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize, &optionsOverride);
+        ErrorCode err=ArbiterAI::instance().loadModel(modelName, variant, contextSize, &optionsOverride, targetDevices);
 
         if(err==ErrorCode::Success)
         {
@@ -2333,6 +3202,11 @@ void handleGetLogs(const httplib::Request &req, httplib::Response &res)
 void handleDashboard(const httplib::Request &, httplib::Response &res)
 {
     res.set_content(DASHBOARD_HTML, "text/html");
+}
+
+void handleDashboardConfig(const httplib::Request &, httplib::Response &res)
+{
+    res.set_content(DASHBOARD_CONFIG_HTML, "text/html");
 }
 
 void handleDashboardStorage(const httplib::Request &, httplib::Response &res)

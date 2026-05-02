@@ -51,6 +51,7 @@ struct RuntimeOptions {
     std::optional<bool> swaFull;                // --swa-full: full SWA (sliding window attention)
     std::optional<int> nGpuLayers;              // -ngl: number of GPU layers (99=all)
     std::optional<std::string> overrideTensor;  // -ot: tensor override pattern (e.g. "per_layer_token_embd.weight=CPU")
+    std::optional<bool> vulkanNoHostVisibleVram; // GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM: skip BAR-mapped heap, force device-local only
 
     /// Merge another set of options on top of this one (override only non-empty fields).
     void mergeFrom(const RuntimeOptions &other);

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <mutex>
 #include <atomic>
 #include <queue>
@@ -59,6 +60,14 @@ struct LoadErrorDetail {
     std::string llamaLog;       // raw llama.cpp log output captured during the load attempt
 };
 
+struct DeviceAllocation {
+    std::string deviceName;
+    int modelBufferMb=0;
+    int kvCacheBufferMb=0;
+    int computeBufferMb=0;
+    int totalMb=0;
+};
+
 struct LoadedModel {
     std::string modelName;
     std::string variant;
@@ -69,6 +78,10 @@ struct LoadedModel {
     int contextSize=0;
     int maxContextSize=0; // model's native/training context from GGUF metadata
     std::vector<int> gpuIndices;
+    std::map<int, int> perGpuVramMb; // gpu index → estimated VRAM usage on that GPU
+    std::map<std::string, DeviceAllocation> deviceAllocations; // device name → actual buffer allocations
+    int graphSplits=0;
+    int cpuMappedBufferMb=0;
     std::chrono::steady_clock::time_point lastUsed;
     bool pinned=false;
     llama_model *llamaModel=nullptr;
@@ -89,12 +102,14 @@ public:
     /// @param variant   Quantization variant (empty = auto-select best fitting).
     /// @param contextSize  Context size (0 = use model default).
     /// @param optionsOverride  Optional runtime options to merge on top of model config defaults.
+    /// @param targetDevices  Optional GPU indices to target (empty = auto-select).
     /// @return ErrorCode::Success, ModelDownloading, ModelNotFound, ModelLoadError.
     ErrorCode loadModel(
         const std::string &model,
         const std::string &variant="",
         int contextSize=0,
-        const RuntimeOptions &optionsOverride=RuntimeOptions{});
+        const RuntimeOptions &optionsOverride=RuntimeOptions{},
+        const std::vector<int> &targetDevices={});
 
     /// Download model files without loading into VRAM.
     /// Launches an async background download that respects the concurrent
@@ -159,16 +174,23 @@ public:
     std::vector<std::string> getDefaultBackendPriority() const;
 
     /// Evict least-recently-used non-pinned models to free VRAM.
-    void evictIfNeeded(int requiredVramMb);
+    /// When gpuIndex >= 0, only considers models on that specific GPU.
+    void evictIfNeeded(int requiredVramMb, int gpuIndex=-1);
 
-    /// Mark inference as started (blocks swap execution).
+    /// Mark inference as started on a model (blocks eviction of that model).
     void beginInference(const std::string &model);
 
-    /// Mark inference as completed and drain pending swaps.
-    void endInference();
+    /// Mark inference as completed on a model and drain pending swaps.
+    void endInference(const std::string &model);
 
-    /// Check if inference is currently active.
+    /// Check if any inference is currently active.
     bool isInferenceActive() const;
+
+    /// Check if inference is active on a specific model.
+    bool isInferenceActive(const std::string &model) const;
+
+    /// Get the number of models currently running inference.
+    int getActiveInferenceCount() const;
 
     /// Get the llama_model handle for a loaded local model.
     /// Returns nullptr if not loaded or not a local model.
@@ -188,6 +210,12 @@ public:
     /// Called from the llama.cpp log callback to append captured text.
     /// Public so the C-style callback can reach it; not intended for external use.
     void appendLlamaLog(const char *text);
+
+    /// Get the VRAM currently committed to loaded models on a specific GPU (MB).
+    int getCommittedVramMb(int gpuIndex) const;
+
+    /// Get the estimated free VRAM on a specific GPU accounting for loaded models (MB).
+    int getEstimatedFreeVramMb(int gpuIndex) const;
 
 private:
     ModelRuntime();
@@ -238,6 +266,9 @@ private:
     /// Free llama.cpp resources for a model.
     void freeLlamaModel(LoadedModel &entry);
 
+    /// Parse per-device buffer allocations from llama.cpp log output.
+    void parseDeviceAllocations(LoadedModel &entry, const std::string &logOutput);
+
     /// Download a model file synchronously.
     /// @return true on success, false on failure.
     bool downloadModelFile(
@@ -251,8 +282,7 @@ private:
     mutable std::mutex m_mutex;
     int m_readyRamBudgetMb=0;
     std::vector<std::string> m_defaultBackendPriority;
-    std::atomic<bool> m_inferenceActive{false};
-    std::string m_inferenceModel;
+    std::set<std::string> m_activeInference; // models currently running inference
     bool m_llamaInitialized=false;
 
     struct SwapRequest {

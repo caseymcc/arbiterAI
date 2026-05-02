@@ -533,14 +533,14 @@ ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
 // ========== Local Model Management ==========
 
 ErrorCode ArbiterAI::loadModel(const std::string &model, const std::string &variant, int contextSize,
-    const RuntimeOptions *optionsOverride)
+    const RuntimeOptions *optionsOverride, const std::vector<int> &targetDevices)
 {
     RuntimeOptions opts;
     if(optionsOverride)
     {
         opts=*optionsOverride;
     }
-    return ModelRuntime::instance().loadModel(model, variant, contextSize, opts);
+    return ModelRuntime::instance().loadModel(model, variant, contextSize, opts, targetDevices);
 }
 
 ErrorCode ArbiterAI::downloadModel(const std::string &model, const std::string &variant)

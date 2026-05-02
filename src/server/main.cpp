@@ -3,6 +3,7 @@
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/hardwareDetector.h"
+#include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/storageManager.h"
 
@@ -15,11 +16,381 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <filesystem>
+#include <map>
 
 namespace
 {
+
+struct StartupDefaultSelection {
+    std::string model;
+    std::string variant;
+    int contextSize=0;
+    arbiterAI::RuntimeOptions runtimeOptions;
+};
+
+struct StartupModelEntry {
+    std::string model;
+    std::string variant;
+    int contextSize=0;
+    arbiterAI::RuntimeOptions runtimeOptions;
+    std::vector<int> devices;
+};
+
+arbiterAI::RuntimeOptions parseStartupRuntimeOptions(const nlohmann::json &j)
+{
+    arbiterAI::RuntimeOptions opts;
+    if(!j.is_object()) return opts;
+    if(j.contains("flash_attn")&&j["flash_attn"].is_boolean())
+        opts.flashAttn=j["flash_attn"].get<bool>();
+    if(j.contains("kv_cache_type_k")&&j["kv_cache_type_k"].is_string())
+        opts.kvCacheTypeK=j["kv_cache_type_k"].get<std::string>();
+    if(j.contains("kv_cache_type_v")&&j["kv_cache_type_v"].is_string())
+        opts.kvCacheTypeV=j["kv_cache_type_v"].get<std::string>();
+    if(j.contains("no_mmap")&&j["no_mmap"].is_boolean())
+        opts.noMmap=j["no_mmap"].get<bool>();
+    if(j.contains("reasoning_budget")&&j["reasoning_budget"].is_number_integer())
+        opts.reasoningBudget=j["reasoning_budget"].get<int>();
+    if(j.contains("swa_full")&&j["swa_full"].is_boolean())
+        opts.swaFull=j["swa_full"].get<bool>();
+    if(j.contains("n_gpu_layers")&&j["n_gpu_layers"].is_number_integer())
+        opts.nGpuLayers=j["n_gpu_layers"].get<int>();
+    if(j.contains("override_tensor")&&j["override_tensor"].is_string())
+        opts.overrideTensor=j["override_tensor"].get<std::string>();
+    if(j.contains("vulkan_no_host_visible_vram")&&j["vulkan_no_host_visible_vram"].is_boolean())
+        opts.vulkanNoHostVisibleVram=j["vulkan_no_host_visible_vram"].get<bool>();
+    return opts;
+}
+
+int sanitizeContextSize(int contextSize)
+{
+    return contextSize>0?contextSize:0;
+}
+
+std::string toLowerCopy(const std::string &value)
+{
+    std::string lower=value;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
+    {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower;
+}
+
+std::string normalizeAcceleratorKey(const std::string &value)
+{
+    std::string lower=toLowerCopy(value);
+
+    if(lower=="cpu"||lower=="cuda"||lower=="vulkan")
+    {
+        return lower;
+    }
+
+    return "";
+}
+
+std::map<std::string, StartupDefaultSelection> parseStartupDefaults(const nlohmann::json &cfg)
+{
+    std::map<std::string, StartupDefaultSelection> startupDefaults={
+        {"cpu", StartupDefaultSelection{}},
+        {"cuda", StartupDefaultSelection{}},
+        {"vulkan", StartupDefaultSelection{}}
+    };
+
+    nlohmann::json defaultsJson=cfg.value("startup_defaults", nlohmann::json::object());
+    if(!defaultsJson.is_object())
+    {
+        return startupDefaults;
+    }
+
+    for(auto it=defaultsJson.begin(); it!=defaultsJson.end(); ++it)
+    {
+        std::string key=normalizeAcceleratorKey(it.key());
+        if(key.empty())
+        {
+            continue;
+        }
+
+        if(it.value().is_string())
+        {
+            startupDefaults[key].model=it.value().get<std::string>();
+            startupDefaults[key].variant.clear();
+            startupDefaults[key].contextSize=0;
+            continue;
+        }
+
+        if(!it.value().is_object())
+        {
+            continue;
+        }
+
+        startupDefaults[key].model=it.value().value("model", "");
+        startupDefaults[key].variant=it.value().value("variant", "");
+        startupDefaults[key].contextSize=sanitizeContextSize(it.value().value("context_size", 0));
+        if(it.value().contains("runtime_options"))
+        {
+            startupDefaults[key].runtimeOptions=parseStartupRuntimeOptions(it.value()["runtime_options"]);
+        }
+    }
+
+    return startupDefaults;
+}
+
+std::vector<StartupModelEntry> parseStartupModels(const nlohmann::json &cfg)
+{
+    std::vector<StartupModelEntry> entries;
+
+    if(!cfg.contains("startup_models")||!cfg["startup_models"].is_array())
+    {
+        return entries;
+    }
+
+    for(const nlohmann::json &item:cfg["startup_models"])
+    {
+        if(!item.is_object()||!item.contains("model"))
+            continue;
+
+        StartupModelEntry entry;
+        entry.model=item.value("model", "");
+        entry.variant=item.value("variant", "");
+        entry.contextSize=sanitizeContextSize(item.value("context_size", 0));
+
+        if(item.contains("runtime_options"))
+        {
+            entry.runtimeOptions=parseStartupRuntimeOptions(item["runtime_options"]);
+        }
+
+        if(item.contains("devices")&&item["devices"].is_array())
+        {
+            for(const nlohmann::json &d:item["devices"])
+            {
+                if(d.is_number_integer())
+                {
+                    entry.devices.push_back(d.get<int>());
+                }
+            }
+        }
+
+        if(!entry.model.empty())
+        {
+            entries.push_back(std::move(entry));
+        }
+    }
+
+    return entries;
+}
+
+bool hasAccelerator(const arbiterAI::SystemInfo &hw, const std::string &accelerator)
+{
+    if(accelerator=="cpu")
+    {
+        return true;
+    }
+
+    for(const arbiterAI::GpuInfo &gpu:hw.gpus)
+    {
+        if(accelerator=="cuda"&&gpu.backend==arbiterAI::GpuBackend::CUDA)
+        {
+            return true;
+        }
+        if(accelerator=="vulkan"&&gpu.backend==arbiterAI::GpuBackend::Vulkan)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::vector<std::string> buildStartupAcceleratorOrder(
+    const arbiterAI::SystemInfo &hw,
+    const std::vector<std::string> &defaultBackendPriority)
+{
+    std::vector<std::string> order;
+
+    auto appendIfAvailable=[&order, &hw](const std::string &accelerator)
+    {
+        if(accelerator.empty()||!hasAccelerator(hw, accelerator))
+        {
+            return;
+        }
+        if(std::find(order.begin(), order.end(), accelerator)==order.end())
+        {
+            order.push_back(accelerator);
+        }
+    };
+
+    for(const std::string &backend:defaultBackendPriority)
+    {
+        appendIfAvailable(normalizeAcceleratorKey(backend));
+    }
+
+    appendIfAvailable("cuda");
+    appendIfAvailable("vulkan");
+    appendIfAvailable("cpu");
+
+    return order;
+}
+
+StartupDefaultSelection selectStartupDefault(
+    const arbiterAI::SystemInfo &hw,
+    const std::map<std::string, StartupDefaultSelection> &startupDefaults,
+    const std::vector<std::string> &defaultBackendPriority,
+    const std::string &legacyDefaultModel,
+    const std::string &legacyDefaultVariant,
+    std::string &selectedAccelerator)
+{
+    for(const std::string &accelerator:buildStartupAcceleratorOrder(hw, defaultBackendPriority))
+    {
+        auto it=startupDefaults.find(accelerator);
+        if(it!=startupDefaults.end()&&!it->second.model.empty())
+        {
+            selectedAccelerator=accelerator;
+            return it->second;
+        }
+    }
+
+    selectedAccelerator.clear();
+    return {legacyDefaultModel, legacyDefaultVariant, 0};
+}
+
+void scheduleStartupLoadAfterDownload(
+    const StartupDefaultSelection &selection,
+    const std::string &accelerator)
+{
+    std::thread([selection, accelerator]()
+    {
+        std::string variant=selection.variant;
+
+        for(int attempt=0; attempt<300; ++attempt)
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+
+            std::optional<arbiterAI::LoadedModel> state=
+                arbiterAI::ModelRuntime::instance().getModelState(selection.model);
+            if(!state.has_value())
+            {
+                spdlog::warn("Startup default model '{}' disappeared while waiting for download to finish", selection.model);
+                return;
+            }
+
+            if(!state->variant.empty())
+            {
+                variant=state->variant;
+            }
+
+            if(state->state==arbiterAI::ModelState::Downloading)
+            {
+                continue;
+            }
+
+            if(state->state==arbiterAI::ModelState::Loaded||state->state==arbiterAI::ModelState::Ready)
+            {
+                spdlog::info("Startup default model '{}' is ready after background download for {}",
+                    selection.model,
+                    accelerator.empty()?"legacy startup":accelerator);
+                return;
+            }
+
+            if(state->state!=arbiterAI::ModelState::Unloaded)
+            {
+                spdlog::warn("Startup default model '{}' ended in unexpected state {} after download",
+                    selection.model,
+                    static_cast<int>(state->state));
+                return;
+            }
+
+            spdlog::info("Startup default model '{}' finished downloading; loading now for {}",
+                selection.model,
+                accelerator.empty()?"legacy startup":accelerator);
+
+            arbiterAI::RuntimeOptions opts=selection.runtimeOptions;
+            arbiterAI::ErrorCode loadErr=arbiterAI::ArbiterAI::instance().loadModel(
+                selection.model,
+                variant,
+                selection.contextSize,
+                &opts);
+
+            if(loadErr==arbiterAI::ErrorCode::Success)
+            {
+                spdlog::info("Startup default model '{}' loaded successfully after download", selection.model);
+                return;
+            }
+
+            if(loadErr==arbiterAI::ErrorCode::ModelDownloading)
+            {
+                continue;
+            }
+
+            spdlog::warn("Failed to load startup default model '{}' after download (error={})",
+                selection.model,
+                static_cast<int>(loadErr));
+            return;
+        }
+
+        spdlog::warn("Timed out waiting for startup default model '{}' to finish downloading", selection.model);
+    }).detach();
+}
+
+void scheduleStartupModelLoadAfterDownload(const StartupModelEntry &entry)
+{
+    std::thread([entry]()
+    {
+        std::string variant=entry.variant;
+
+        for(int attempt=0; attempt<300; ++attempt)
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+
+            std::optional<arbiterAI::LoadedModel> state=
+                arbiterAI::ModelRuntime::instance().getModelState(entry.model);
+            if(!state.has_value())
+            {
+                spdlog::warn("Startup model '{}' disappeared while waiting for download", entry.model);
+                return;
+            }
+
+            if(!state->variant.empty())
+                variant=state->variant;
+
+            if(state->state==arbiterAI::ModelState::Downloading)
+                continue;
+
+            if(state->state==arbiterAI::ModelState::Loaded||state->state==arbiterAI::ModelState::Ready)
+            {
+                spdlog::info("Startup model '{}' is ready after background download", entry.model);
+                return;
+            }
+
+            if(state->state!=arbiterAI::ModelState::Unloaded)
+            {
+                spdlog::warn("Startup model '{}' ended in unexpected state {}", entry.model, static_cast<int>(state->state));
+                return;
+            }
+
+            spdlog::info("Startup model '{}' finished downloading; loading now", entry.model);
+
+            arbiterAI::RuntimeOptions opts=entry.runtimeOptions;
+            arbiterAI::ErrorCode loadErr=arbiterAI::ArbiterAI::instance().loadModel(
+                entry.model, variant, entry.contextSize, &opts, entry.devices);
+
+            if(loadErr==arbiterAI::ErrorCode::Success)
+            {
+                spdlog::info("Startup model '{}' loaded successfully after download", entry.model);
+                return;
+            }
+            if(loadErr==arbiterAI::ErrorCode::ModelDownloading)
+                continue;
+
+            spdlog::warn("Failed to load startup model '{}' after download (error={})", entry.model, static_cast<int>(loadErr));
+            return;
+        }
+
+        spdlog::warn("Timed out waiting for startup model '{}' to finish downloading", entry.model);
+    }).detach();
+}
 
 int64_t parseStorageLimit(const std::string &str)
 {
@@ -137,6 +508,7 @@ int main(int argc, char *argv[])
     std::string modelsDir=cfg.value("models_dir", "/models");
     std::string defaultModel=cfg.value("default_model", "");
     std::string defaultVariant=cfg.value("default_variant", "");
+    std::map<std::string, StartupDefaultSelection> startupDefaults=parseStartupDefaults(cfg);
     std::string overridePath=cfg.value("override_path", "");
     std::string injectedConfigDir=cfg.value("injected_config_dir", "");
     int ramBudget=cfg.value("ram_budget_mb", 0);
@@ -294,23 +666,96 @@ int main(int argc, char *argv[])
         spdlog::info("Max concurrent downloads set to {}", maxDownloads);
     }
 
-    // ── Load default model ───────────────────────────────────────
-    if(!defaultModel.empty())
-    {
-        spdlog::info("Loading default model: {} (variant: {})", defaultModel, defaultVariant.empty()?"auto":defaultVariant);
-        arbiterAI::ErrorCode loadErr=ai.loadModel(defaultModel, defaultVariant);
+    // ── Load startup models ─────────────────────────────────────
+    arbiterAI::HardwareDetector::instance().refresh();
+    arbiterAI::SystemInfo startupHardware=arbiterAI::HardwareDetector::instance().getSystemInfo();
 
-        if(loadErr==arbiterAI::ErrorCode::Success)
+    // New format: startup_models array (preferred)
+    std::vector<StartupModelEntry> startupModels=parseStartupModels(cfg);
+
+    if(!startupModels.empty())
+    {
+        for(const StartupModelEntry &entry:startupModels)
         {
-            spdlog::info("Default model '{}' loaded successfully", defaultModel);
+            std::string devicesStr;
+            if(!entry.devices.empty())
+            {
+                for(size_t i=0; i<entry.devices.size(); ++i)
+                {
+                    if(i>0) devicesStr+=", ";
+                    devicesStr+=std::to_string(entry.devices[i]);
+                }
+            }
+            else
+            {
+                devicesStr="auto";
+            }
+
+            spdlog::info("Loading startup model: {} (variant: {}, devices: [{}])",
+                entry.model, entry.variant.empty()?"auto":entry.variant, devicesStr);
+
+            arbiterAI::RuntimeOptions startupOpts=entry.runtimeOptions;
+            arbiterAI::ErrorCode loadErr=ai.loadModel(
+                entry.model, entry.variant, entry.contextSize, &startupOpts, entry.devices);
+
+            if(loadErr==arbiterAI::ErrorCode::Success)
+            {
+                spdlog::info("Startup model '{}' loaded successfully", entry.model);
+            }
+            else if(loadErr==arbiterAI::ErrorCode::ModelDownloading)
+            {
+                spdlog::info("Startup model '{}' is downloading...", entry.model);
+                scheduleStartupModelLoadAfterDownload(entry);
+            }
+            else
+            {
+                spdlog::warn("Failed to load startup model '{}' (error={})", entry.model, static_cast<int>(loadErr));
+            }
         }
-        else if(loadErr==arbiterAI::ErrorCode::ModelDownloading)
+    }
+    else
+    {
+        // Legacy format: startup_defaults keyed by accelerator
+        std::string selectedAccelerator;
+        StartupDefaultSelection startupSelection=selectStartupDefault(
+            startupHardware,
+            startupDefaults,
+            defaultBackendPriority,
+            defaultModel,
+            defaultVariant,
+            selectedAccelerator);
+
+        if(!startupSelection.model.empty())
         {
-            spdlog::info("Default model '{}' is downloading...", defaultModel);
-        }
-        else
-        {
-            spdlog::warn("Failed to load default model '{}' (error={})", defaultModel, static_cast<int>(loadErr));
+            if(selectedAccelerator.empty())
+            {
+                spdlog::info("Loading legacy default model: {} (variant: {})", startupSelection.model, startupSelection.variant.empty()?"auto":startupSelection.variant);
+            }
+            else
+            {
+                spdlog::info("Loading startup default model for {}: {} (variant: {})", selectedAccelerator, startupSelection.model, startupSelection.variant.empty()?"auto":startupSelection.variant);
+            }
+
+            arbiterAI::RuntimeOptions startupOpts=startupSelection.runtimeOptions;
+            arbiterAI::ErrorCode loadErr=ai.loadModel(
+                startupSelection.model,
+                startupSelection.variant,
+                startupSelection.contextSize,
+                &startupOpts);
+
+            if(loadErr==arbiterAI::ErrorCode::Success)
+            {
+                spdlog::info("Startup default model '{}' loaded successfully", startupSelection.model);
+            }
+            else if(loadErr==arbiterAI::ErrorCode::ModelDownloading)
+            {
+                spdlog::info("Startup default model '{}' is downloading...", startupSelection.model);
+                scheduleStartupLoadAfterDownload(startupSelection, selectedAccelerator);
+            }
+            else
+            {
+                spdlog::warn("Failed to load startup default model '{}' (error={})", startupSelection.model, static_cast<int>(loadErr));
+            }
         }
     }
 
@@ -318,6 +763,7 @@ int main(int argc, char *argv[])
     httplib::Server server;
 
     arbiterAI::server::registerRoutes(server);
+    arbiterAI::server::setServerConfigPath(configPath);
 
     if(!overridePath.empty())
     {
@@ -360,6 +806,7 @@ int main(int argc, char *argv[])
     spdlog::info("  POST /api/storage/cleanup/run     - Run cleanup");
     spdlog::info("  GET  /api/downloads          - Active downloads");
     spdlog::info("  GET  /dashboard              - Live dashboard");
+    spdlog::info("  GET  /dashboard/config       - Startup configuration");
 
     spdlog::info("Starting server on {}:{}", host, port);
     spdlog::info("Dashboard: http://{}:{}/dashboard", host=="0.0.0.0"?"localhost":host, port);

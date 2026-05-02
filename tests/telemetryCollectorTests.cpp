@@ -266,7 +266,7 @@ TEST_F(TelemetryCollectorTest, SnapshotActiveRequests)
     SystemSnapshot snapshot2=tc.getSnapshot();
     EXPECT_EQ(snapshot2.activeRequests, 1);
 
-    ModelRuntime::instance().endInference();
+    ModelRuntime::instance().endInference("tel-mock-1");
 
     SystemSnapshot snapshot3=tc.getSnapshot();
     EXPECT_EQ(snapshot3.activeRequests, 0);

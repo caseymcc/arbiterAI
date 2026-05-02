@@ -10,6 +10,32 @@
 
     "default_model": "",
     "default_variant": "",
+    "startup_defaults": {
+        "cpu": {
+            "model": "",
+            "variant": ""
+        },
+        "cuda": {
+            "model": "",
+            "variant": ""
+        },
+        "vulkan": {
+            "model": "",
+            "variant": ""
+        }
+    },
+
+    "startup_models": [
+        {
+            "model": "Qwen3.5-27B",
+            "variant": "Q4_K_M",
+            "context_size": 248832,
+            "runtime_options": {
+                "flash_attn": true
+            },
+            "devices": [1]
+        }
+    ],
 
     "override_path": "",
 

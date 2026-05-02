@@ -560,7 +560,8 @@ void HardwareDetector::detectNvmlGpus()
             }
         }
 
-        spdlog::info("NVML GPU {}: {} ({}MB VRAM, {}MB free, CC {:.1f})",
+        spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+            "NVML GPU {}: {} ({}MB VRAM, {}MB free, CC {:.1f})",
             gpu.index, gpu.name, gpu.vramTotalMb, gpu.vramFreeMb, gpu.computeCapability);
 
         m_systemInfo.gpus.push_back(gpu);
@@ -764,8 +765,12 @@ void HardwareDetector::detectVulkanGpus()
 
             const VkPhysicalDeviceMemoryProperties &mp=memProps2.memoryProperties;
 
-            // Sum DEVICE_LOCAL heaps — on discrete GPUs this is dedicated VRAM,
-            // on UMA systems this is the GPU-accessible portion of system RAM.
+            // Collect DEVICE_LOCAL heap info for budget and usage tracking.
+            // Cards like the MI50 32GB expose multiple DEVICE_LOCAL heaps
+            // (e.g. CPU-visible BAR heap + GPU-only heap). The budget from
+            // VK_EXT_memory_budget is the authoritative measure of how much
+            // VRAM is actually allocatable — it accounts for BAR limitations,
+            // other processes, and driver reservations.
             uint64_t deviceLocalBudgetBytes=0;
             uint64_t deviceLocalUsageBytes=0;
             uint64_t deviceLocalSizeBytes=0;
@@ -799,19 +804,38 @@ void HardwareDetector::detectVulkanGpus()
 
             gpu.hasMemoryBudget=true;
 
-            // Budget is the best estimate of how much this process can allocate.
-            // On UMA, budget may be significantly larger than the raw heap size
-            // (driver exposes most of system RAM as available to the GPU).
             uint64_t budgetTotalMb=deviceLocalBudgetBytes/(1024ULL*1024ULL);
-            uint64_t budgetUsedMb=deviceLocalUsageBytes/(1024ULL*1024ULL);
             uint64_t heapSizeMb=deviceLocalSizeBytes/(1024ULL*1024ULL);
 
-            // Use the larger of heap size and budget for total — on some UMA
-            // drivers the budget exceeds the reported heap size.
-            uint64_t effectiveTotalMb=(budgetTotalMb>heapSizeMb) ? budgetTotalMb : heapSizeMb;
+            uint64_t effectiveTotalMb;
             uint64_t effectiveFreeMb=(deviceLocalBudgetBytes>deviceLocalUsageBytes)
                 ? (deviceLocalBudgetBytes-deviceLocalUsageBytes)/(1024ULL*1024ULL)
                 : 0;
+
+            if(isIntegrated)
+            {
+                // UMA/integrated GPUs: budget may exceed heap size (driver
+                // exposes system RAM as GPU-accessible). Use the larger value.
+                effectiveTotalMb=(budgetTotalMb>heapSizeMb) ? budgetTotalMb : heapSizeMb;
+            }
+            else
+            {
+                // Discrete GPUs: budget is the authoritative allocatable total.
+                // When a device has multiple DEVICE_LOCAL heaps (e.g. visible
+                // BAR heap + GPU-only heap), the budget for the BAR heap may
+                // be much smaller than its physical size if Resizable BAR is
+                // not enabled. Using heap size would over-report and cause
+                // model loads that overcommit VRAM and spill to system RAM.
+                effectiveTotalMb=budgetTotalMb;
+
+                if(budgetTotalMb<heapSizeMb*90/100)
+                {
+                    spdlog::warn("Vulkan GPU {}: allocatable budget ({}MB) is significantly less than "
+                        "physical VRAM ({}MB). This typically means Resizable BAR / Above 4G Decoding "
+                        "is not enabled in BIOS. Enable it to unlock the full VRAM.",
+                        gpu.index, budgetTotalMb, heapSizeMb);
+                }
+            }
 
             gpu.vramTotalMb=static_cast<int>(effectiveTotalMb);
             gpu.vramFreeMb=static_cast<int>(effectiveFreeMb);
@@ -826,8 +850,8 @@ void HardwareDetector::detectVulkanGpus()
             }
 
             spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
-                "Vulkan GPU {}: {} (budget: {}MB total, {}MB free, "
-                "heap size: {}MB, integrated={}, memoryBudget=true)",
+                "Vulkan GPU {}: {} (allocatable: {}MB, free: {}MB, "
+                "physical: {}MB, integrated={}, memoryBudget=true)",
                 gpu.index, gpu.name,
                 gpu.vramTotalMb, gpu.vramFreeMb,
                 static_cast<int>(heapSizeMb), gpu.unifiedMemory);
@@ -852,7 +876,7 @@ void HardwareDetector::detectVulkanGpus()
 
                 if(deviceLocal)
                 {
-                    vramTotalMb+=static_cast<int>(memProps.memoryHeaps[h].size/(1024*1024));
+                    vramTotalMb+=heapInfo.sizeMb;
                 }
             }
 
