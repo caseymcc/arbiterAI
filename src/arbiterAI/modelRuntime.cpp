@@ -279,6 +279,19 @@ LoadErrorDetail ModelRuntime::classifyLoadFailure(
         return detail;
     }
 
+    // Check for CLIP / multimodal projection file loaded as main model
+    if(logLower.find("clip cannot be used as main model")!=std::string::npos||
+        logLower.find("mmproj")!=std::string::npos&&logLower.find("clip")!=std::string::npos)
+    {
+        detail.reason=LoadFailureReason::UnsupportedArch;
+        detail.summary="File is a CLIP/mmproj multimodal projection, not a standalone model: "+filePath;
+        detail.suggestion="This file is a vision encoder projection used with --mmproj, not a model. "
+            "Remove this variant from the model config and use the correct GGUF model file instead.";
+        detail.action="fix_config";
+        detail.recoverable=false;
+        return detail;
+    }
+
     // Check for unsupported architecture
     if(logLower.find("unknown model architecture")!=std::string::npos||
         logLower.find("unsupported model")!=std::string::npos||
@@ -331,6 +344,23 @@ int ModelRuntime::getMaxConcurrentDownloads() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_maxConcurrentDownloads;
+}
+
+void ModelRuntime::setModelsDir(const std::string &dir)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_modelsDir=dir;
+    // Ensure trailing slash for path concatenation
+    if(!m_modelsDir.empty()&&m_modelsDir.back()!='/')
+    {
+        m_modelsDir+='/';
+    }
+}
+
+std::string ModelRuntime::getModelsDir() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_modelsDir;
 }
 
 ErrorCode ModelRuntime::loadModel(
@@ -481,7 +511,7 @@ ErrorCode ModelRuntime::loadModel(
                 bool anyMissing=false;
                 for(const VariantDownload &file:allFiles)
                 {
-                    std::string filePath="/models/"+file.filename;
+                    std::string filePath=m_modelsDir+file.filename;
                     if(!std::filesystem::exists(filePath)&&!file.url.empty())
                     {
                         anyMissing=true;
@@ -555,7 +585,7 @@ ErrorCode ModelRuntime::loadModel(
                 // Resolve backend priority: model config > architecture rule > server default
                 std::vector<std::string> effectiveBackendPriority=resolveBackendPriority(*modelInfo);
 
-                std::string filePath="/models/"+primaryFilename;
+                std::string filePath=m_modelsDir+primaryFilename;
                 ErrorCode loadResult=loadLlamaModel(model, filePath, entry.contextSize, entry.gpuIndices,
                     fit.maxContextSize, resolvedOptions, effectiveBackendPriority);
                 if(loadResult!=ErrorCode::Success)
@@ -660,7 +690,7 @@ ErrorCode ModelRuntime::downloadModel(
     bool anyMissing=false;
     for(const VariantDownload &file:allFiles)
     {
-        std::string filePath="/models/"+file.filename;
+        std::string filePath=m_modelsDir+file.filename;
         if(!std::filesystem::exists(filePath)&&!file.url.empty())
         {
             anyMissing=true;
@@ -752,7 +782,7 @@ void ModelRuntime::runBackgroundDownload(
     std::vector<const VariantDownload *> missingFiles;
     for(const VariantDownload &file:allFiles)
     {
-        std::string filePath="/models/"+file.filename;
+        std::string filePath=m_modelsDir+file.filename;
         if(!std::filesystem::exists(filePath)&&!file.url.empty())
         {
             missingFiles.push_back(&file);
@@ -773,7 +803,7 @@ void ModelRuntime::runBackgroundDownload(
     bool allDownloadsOk=true;
     for(const VariantDownload *file:missingFiles)
     {
-        std::string filePath="/models/"+file->filename;
+        std::string filePath=m_modelsDir+file->filename;
         bool downloadOk=downloadModelFile(
             file->url,
             filePath,
@@ -812,7 +842,7 @@ void ModelRuntime::runBackgroundDownload(
     std::vector<std::string> extraFiles;
     for(size_t i=0; i<allFiles.size(); ++i)
     {
-        std::string filePath="/models/"+allFiles[i].filename;
+        std::string filePath=m_modelsDir+allFiles[i].filename;
         int64_t actualSize=0;
         std::error_code ec;
         if(std::filesystem::exists(filePath, ec))
@@ -1784,11 +1814,20 @@ ErrorCode ModelRuntime::loadLlamaModel(
                 if(hwGpu->backend==GpuBackend::CUDA) expectedPrefix="CUDA";
                 else if(hwGpu->backend==GpuBackend::Vulkan) expectedPrefix="Vulkan";
 
-                for(const GgmlGpuDev &ggmlDev:ggmlGpus)
+                // Try matching with backend prefix first, then without (fallback).
+                // The HW detector may report a GPU as CUDA while ggml only has
+                // Vulkan backends available (or vice versa).
+                std::vector<std::string> prefixesToTry={expectedPrefix, ""};
+
+                for(const std::string &prefix:prefixesToTry)
                 {
-                    // Check backend match first
-                    if(!expectedPrefix.empty()&&ggmlDev.name.find(expectedPrefix)==std::string::npos)
-                        continue;
+                    if(bestMatch) break;
+
+                    for(const GgmlGpuDev &ggmlDev:ggmlGpus)
+                    {
+                        // Check backend match first
+                        if(!prefix.empty()&&ggmlDev.name.find(prefix)==std::string::npos)
+                            continue;
 
                     // Check if HW GPU name appears in ggml description
                     // HW name: "AMD Instinct MI50/MI60 (RADV VEGA20)"
@@ -1847,13 +1886,23 @@ ErrorCode ModelRuntime::loadLlamaModel(
                         bestMatchName=ggmlDev.name;
                         break;
                     }
+                    }
                 }
 
                 if(bestMatch)
                 {
                     targetDevices.push_back(bestMatch);
-                    spdlog::info("Targeting GPU hw[{}] '{}': ggml device '{}' for model '{}'",
-                        idx, hwGpu->name, bestMatchName, model);
+                    bool backendFallback=!expectedPrefix.empty()&&bestMatchName.find(expectedPrefix)==std::string::npos;
+                    if(backendFallback)
+                    {
+                        spdlog::info("Targeting GPU hw[{}] '{}': ggml device '{}' for model '{}' (backend fallback: {} not available)",
+                            idx, hwGpu->name, bestMatchName, model, expectedPrefix);
+                    }
+                    else
+                    {
+                        spdlog::info("Targeting GPU hw[{}] '{}': ggml device '{}' for model '{}'",
+                            idx, hwGpu->name, bestMatchName, model);
+                    }
                 }
                 else
                 {
@@ -1895,12 +1944,24 @@ ErrorCode ModelRuntime::loadLlamaModel(
 
         // Resolve actual context to allocate:
         //   contextSize > 0  → user/config requested explicit size
-        //   contextSize == 0 → use model's native training context
+        //   contextSize == 0 → auto-select the largest context that fits in
+        //                      available VRAM, capped by the model's native
+        //                      training context
         // In both cases, cap by the hardware-fit maximum.
         int actualContext=contextSize;
         if(actualContext<=0)
         {
-            actualContext=nativeContext;
+            // Auto-select: use hardware maximum, but don't exceed native context
+            if(maxHardwareContext>0)
+            {
+                actualContext=std::min(maxHardwareContext, nativeContext);
+                spdlog::info("Auto-selecting context size {} (hardware max={}, native={}) for model '{}'",
+                    actualContext, maxHardwareContext, nativeContext, model);
+            }
+            else
+            {
+                actualContext=nativeContext;
+            }
         }
         if(maxHardwareContext>0&&actualContext>maxHardwareContext)
         {

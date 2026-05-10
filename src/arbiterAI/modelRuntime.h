@@ -119,6 +119,12 @@ public:
         const std::string &model,
         const std::string &variant="");
 
+    /// Set the base directory for model files (default: "/models").
+    void setModelsDir(const std::string &dir);
+
+    /// Get the current models directory.
+    std::string getModelsDir() const;
+
     /// Set the maximum number of concurrent model downloads (default: 2).
     void setMaxConcurrentDownloads(int max);
 
@@ -280,6 +286,7 @@ private:
 
     std::map<std::string, LoadedModel> m_models;
     mutable std::mutex m_mutex;
+    std::string m_modelsDir="/models/";
     int m_readyRamBudgetMb=0;
     std::vector<std::string> m_defaultBackendPriority;
     std::set<std::string> m_activeInference; // models currently running inference

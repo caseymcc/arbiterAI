@@ -1248,7 +1248,7 @@ function renderEffectiveStartup()
         let html='Next restart will load: ';
         const parts=active.map(e=>{
             const label=formatStartupModelLabel(e.model, e.variant);
-            const ctx=e.context_size>0?formatContextSize(e.context_size):'default';
+            const ctx=e.context_size>0?formatContextSize(e.context_size):'auto';
             const devs=e.devices&&e.devices.length>0?'GPU '+e.devices.join(','):'auto';
             return '<strong>'+escapeHtml(label)+'</strong> (ctx: '+escapeHtml(ctx)+', devices: '+escapeHtml(devs)+')';
         });
@@ -1489,13 +1489,94 @@ function updateStartupModelDevice(index, gpuIndex, checked)
     {
         entry.devices=entry.devices.filter(d=>d!==gpuIndex);
     }
+    updateStartupModelSliderGradient(index);
 }
 
 function updateStartupModelContext(index, value)
 {
-    startupModelsState[index].context_size=parseInt(value, 10)||0;
+    const parsed=parseInt(value, 10)||0;
+    startupModelsState[index].context_size=parsed;
     const label=document.getElementById('smCtxLabel_'+index);
-    if(label) label.textContent=formatContextSize(parseInt(value, 10));
+    if(label) label.textContent=parsed===0?'Auto':formatContextSize(parsed);
+    const autoInfo=document.getElementById('smCtxAutoInfo_'+index);
+    if(autoInfo) autoInfo.style.display=parsed===0?'block':'none';
+    updateStartupModelSliderGradient(index);
+}
+
+function getSelectedDevicesVram(index)
+{
+    const entry=startupModelsState[index];
+    if(!entry||!entry.devices||entry.devices.length===0)
+    {
+        // No devices selected: sum all GPU VRAM
+        let total=0;
+        for(const gpu of availableGpus) total+=gpu.vram_total_mb||0;
+        return total;
+    }
+    let total=0;
+    for(const gpuIdx of entry.devices)
+    {
+        const gpu=availableGpus.find(g=>g.index===gpuIdx);
+        if(gpu) total+=gpu.vram_total_mb||0;
+    }
+    return total;
+}
+
+function updateStartupModelSliderGradient(index)
+{
+    const slider=document.getElementById('smCtxSlider_'+index);
+    if(!slider) return;
+    const entry=startupModelsState[index];
+    const modelOpt=availableModelOptions.find(o=>o.model===entry.model&&o.variant===entry.variant);
+
+    if(!modelOpt||!modelOpt.memory_per_1k_context_mb||modelOpt.memory_per_1k_context_mb<=0)
+    {
+        slider.style.background='#32384b';
+        return;
+    }
+
+    const min=parseInt(slider.min);
+    const max=parseInt(slider.max);
+    const range=max-min;
+    if(range<=0){ slider.style.background='#32384b'; return; }
+
+    const baseMemory=modelOpt.base_memory_mb||0;
+    const baseContext=modelOpt.base_context_size||0;
+    const memPer1k=modelOpt.memory_per_1k_context_mb;
+    const availableMemory=getSelectedDevicesVram(index);
+    if(availableMemory<=0){ slider.style.background='#32384b'; return; }
+
+    const likelyCtx=baseContext+((0.85*availableMemory-baseMemory)/memPer1k)*1024;
+    const tightCtx=baseContext+((availableMemory-baseMemory)/memPer1k)*1024;
+
+    // Hard max: clamp slider to the tight max
+    const hardMaxCtx=Math.floor(tightCtx/1024)*1024;
+    if(hardMaxCtx>0&&hardMaxCtx<max)
+    {
+        slider.max=Math.max(hardMaxCtx, min);
+        if(parseInt(slider.value)>parseInt(slider.max))
+        {
+            slider.value=slider.max;
+            updateStartupModelContext(index, slider.value);
+            return;
+        }
+    }
+
+    const likelyPct=Math.max(0, Math.min(100, ((likelyCtx-min)/range)*100));
+    const tightPct=Math.max(0, Math.min(100, ((tightCtx-min)/range)*100));
+
+    if(likelyPct>=100)
+    {
+        slider.style.background='linear-gradient(to right, rgba(76,175,80,0.35) 0%, rgba(76,175,80,0.35) 100%)';
+    }
+    else if(tightPct<=0)
+    {
+        slider.style.background='linear-gradient(to right, rgba(255,96,96,0.35) 0%, rgba(255,96,96,0.35) 100%)';
+    }
+    else
+    {
+        slider.style.background='linear-gradient(to right, rgba(76,175,80,0.35) 0%, rgba(76,175,80,0.35) '+likelyPct+'%, rgba(240,192,64,0.35) '+likelyPct+'%, rgba(240,192,64,0.35) '+tightPct+'%, rgba(255,96,96,0.35) '+tightPct+'%, rgba(255,96,96,0.35) 100%)';
+    }
 }
 
 function readStartupModelRuntimeOpts(index)
@@ -1551,8 +1632,9 @@ function renderStartupModels()
         // Context slider
         const modelOpt=availableModelOptions.find(o=>o.model===entry.model&&o.variant===entry.variant);
         const maxCtx=modelOpt?modelOpt.max_context_size||131072:131072;
-        const ctxVal=entry.context_size>0?Math.min(entry.context_size, maxCtx):4096;
-        const ctxLabel=formatContextSize(ctxVal);
+        const ctxVal=entry.context_size>0?Math.min(entry.context_size, maxCtx):0;
+        const ctxLabel=ctxVal===0?'Auto':formatContextSize(ctxVal);
+        const isAutoCtx=ctxVal===0;
 
         // Device checkboxes
         let devicesHtml='';
@@ -1584,8 +1666,11 @@ function renderStartupModels()
             +'</div>'
             +'<div style="margin-bottom:10px;">'
             +'<label class="startup-field-label">Context Size <span class="context-slider-value" id="smCtxLabel_'+i+'">'+ctxLabel+'</span></label>'
-            +'<input type="range" class="context-slider" min="4096" max="'+maxCtx+'" step="1024" value="'+ctxVal+'" '
+            +'<input type="range" class="context-slider" id="smCtxSlider_'+i+'" min="0" max="'+maxCtx+'" step="1024" value="'+ctxVal+'" '
             +'oninput="updateStartupModelContext('+i+', this.value)">'
+            +'<div id="smCtxAutoInfo_'+i+'" style="display:'+(isAutoCtx?'block':'none')+';margin-top:6px;padding:8px 10px;background:rgba(124,138,255,0.08);border:1px solid rgba(124,138,255,0.2);border-radius:6px;font-size:12px;color:#9eb0ff;">'
+            +'\u2139\uFE0F <strong>Auto:</strong> The server will select the largest context size that fits in the available VRAM of the assigned device(s).'
+            +'</div>'
             +'</div>'
             +'<div style="margin-bottom:10px;">'
             +'<label class="startup-field-label">Compute Devices</label>'
@@ -1608,6 +1693,12 @@ function renderStartupModels()
     }
 
     el.innerHTML=html;
+
+    // Apply VRAM color gradients after DOM is updated
+    for(let i=0; i<startupModelsState.length; i++)
+    {
+        updateStartupModelSliderGradient(i);
+    }
 }
 
 async function saveAllStartupModels()

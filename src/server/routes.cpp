@@ -1471,38 +1471,36 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
 
 void handleListModelsV1(const httplib::Request &, httplib::Response &res)
 {
-    std::vector<std::string> modelNames;
-    ArbiterAI::instance().getAvailableModels(modelNames);
+    // Return only currently loaded models (OpenAI-compatible: models ready for inference)
+    std::vector<LoadedModel> states=ModelRuntime::instance().getModelStates();
 
     auto created=static_cast<int64_t>(std::time(nullptr));
 
     nlohmann::json data=nlohmann::json::array();
-    for(const std::string &name:modelNames)
+    for(const LoadedModel &m:states)
     {
-        // Always emit the bare model name
+        if(m.state!=ModelState::Loaded)
+            continue;
+
+        // Emit bare model name
         data.push_back({
-            {"id", name},
+            {"id", m.modelName},
             {"object", "model"},
             {"created", created},
             {"owned_by", "arbiterai"},
             {"permission", nlohmann::json::array()}
         });
 
-        // For models with variants, also emit "model:variant" entries
-        ModelInfo info;
-        if(ArbiterAI::instance().getModelInfo(name, info)==ErrorCode::Success
-            &&!info.variants.empty())
+        // Also emit "model:variant" if a variant is loaded
+        if(!m.variant.empty())
         {
-            for(const ModelVariant &v:info.variants)
-            {
-                data.push_back({
-                    {"id", name+":"+v.quantization},
-                    {"object", "model"},
-                    {"created", created},
-                    {"owned_by", "arbiterai"},
-                    {"permission", nlohmann::json::array()}
-                });
-            }
+            data.push_back({
+                {"id", m.modelName+":"+m.variant},
+                {"object", "model"},
+                {"created", created},
+                {"owned_by", "arbiterai"},
+                {"permission", nlohmann::json::array()}
+            });
         }
     }
 

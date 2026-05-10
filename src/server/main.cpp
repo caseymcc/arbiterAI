@@ -632,6 +632,9 @@ int main(int argc, char *argv[])
     arbiterAI::StorageManager &storage=arbiterAI::StorageManager::instance();
     storage.initialize(modelsDir);
 
+    // ── Models directory for ModelRuntime ─────────────────────────
+    arbiterAI::ModelRuntime::instance().setModelsDir(modelsDir);
+
     if(storageLimitBytes>0)
     {
         storage.setStorageLimit(storageLimitBytes);

@@ -366,6 +366,22 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
                     variant.files.push_back(vd);
                 }
             }
+
+            // Skip CLIP/mmproj variants — these are multimodal projection
+            // files, not standalone models.  Loading them as the main model
+            // causes llama.cpp to fail with "CLIP cannot be used as main model".
+            std::string primaryFile=variant.getPrimaryFilename();
+            std::string primaryLower=primaryFile;
+            std::transform(primaryLower.begin(), primaryLower.end(), primaryLower.begin(), ::tolower);
+            if(primaryLower.find("mmproj")!=std::string::npos||
+                primaryLower.find("clip-")!=std::string::npos||
+                primaryLower.find("vision-")!=std::string::npos)
+            {
+                spdlog::debug("Skipping multimodal projection variant '{}' for model '{}' (file: {})",
+                    variant.quantization, info.model, primaryFile);
+                continue;
+            }
+
             info.variants.push_back(variant);
         }
     }
