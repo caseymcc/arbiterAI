@@ -304,7 +304,7 @@ TEST_F(ModelRuntimeTest, EndInferenceDrainsSwapQueue)
     rt.swapModel("mock-model-2");
 
     // End inference — should drain the queue and execute swap
-    rt.endInference();
+    rt.endInference("mock-model");
 
     EXPECT_FALSE(rt.isInferenceActive());
 
@@ -330,7 +330,7 @@ TEST_F(ModelRuntimeTest, MultipleQueuedSwapsOnlyExecutesLatest)
     rt.swapModel("mock-model-2");
     rt.swapModel("mock-model"); // swap back to mock-model
 
-    rt.endInference();
+    rt.endInference("mock-model");
 
     // mock-model should be loaded (the latest swap target)
     auto state=rt.getModelState("mock-model");
@@ -350,7 +350,7 @@ TEST_F(ModelRuntimeTest, BeginEndInferenceTracksState)
     rt.beginInference("mock-model");
     EXPECT_TRUE(rt.isInferenceActive());
 
-    rt.endInference();
+    rt.endInference("mock-model");
     EXPECT_FALSE(rt.isInferenceActive());
 }
 

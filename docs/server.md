@@ -65,6 +65,11 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
     "models_dir": "/models",
     "default_model": "",
     "default_variant": "",
+    "startup_defaults": {
+      "cpu": {"model": "", "variant": ""},
+      "cuda": {"model": "", "variant": ""},
+      "vulkan": {"model": "", "variant": ""}
+    },
     "override_path": "",
     "ram_budget_mb": 0,
     "max_concurrent_downloads": 2,
@@ -99,6 +104,7 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 | `models_dir` | `string` | `"/models"` | Directory for downloaded model files |
 | `default_model` | `string` | `""` | Model to load on startup |
 | `default_variant` | `string` | `""` | Default quantization variant (e.g., `Q4_K_M`) |
+| `startup_defaults` | `object` | `{}` | Per-accelerator startup defaults used on restart. Keys: `cpu`, `cuda`, `vulkan`, each with `model` and optional `variant`. If unset, the server falls back to `default_model` / `default_variant`. |
 | `override_path` | `string` | `""` | Path to write runtime model config overrides |
 | `ram_budget_mb` | `int` | `0` | Ready-model RAM budget in MB (`0` = auto 50%) |
 | `max_concurrent_downloads` | `int` | `2` | Maximum simultaneous model downloads |

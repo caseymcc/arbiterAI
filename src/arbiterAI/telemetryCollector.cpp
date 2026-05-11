@@ -68,7 +68,7 @@ SystemSnapshot TelemetryCollector::getSnapshot() const
     snapshot.hardware=HardwareDetector::instance().getSystemInfo();
     snapshot.models=ModelRuntime::instance().getModelStates();
     snapshot.avgTokensPerSecond=getAvgTokensPerSecond();
-    snapshot.activeRequests=ModelRuntime::instance().isInferenceActive()?1:0;
+    snapshot.activeRequests=ModelRuntime::instance().getActiveInferenceCount();
 
     // Calculate average prompt/generation speeds over last 5 minutes
     std::chrono::system_clock::time_point cutoff=

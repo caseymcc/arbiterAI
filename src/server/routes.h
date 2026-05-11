@@ -11,6 +11,9 @@ namespace server
 /// Register all route handlers on the given HTTP server.
 void registerRoutes(httplib::Server &server);
 
+/// Set the main server configuration JSON path for persisted dashboard updates.
+void setServerConfigPath(const std::string &path);
+
 /// Set the override path for persisting runtime model configs.
 void setOverridePath(const std::string &path);
 
@@ -31,6 +34,12 @@ void handleHealth(const httplib::Request &req, httplib::Response &res);
 // ========== Version ==========
 
 void handleGetVersion(const httplib::Request &req, httplib::Response &res);
+
+// ========== Server Config ==========
+
+void handleGetServerConfig(const httplib::Request &req, httplib::Response &res);
+void handleSetServerConfig(const httplib::Request &req, httplib::Response &res);
+void handleGetStartupOptions(const httplib::Request &req, httplib::Response &res);
 
 // ========== Model Management ==========
 
@@ -88,6 +97,7 @@ void handleGetActiveDownloads(const httplib::Request &req, httplib::Response &re
 // ========== Dashboard ==========
 
 void handleDashboard(const httplib::Request &req, httplib::Response &res);
+void handleDashboardConfig(const httplib::Request &req, httplib::Response &res);
 void handleDashboardStorage(const httplib::Request &req, httplib::Response &res);
 
 } // namespace server

@@ -650,7 +650,7 @@ public:
      * @return ErrorCode indicating success, ModelDownloading, or failure
      */
     ErrorCode loadModel(const std::string &model, const std::string &variant="", int contextSize=0,
-        const RuntimeOptions *optionsOverride=nullptr);
+        const RuntimeOptions *optionsOverride=nullptr, const std::vector<int> &targetDevices={});
 
     /**
      * @brief Download model files without loading into VRAM
