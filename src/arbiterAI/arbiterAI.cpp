@@ -255,6 +255,13 @@ ErrorCode ArbiterAI::completion(const CompletionRequest &request, CompletionResp
 ErrorCode ArbiterAI::streamingCompletion(const CompletionRequest &request,
     std::function<void(const std::string &)> callback)
 {
+    return streamingCompletion(request, callback, nullptr);
+}
+
+ErrorCode ArbiterAI::streamingCompletion(const CompletionRequest &request,
+    std::function<void(const std::string &)> callback,
+    std::function<void()> waitCallback)
+{
     if (!ArbiterAI::instance().initialized)
     {
         return ErrorCode::InvalidRequest;
@@ -273,6 +280,10 @@ ErrorCode ArbiterAI::streamingCompletion(const CompletionRequest &request,
         return ErrorCode::UnsupportedProvider;
     }
 
+    if(waitCallback)
+    {
+        return provider->streamingCompletion(request, callback, waitCallback);
+    }
     return provider->streamingCompletion(request, callback);
 }
 

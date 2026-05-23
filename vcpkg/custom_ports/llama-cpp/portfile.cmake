@@ -23,7 +23,7 @@ else()
         OUT_SOURCE_PATH SOURCE_PATH
         REPO ggml-org/llama.cpp
         REF b${VERSION}
-        SHA512 6be3482ef58872ee4a386ba831175e53ce0d93c6992e4389ffd97f9af3cc7becdd1356fda575702681f55261e7fe81bc1baa12edd0d5f809aa80684f5c890bac
+        SHA512 50d06c9b3fc72245ba621dc0dbe6fd8a67fbd36a6d5cc27715dc36675e93cf0aee992f90a85e710013ecf7bd1164b13b0b09dc611d69abd6032e36682cbbd719
         HEAD_REF master
     )
 endif()
@@ -65,8 +65,12 @@ endif()
 )
 
 file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/tools/${PORT}")
-file(RENAME "${CURRENT_PACKAGES_DIR}/bin/convert_hf_to_gguf.py" "${CURRENT_PACKAGES_DIR}/tools/${PORT}/convert-hf-to-gguf.py")
-file(INSTALL "${SOURCE_PATH}/gguf-py" DESTINATION "${CURRENT_PACKAGES_DIR}/tools/${PORT}")
+if(EXISTS "${CURRENT_PACKAGES_DIR}/bin/convert_hf_to_gguf.py")
+    file(RENAME "${CURRENT_PACKAGES_DIR}/bin/convert_hf_to_gguf.py" "${CURRENT_PACKAGES_DIR}/tools/${PORT}/convert-hf-to-gguf.py")
+endif()
+if(EXISTS "${SOURCE_PATH}/gguf-py")
+    file(INSTALL "${SOURCE_PATH}/gguf-py" DESTINATION "${CURRENT_PACKAGES_DIR}/tools/${PORT}")
+endif()
 if (NOT VCPKG_BUILD_TYPE)
     file(REMOVE "${CURRENT_PACKAGES_DIR}/debug/bin/convert_hf_to_gguf.py")
 endif()

@@ -189,6 +189,9 @@ public:
     /// Mark inference as completed on a model and drain pending swaps.
     void endInference(const std::string &model);
 
+    /// Get the inference mutex for serializing llama_context access.
+    std::timed_mutex &getInferenceMutex() { return m_inferenceMutex; }
+
     /// Check if any inference is currently active.
     bool isInferenceActive() const;
 
@@ -286,6 +289,8 @@ private:
 
     std::map<std::string, LoadedModel> m_models;
     mutable std::mutex m_mutex;
+    mutable std::timed_mutex m_inferenceMutex; // serializes llama_context access
+    mutable std::mutex m_activeInferenceMutex; // protects m_activeInference
     std::string m_modelsDir="/models/";
     int m_readyRamBudgetMb=0;
     std::vector<std::string> m_defaultBackendPriority;

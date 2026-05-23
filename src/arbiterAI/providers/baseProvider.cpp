@@ -115,4 +115,12 @@ std::vector<CompletionResponse> BaseProvider::batchCompletion(const std::vector<
     return responses;
 }
 
+ErrorCode BaseProvider::streamingCompletion(const CompletionRequest &request,
+    std::function<void(const std::string &)> callback,
+    std::function<void()> waitCallback)
+{
+    // Default: ignore waitCallback, delegate to standard streaming
+    return streamingCompletion(request, callback);
+}
+
 } // namespace arbiterAI

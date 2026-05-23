@@ -1553,17 +1553,17 @@ function renderDownloadProgress(downloads)
     el.innerHTML=html;
 }
 
-function renderActiveRequests(history)
+function renderActiveRequests(history, activeCount)
 {
     const el=document.getElementById("activeRequestTable");
 
-    if(!history||history.length===0)
+    if((!history||history.length===0)&&!activeCount)
     {
         el.innerHTML='<tr><td colspan="8" style="color:#666;text-align:center;">No recent requests</td></tr>';
         return;
     }
 
-    const recent=history.slice(-20).reverse();
+    const recent=history?history.slice(-20).reverse():[];
     let html="";
     for(const s of recent)
     {
@@ -1571,11 +1571,10 @@ function renderActiveRequests(history)
         const genTps=s.generation_tokens_per_second||0;
         const totalMs=s.total_time_ms||0;
         const latencyMs=s.latency_ms||0;
-        const isActive=(totalMs===0&&latencyMs===0);
 
         html+=`<tr>
             <td>${s.model}</td>
-            <td><span class="badge ${isActive?"badge-downloading":"badge-loaded"}">${isActive?"Running":"Done"}</span></td>
+            <td><span class="badge badge-loaded">Done</span></td>
             <td>${s.prompt_tokens.toLocaleString()}</td>
             <td>${s.completion_tokens.toLocaleString()}</td>
             <td>${promptTps.toFixed(1)}</td>
@@ -1634,11 +1633,11 @@ async function refresh()
         document.getElementById("cpuBar").style.width=stats.hardware.cpu_utilization_percent.toFixed(1)+"%";
     }
 
-    // TPS chart
-    if(stats.avg_prompt_tokens_per_second!==undefined||stats.avg_generation_tokens_per_second!==undefined)
+    // TPS chart — show 0 when no active inference (avoid stale rolling averages)
     {
-        promptTpsHistory.push(stats.avg_prompt_tokens_per_second||0);
-        genTpsHistory.push(stats.avg_generation_tokens_per_second||0);
+        const idle=(stats.active_requests||0)===0;
+        promptTpsHistory.push(idle?0:(stats.avg_prompt_tokens_per_second||0));
+        genTpsHistory.push(idle?0:(stats.avg_generation_tokens_per_second||0));
         if(promptTpsHistory.length>MAX_TPS_POINTS) promptTpsHistory.shift();
         if(genTpsHistory.length>MAX_TPS_POINTS) genTpsHistory.shift();
         updateTpsChart();
@@ -1655,7 +1654,7 @@ async function refresh()
     if(history) renderInferences(history);
 
     // Active requests summary
-    if(history) renderActiveRequests(history);
+    if(history) renderActiveRequests(history, stats.active_requests||0);
 
     // Swaps
     if(swaps) renderSwaps(swaps);

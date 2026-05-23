@@ -351,7 +351,8 @@ nlohmann::json buildStartupOptionJson(
         {"compatibility", "cloud"},
         {"compatibility_label", "Cloud"},
         {"compatibility_reason", "Provider-managed model; no local download or VRAM requirement."},
-        {"sort_rank", startupCompatibilitySortRank("cloud")}
+        {"sort_rank", startupCompatibilitySortRank("cloud")},
+        {"api_format", model.apiFormat}
     };
 
     if(model.variants.empty())
@@ -967,6 +968,7 @@ std::string errorCodeToString(ErrorCode code)
         case ErrorCode::NotImplemented:      return "not_implemented";
         case ErrorCode::GenerationError:     return "generation_error";
         case ErrorCode::ApiKeyNotFound:      return "api_key_not_found";
+        case ErrorCode::ServerOverloaded:    return "server_overloaded";
         default:                             return "unknown_error";
     }
 }
@@ -996,6 +998,396 @@ std::pair<std::string, std::string> parseModelVariant(const std::string &modelId
         }
     }
     return {modelId, ""};
+}
+
+/// A single tool call extracted from harmony output.
+struct HarmonyToolCall {
+    std::string name;       // Function name (e.g. "get_current_weather")
+    std::string arguments;  // JSON arguments string
+};
+
+/// Result of parsing harmony format text into separate channels.
+struct HarmonyParseResult {
+    std::string content;                    // "final" channel → assistant content
+    std::string reasoningContent;           // "analysis" channel → reasoning/thinking
+    std::vector<HarmonyToolCall> toolCalls; // tool calls from commentary channel
+    bool hasToolCall=false;                 // Whether output ended with <|call|>
+};
+
+/// Parse the header portion of a harmony message to extract channel and recipient.
+/// Header format: "channel_name" or "channel_name to=recipient"
+/// Also handles <|constrain|> before <|message|>.
+struct HarmonyHeader {
+    std::string channel;
+    std::string recipient; // e.g. "functions.get_current_weather"
+};
+
+HarmonyHeader parseHarmonyHeader(const std::string &headerStr)
+{
+    HarmonyHeader header;
+    std::string str=headerStr;
+
+    // Strip trailing <|constrain|>... portion (everything after space+<|constrain|>)
+    size_t constrainPos=str.find("<|constrain|>");
+    if(constrainPos!=std::string::npos)
+    {
+        str=str.substr(0, constrainPos);
+    }
+
+    // Trim trailing whitespace
+    while(!str.empty()&&(str.back()==' '||str.back()=='\t'))
+        str.pop_back();
+
+    // Check for "to=" in the header
+    size_t toPos=str.find(" to=");
+    if(toPos!=std::string::npos)
+    {
+        header.channel=str.substr(0, toPos);
+        header.recipient=str.substr(toPos+4);
+    }
+    else
+    {
+        // Check if recipient is specified without space: "commentary to=functions.x"
+        toPos=str.find("to=");
+        if(toPos!=std::string::npos&&toPos>0)
+        {
+            header.channel=str.substr(0, toPos);
+            // Trim trailing space from channel
+            while(!header.channel.empty()&&header.channel.back()==' ')
+                header.channel.pop_back();
+            header.recipient=str.substr(toPos+3);
+        }
+        else
+        {
+            header.channel=str;
+        }
+    }
+
+    return header;
+}
+
+/// Parse harmony format output into separate content channels and tool calls.
+/// Harmony format uses tags like:
+///   <|channel|>analysis<|message|>...reasoning...<|end|>
+///   <|channel|>final<|message|>...response...<|return|>
+///   <|channel|>commentary to=functions.name <|constrain|>json<|message|>{"args"}<|call|>
+HarmonyParseResult parseHarmonyFormat(const std::string &text)
+{
+    HarmonyParseResult result;
+    std::string remaining=text;
+
+    // Check if output ended with <|call|>
+    if(remaining.size()>=8&&remaining.substr(remaining.size()-8)=="<|call|>")
+    {
+        result.hasToolCall=true;
+        remaining=remaining.substr(0, remaining.size()-8);
+    }
+
+    // Parse all channel blocks
+    while(!remaining.empty())
+    {
+        // Find channel tag
+        size_t channelPos=remaining.find("<|channel|>");
+        if(channelPos==std::string::npos)
+        {
+            // No more channels; if we haven't extracted anything yet, treat as plain content
+            if(result.content.empty()&&result.reasoningContent.empty()&&result.toolCalls.empty())
+            {
+                result.content=remaining;
+            }
+            break;
+        }
+
+        size_t channelNameStart=channelPos+11; // length of "<|channel|>"
+        size_t messagePos=remaining.find("<|message|>", channelNameStart);
+        if(messagePos==std::string::npos)
+        {
+            break;
+        }
+
+        // Extract header between <|channel|> and <|message|>
+        std::string headerStr=remaining.substr(channelNameStart, messagePos-channelNameStart);
+        HarmonyHeader header=parseHarmonyHeader(headerStr);
+
+        size_t contentStart=messagePos+11; // length of "<|message|>"
+
+        // Find end of this message block — could be <|end|>, <|call|>, or next <|start|>
+        size_t endPos=remaining.find("<|end|>", contentStart);
+        size_t callPos=remaining.find("<|call|>", contentStart);
+        size_t nextStartPos=remaining.find("<|start|>", contentStart);
+
+        std::string messageContent;
+        size_t nextBlockStart;
+        bool isCallEnd=false;
+
+        // Find the nearest end marker
+        size_t nearestEnd=std::string::npos;
+        if(endPos!=std::string::npos) nearestEnd=endPos;
+        if(callPos!=std::string::npos&&(nearestEnd==std::string::npos||callPos<nearestEnd))
+        {
+            nearestEnd=callPos;
+            isCallEnd=true;
+        }
+
+        if(nearestEnd!=std::string::npos&&(nextStartPos==std::string::npos||nearestEnd<nextStartPos))
+        {
+            messageContent=remaining.substr(contentStart, nearestEnd-contentStart);
+            if(isCallEnd)
+                nextBlockStart=nearestEnd+8; // length of "<|call|>"
+            else
+                nextBlockStart=nearestEnd+7; // length of "<|end|>"
+        }
+        else if(nextStartPos!=std::string::npos)
+        {
+            messageContent=remaining.substr(contentStart, nextStartPos-contentStart);
+            nextBlockStart=nextStartPos;
+        }
+        else
+        {
+            messageContent=remaining.substr(contentStart);
+            nextBlockStart=remaining.size();
+        }
+
+        // Route to appropriate field based on channel name
+        if(header.channel=="final")
+        {
+            if(!result.content.empty())
+                result.content+=messageContent;
+            else
+                result.content=messageContent;
+        }
+        else if(header.channel=="analysis")
+        {
+            if(!result.reasoningContent.empty())
+                result.reasoningContent+="\n"+messageContent;
+            else
+                result.reasoningContent=messageContent;
+        }
+        else if(header.channel=="commentary")
+        {
+            // Commentary with a recipient = tool call
+            if(!header.recipient.empty())
+            {
+                // Extract function name from "functions.{name}"
+                std::string funcName=header.recipient;
+                size_t dotPos=funcName.find('.');
+                if(dotPos!=std::string::npos)
+                {
+                    funcName=funcName.substr(dotPos+1);
+                }
+
+                HarmonyToolCall tc;
+                tc.name=funcName;
+                tc.arguments=messageContent;
+                result.toolCalls.push_back(std::move(tc));
+                result.hasToolCall=true;
+            }
+            else
+            {
+                // Commentary without recipient = preamble (show to user as content)
+                if(!result.content.empty())
+                    result.content+=messageContent;
+                else
+                    result.content=messageContent;
+            }
+        }
+
+        remaining=remaining.substr(nextBlockStart);
+    }
+
+    return result;
+}
+
+/// Streaming harmony format parser. Buffers tokens and emits content as channels are identified.
+/// Handles tool calls by accumulating them internally.
+class HarmonyStreamParser {
+public:
+    /// Feed a new token chunk. Returns content to emit to the client (final channel text only).
+    /// Reasoning content and tool calls are accumulated internally.
+    std::string feed(const std::string &chunk)
+    {
+        m_buffer+=chunk;
+        std::string output;
+
+        while(true)
+        {
+            if(m_inMessage)
+            {
+                // Look for end-of-message markers
+                size_t endPos=m_buffer.find("<|end|>");
+                size_t callPos=m_buffer.find("<|call|>");
+                size_t startPos=m_buffer.find("<|start|>");
+
+                // Find nearest end marker
+                size_t endOfContent=std::string::npos;
+                bool isCallEnd=false;
+
+                if(endPos!=std::string::npos)
+                    endOfContent=endPos;
+                if(callPos!=std::string::npos&&(endOfContent==std::string::npos||callPos<endOfContent))
+                {
+                    endOfContent=callPos;
+                    isCallEnd=true;
+                }
+                if(startPos!=std::string::npos&&(endOfContent==std::string::npos||startPos<endOfContent))
+                {
+                    endOfContent=startPos;
+                    isCallEnd=false;
+                }
+
+                if(endOfContent!=std::string::npos)
+                {
+                    std::string content=m_buffer.substr(0, endOfContent);
+                    routeContent(content, output);
+
+                    // If this was a tool call ending
+                    if(isCallEnd&&!m_currentRecipient.empty())
+                    {
+                        std::string funcName=m_currentRecipient;
+                        size_t dotPos=funcName.find('.');
+                        if(dotPos!=std::string::npos)
+                            funcName=funcName.substr(dotPos+1);
+
+                        HarmonyToolCall tc;
+                        tc.name=funcName;
+                        tc.arguments=m_currentContent;
+                        m_toolCalls.push_back(std::move(tc));
+                        m_hasToolCall=true;
+                        m_currentContent.clear();
+                    }
+
+                    m_inMessage=false;
+                    m_currentChannel.clear();
+                    m_currentRecipient.clear();
+
+                    if(endOfContent==callPos)
+                        m_buffer=m_buffer.substr(endOfContent+8);
+                    else if(endOfContent==endPos)
+                        m_buffer=m_buffer.substr(endOfContent+7);
+                    else
+                        m_buffer=m_buffer.substr(endOfContent); // <|start|> — don't consume it
+                }
+                else
+                {
+                    // Check if buffer might contain a partial tag
+                    size_t possibleTag=m_buffer.find("<|");
+                    if(possibleTag!=std::string::npos&&possibleTag>0)
+                    {
+                        // Emit everything before the potential tag
+                        std::string safe=m_buffer.substr(0, possibleTag);
+                        routeContent(safe, output);
+                        m_buffer=m_buffer.substr(possibleTag);
+                    }
+                    else if(possibleTag==std::string::npos&&!m_buffer.empty())
+                    {
+                        // No potential tag at all — emit everything
+                        routeContent(m_buffer, output);
+                        m_buffer.clear();
+                    }
+                    break;
+                }
+            }
+            else
+            {
+                // Look for channel start
+                size_t channelPos=m_buffer.find("<|channel|>");
+                if(channelPos==std::string::npos)
+                {
+                    // Skip past <|start|> tags and role text
+                    size_t startTag=m_buffer.find("<|start|>");
+                    if(startTag!=std::string::npos)
+                    {
+                        m_buffer=m_buffer.substr(startTag+9);
+                        // Skip role text (e.g. "assistant")
+                        size_t nextTag=m_buffer.find("<|");
+                        if(nextTag!=std::string::npos)
+                            m_buffer=m_buffer.substr(nextTag);
+                        else
+                            break;
+                        continue;
+                    }
+                    break;
+                }
+
+                // Skip anything before <|channel|> (e.g. role text after <|start|>)
+                size_t channelNameStart=channelPos+11;
+                size_t messagePos=m_buffer.find("<|message|>", channelNameStart);
+                if(messagePos==std::string::npos)
+                {
+                    break; // Wait for more data
+                }
+
+                // Parse header
+                std::string headerStr=m_buffer.substr(channelNameStart, messagePos-channelNameStart);
+                HarmonyHeader header=parseHarmonyHeader(headerStr);
+
+                m_currentChannel=header.channel;
+                m_currentRecipient=header.recipient;
+                m_currentContent.clear();
+                m_inMessage=true;
+                m_buffer=m_buffer.substr(messagePos+11);
+            }
+        }
+
+        return output;
+    }
+
+    /// Get accumulated reasoning content after streaming completes.
+    const std::string &getReasoningContent() const { return m_reasoning; }
+
+    /// Get tool calls extracted during streaming.
+    const std::vector<HarmonyToolCall> &getToolCalls() const { return m_toolCalls; }
+
+    /// Whether the output contained a tool call.
+    bool hasToolCall() const { return m_hasToolCall; }
+
+private:
+    void routeContent(const std::string &content, std::string &output)
+    {
+        if(content.empty()) return;
+
+        if(m_currentChannel=="final")
+        {
+            output+=content;
+        }
+        else if(m_currentChannel=="analysis")
+        {
+            m_reasoning+=content;
+        }
+        else if(m_currentChannel=="commentary")
+        {
+            if(!m_currentRecipient.empty())
+            {
+                // Accumulate tool call arguments
+                m_currentContent+=content;
+            }
+            else
+            {
+                // Preamble commentary — show to user
+                output+=content;
+            }
+        }
+    }
+
+    std::string m_buffer;
+    std::string m_currentChannel;
+    std::string m_currentRecipient;
+    std::string m_currentContent; // Current tool call content being accumulated
+    std::string m_reasoning;
+    std::vector<HarmonyToolCall> m_toolCalls;
+    bool m_inMessage=false;
+    bool m_hasToolCall=false;
+};
+
+/// Check if a model uses harmony API format.
+bool isHarmonyFormat(const std::string &modelName)
+{
+    ModelInfo info;
+    if(ArbiterAI::instance().getModelInfo(modelName, info)==ErrorCode::Success)
+    {
+        return info.apiFormat=="harmony";
+    }
+    return false;
 }
 
 } // anonymous namespace
@@ -1289,11 +1681,13 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
         includeUsage=requestJson.at("stream_options").value("include_usage", false);
     }
 
+    bool harmonyMode=isHarmonyFormat(arbiterRequest.model);
+
     if(stream)
     {
         res.set_chunked_content_provider(
             "text/event-stream",
-            [arbiterRequest, requestId, created, includeUsage, responseModelId](size_t, httplib::DataSink &sink)
+            [arbiterRequest, requestId, created, includeUsage, responseModelId, harmonyMode](size_t, httplib::DataSink &sink)
             {
                 // Send initial chunk with role
                 nlohmann::json roleChunk={
@@ -1311,9 +1705,23 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 std::string roleLine="data: "+roleChunk.dump()+"\n\n";
                 sink.write(roleLine.c_str(), roleLine.length());
 
+                HarmonyStreamParser harmonyParser;
+
                 auto callback=[&](const std::string &chunk)
                 {
                     if(chunk.empty()) return;
+
+                    std::string emitContent;
+                    if(harmonyMode)
+                    {
+                        emitContent=harmonyParser.feed(chunk);
+                        if(emitContent.empty()) return;
+                    }
+                    else
+                    {
+                        emitContent=chunk;
+                    }
+
                     nlohmann::json sseChunk={
                         {"id", requestId},
                         {"object", "chat.completion.chunk"},
@@ -1322,7 +1730,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         {"system_fingerprint", nullptr},
                         {"choices", {{
                             {"index", 0},
-                            {"delta", {{"content", chunk}}},
+                            {"delta", {{"content", emitContent}}},
                             {"finish_reason", nullptr}
                         }}}
                     };
@@ -1330,13 +1738,57 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                     sink.write(line.c_str(), line.length());
                 };
 
-                ErrorCode err=ArbiterAI::instance().streamingCompletion(arbiterRequest, callback);
+                // Send SSE comments while waiting for the inference lock.
+                // This keeps the connection alive and signals to clients that
+                // the request is queued for processing.
+                auto waitCallback=[&]()
+                {
+                    std::string comment=": queued - waiting for model availability\n\n";
+                    sink.write(comment.c_str(), comment.length());
+                };
+
+                ErrorCode err=ArbiterAI::instance().streamingCompletion(arbiterRequest, callback, waitCallback);
 
                 std::string finishReason=(err==ErrorCode::Success)?"stop":"error";
 
                 if(err!=ErrorCode::Success)
                 {
                     spdlog::error("Streaming completion failed: {}", errorCodeToString(err));
+                }
+
+                // For harmony mode, check if tool calls were detected and emit them
+                if(harmonyMode&&harmonyParser.hasToolCall())
+                {
+                    finishReason="tool_calls";
+                    const std::vector<HarmonyToolCall> &toolCalls=harmonyParser.getToolCalls();
+                    for(size_t i=0; i<toolCalls.size(); i++)
+                    {
+                        std::string callId="call_"+generateId("");
+                        nlohmann::json toolCallChunk={
+                            {"id", requestId},
+                            {"object", "chat.completion.chunk"},
+                            {"created", created},
+                            {"model", responseModelId},
+                            {"system_fingerprint", nullptr},
+                            {"choices", {{
+                                {"index", 0},
+                                {"delta", {
+                                    {"tool_calls", {{
+                                        {"index", static_cast<int>(i)},
+                                        {"id", callId},
+                                        {"type", "function"},
+                                        {"function", {
+                                            {"name", toolCalls[i].name},
+                                            {"arguments", toolCalls[i].arguments}
+                                        }}
+                                    }}}
+                                }},
+                                {"finish_reason", nullptr}
+                            }}}
+                        };
+                        std::string tcLine="data: "+toolCallChunk.dump()+"\n\n";
+                        sink.write(tcLine.c_str(), tcLine.length());
+                    }
                 }
 
                 // Send final chunk with finish_reason
@@ -1403,6 +1855,11 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 status=400;
                 errType="invalid_request_error";
             }
+            else if(err==ErrorCode::ServerOverloaded)
+            {
+                status=503;
+                errType="server_error";
+            }
 
             res.status=status;
             res.set_content(errorJson("Completion failed: "+errCode, errType, "", errCode).dump(), "application/json");
@@ -1410,6 +1867,40 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
         }
 
         std::string finishReason=arbiterResponse.finishReason.empty()?"stop":arbiterResponse.finishReason;
+
+        // Convert harmony format to standard OpenAI format if needed
+        if(harmonyMode&&!arbiterResponse.text.empty())
+        {
+            HarmonyParseResult parsed=parseHarmonyFormat(arbiterResponse.text);
+            arbiterResponse.text=parsed.content;
+            if(!parsed.reasoningContent.empty())
+                arbiterResponse.reasoningContent=parsed.reasoningContent;
+
+            // Convert harmony tool calls to OpenAI format
+            if(!parsed.toolCalls.empty())
+            {
+                for(size_t i=0; i<parsed.toolCalls.size(); i++)
+                {
+                    ToolCall tc;
+                    tc.id="call_"+generateId("");
+                    tc.name=parsed.toolCalls[i].name;
+                    try
+                    {
+                        tc.arguments=nlohmann::json::parse(parsed.toolCalls[i].arguments);
+                    }
+                    catch(...)
+                    {
+                        tc.arguments=parsed.toolCalls[i].arguments;
+                    }
+                    arbiterResponse.toolCalls.push_back(std::move(tc));
+                }
+                finishReason="tool_calls";
+            }
+            else if(parsed.hasToolCall)
+            {
+                finishReason="tool_calls";
+            }
+        }
 
         // Build the message object
         nlohmann::json messageJson={
@@ -1444,6 +1935,8 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
         else
         {
             messageJson["content"]=arbiterResponse.text;
+            if(!arbiterResponse.reasoningContent.empty())
+                messageJson["reasoning_content"]=arbiterResponse.reasoningContent;
             messageJson["tool_calls"]=nullptr;
         }
 
@@ -1482,25 +1975,29 @@ void handleListModelsV1(const httplib::Request &, httplib::Response &res)
         if(m.state!=ModelState::Loaded)
             continue;
 
+        // Get model config for token limits
+        ModelInfo info;
+        ArbiterAI::instance().getModelInfo(m.modelName, info);
+        int contextLength=m.contextSize>0?m.contextSize:info.contextWindow;
+
         // Emit bare model name
-        data.push_back({
+        nlohmann::json modelObj={
             {"id", m.modelName},
             {"object", "model"},
             {"created", created},
             {"owned_by", "arbiterai"},
-            {"permission", nlohmann::json::array()}
-        });
+            {"permission", nlohmann::json::array()},
+            {"context_length", contextLength},
+            {"max_completion_tokens", info.maxOutputTokens}
+        };
+        data.push_back(modelObj);
 
         // Also emit "model:variant" if a variant is loaded
         if(!m.variant.empty())
         {
-            data.push_back({
-                {"id", m.modelName+":"+m.variant},
-                {"object", "model"},
-                {"created", created},
-                {"owned_by", "arbiterai"},
-                {"permission", nlohmann::json::array()}
-            });
+            nlohmann::json variantObj=modelObj;
+            variantObj["id"]=m.modelName+":"+m.variant;
+            data.push_back(variantObj);
         }
     }
 
@@ -1547,12 +2044,26 @@ void handleGetModelV1(const httplib::Request &req, httplib::Response &res)
         return;
     }
 
+    // Get context size from loaded model state if available, otherwise from config
+    int contextLength=info.contextWindow;
+    std::vector<LoadedModel> states=ModelRuntime::instance().getModelStates();
+    for(const LoadedModel &lm:states)
+    {
+        if(lm.modelName==baseName&&lm.state==ModelState::Loaded&&lm.contextSize>0)
+        {
+            contextLength=lm.contextSize;
+            break;
+        }
+    }
+
     nlohmann::json response={
         {"id", modelId},
         {"object", "model"},
         {"created", static_cast<int64_t>(std::time(nullptr))},
         {"owned_by", "arbiterai"},
-        {"permission", nlohmann::json::array()}
+        {"permission", nlohmann::json::array()},
+        {"context_length", contextLength},
+        {"max_completion_tokens", info.maxOutputTokens}
     };
 
     res.set_content(response.dump(), "application/json");
@@ -1862,6 +2373,10 @@ void handleGetModels(const httplib::Request &, httplib::Response &res)
             {
                 modelJson["backend_priority"]=info.backendPriority;
             }
+            if(!info.apiFormat.empty())
+            {
+                modelJson["api_format"]=info.apiFormat;
+            }
         }
 
         models.push_back(modelJson);
@@ -1899,6 +2414,10 @@ void handleGetModels(const httplib::Request &, httplib::Response &res)
                 if(!info.backendPriority.empty())
                 {
                     modelJson["backend_priority"]=info.backendPriority;
+                }
+                if(!info.apiFormat.empty())
+                {
+                    modelJson["api_format"]=info.apiFormat;
                 }
             }
 

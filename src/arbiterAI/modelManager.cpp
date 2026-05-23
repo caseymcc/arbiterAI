@@ -433,6 +433,12 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
         }
     }
 
+    // API format (output format conversion: "" = standard openai, "harmony" = harmony-to-openai)
+    if(modelJson.contains("api_format")&&modelJson["api_format"].is_string())
+    {
+        info.apiFormat=modelJson["api_format"].get<std::string>();
+    }
+
     return true;
 }
 
@@ -666,6 +672,8 @@ void ModelManager::mergeModelInfo(ModelInfo &existing, const ModelInfo &source, 
         existing.download=source.download;
     if(sourceJson.contains("version"))
         existing.configVersion=source.configVersion;
+    if(sourceJson.contains("api_format"))
+        existing.apiFormat=source.apiFormat;
 }
 
 bool ModelManager::addModelFromJson(const nlohmann::json &modelJson, std::string &error)
@@ -1039,6 +1047,12 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
     if(!info.disabledBackends.empty())
     {
         j["disabled_backends"]=info.disabledBackends;
+    }
+
+    // API format
+    if(!info.apiFormat.empty())
+    {
+        j["api_format"]=info.apiFormat;
     }
 
     return j;

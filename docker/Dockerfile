@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y \
     vulkan-tools \
     libvulkan-dev \
     mesa-vulkan-drivers \
+    spirv-headers \
     glslc \
     glslang-tools \
     wget \

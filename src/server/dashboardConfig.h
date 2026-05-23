@@ -1430,7 +1430,8 @@ function addStartupModel()
         variant: '',
         context_size: 0,
         runtime_options: {},
-        devices: []
+        devices: [],
+        api_format: ''
     });
     renderStartupModels();
 }
@@ -1471,6 +1472,15 @@ function updateStartupModelField(index, field, value)
         if(opt&&opt.effective_context_size)
         {
             startupModelsState[index].context_size=opt.effective_context_size;
+        }
+        // Set default api_format from model options
+        if(opt&&opt.api_format)
+        {
+            startupModelsState[index].api_format=opt.api_format;
+        }
+        else
+        {
+            startupModelsState[index].api_format='';
         }
         renderStartupModels();
     }
@@ -1650,6 +1660,9 @@ function renderStartupModels()
         // Runtime options
         const ro=entry.runtime_options||{};
 
+        // API format (from model catalog or overridden)
+        const currentApiFormat=entry.api_format||(modelOpt&&modelOpt.api_format?modelOpt.api_format:'')||'';
+
         html+='<div style="border:1px solid #2a2d3a;border-radius:8px;padding:14px;margin-bottom:10px;background:#13151d;">'
             +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
             +'<span style="font-weight:600;color:#f1f4ff;">Model '+(i+1)+'</span>'
@@ -1676,6 +1689,14 @@ function renderStartupModels()
             +'<label class="startup-field-label">Compute Devices</label>'
             +'<div style="display:flex;flex-wrap:wrap;gap:4px;">'+devicesHtml+'</div>'
             +(entry.devices.length===0?'<div style="color:#ff9800;font-size:12px;margin-top:4px;">No devices selected &mdash; auto-assignment will be used.</div>':'')
+            +'</div>'
+            +'<div style="margin-bottom:10px;">'
+            +'<label class="startup-field-label">API Format</label>'
+            +'<select class="runtime-opts-select" style="width:100%;" id="smApiFormat_'+i+'" onchange="updateStartupModelField('+i+', \'api_format\', this.value)">'
+            +'<option value=""'+(currentApiFormat===''?' selected':'')+'>Standard (OpenAI)</option>'
+            +'<option value="harmony"'+(currentApiFormat==='harmony'?' selected':'')+'>Harmony (auto-convert to OpenAI)</option>'
+            +'</select>'
+            +'<div style="margin-top:4px;font-size:12px;color:#8891a4;">When set to Harmony, the server parses channel tags from model output and converts to standard OpenAI format.</div>'
             +'</div>'
             +'<div class="runtime-opts-section">'
             +'<button type="button" class="runtime-opts-toggle" onclick="toggleStartupModelRuntime('+i+')">Runtime Options <span id="smRuntimeChevron_'+i+'">&#9654;</span></button>'
@@ -1714,7 +1735,8 @@ async function saveAllStartupModels()
         variant: e.variant||'',
         context_size: e.context_size||0,
         runtime_options: e.runtime_options||{},
-        devices: e.devices||[]
+        devices: e.devices||[],
+        api_format: e.api_format||''
     }));
 
     try
@@ -1759,7 +1781,25 @@ async function saveStartupModelEntry(index)
     // Collect this entry's runtime opts from UI
     entry.runtime_options=readStartupModelRuntimeOpts(index);
 
+    // Read api_format from UI
+    const apiFormatEl=document.getElementById('smApiFormat_'+index);
+    if(apiFormatEl) entry.api_format=apiFormatEl.value||'';
+
     showModelStatus(index, 'Saving config...', '');
+
+    // Update model catalog api_format if changed
+    if(entry.model&&entry.api_format!==undefined)
+    {
+        try
+        {
+            await fetch('/api/models/config', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({model: entry.model, api_format: entry.api_format})
+            });
+        }
+        catch(e) {}
+    }
 
     // Save all models to config
     const saved=await saveAllStartupModels();
@@ -1861,7 +1901,8 @@ async function initializePage()
             variant: e.variant||'',
             context_size: e.context_size||0,
             runtime_options: e.runtime_options||{},
-            devices: e.devices||[]
+            devices: e.devices||[],
+            api_format: e.api_format||''
         }));
     }
     else

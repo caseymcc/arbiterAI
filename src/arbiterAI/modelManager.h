@@ -123,6 +123,7 @@ struct ModelInfo
     RuntimeOptions runtimeOptions;              // Per-model llama.cpp runtime options
     std::vector<std::string> backendPriority;   // Ordered preference: ["vulkan", "rocm", "cuda"]
     std::vector<std::string> disabledBackends;  // Backends to exclude (model-level override)
+    std::string apiFormat;                      // API output format: "" (default/openai) or "harmony"
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;

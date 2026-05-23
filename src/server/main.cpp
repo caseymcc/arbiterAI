@@ -20,6 +20,8 @@
 #include <vector>
 #include <filesystem>
 #include <map>
+#include <csignal>
+#include <cstdlib>
 
 namespace
 {
@@ -573,6 +575,18 @@ int main(int argc, char *argv[])
         sinks.begin(), sinks.end());
     logger->set_level(spdlog::get_level());
     spdlog::set_default_logger(logger);
+
+    // Install crash signal handlers for better diagnostics
+    auto crashHandler=[](int sig)
+    {
+        spdlog::critical("FATAL SIGNAL {} ({}) received — aborting",
+            sig, (sig==SIGABRT?"SIGABRT":sig==SIGSEGV?"SIGSEGV":"OTHER"));
+        spdlog::default_logger()->flush();
+        std::signal(sig, SIG_DFL);
+        std::raise(sig);
+    };
+    std::signal(SIGABRT, crashHandler);
+    std::signal(SIGSEGV, crashHandler);
 
     spdlog::info("Loaded config from: {}", configPath);
 

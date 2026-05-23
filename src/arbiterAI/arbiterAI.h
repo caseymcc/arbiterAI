@@ -76,7 +76,8 @@ enum class ErrorCode
     ModelLoadError,
     ModelDownloading,
     ModelDownloadFailed,
-    InsufficientStorage
+    InsufficientStorage,
+    ServerOverloaded
 };
 
 /**
@@ -615,6 +616,17 @@ public:
      */
     ErrorCode streamingCompletion(const CompletionRequest &request,
         std::function<void(const std::string &)> callback);
+
+    /**
+     * @brief Perform streaming completion with queue wait notification
+     * @param request Completion parameters
+     * @param callback Function to receive streaming chunks
+     * @param waitCallback Called periodically while waiting for backend availability
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode streamingCompletion(const CompletionRequest &request,
+        std::function<void(const std::string &)> callback,
+        std::function<void()> waitCallback);
 
     /**
      * @brief Process multiple completion requests in batch

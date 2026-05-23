@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <cstdint>
 
 // Forward declarations for llama.cpp types
 struct llama_model;
@@ -26,6 +27,10 @@ public:
     ErrorCode streamingCompletion(const CompletionRequest &request,
         std::function<void(const std::string &)> callback) override;
 
+    ErrorCode streamingCompletion(const CompletionRequest &request,
+        std::function<void(const std::string &)> callback,
+        std::function<void()> waitCallback) override;
+
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 
@@ -39,10 +44,28 @@ private:
     std::string applyTemplate(llama_model *model,
         const std::vector<Message> &messages) const;
 
+    /// Format messages into harmony special token format for gpt-oss models.
+    std::string formatHarmonyPrompt(const CompletionRequest &request,
+        const ModelInfo &modelInfo) const;
+
+    /// Tokenize the prompt outside of the inference mutex.
+    /// Returns the formatted prompt tokens ready for decode.
+    ErrorCode tokenizePrompt(llama_model *model,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        std::vector<int32_t> &tokens, std::string &formattedPrompt);
+
     /// Run the inference loop (shared by completion and streaming).
     ErrorCode runInference(llama_model *model, llama_context *ctx,
         const CompletionRequest &request, const ModelInfo &modelInfo,
         std::string &result, int &promptTokens, int &completionTokens,
+        double &promptTimeMs, double &generationTimeMs,
+        std::function<void(const std::string &)> streamCallback);
+
+    /// Run inference with pre-tokenized prompt (avoids re-tokenizing under lock).
+    ErrorCode runInferenceWithTokens(llama_model *model, llama_context *ctx,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        const std::vector<int32_t> &promptTokens,
+        std::string &result, int &promptTokenCount, int &completionTokens,
         double &promptTimeMs, double &generationTimeMs,
         std::function<void(const std::string &)> streamCallback);
 };

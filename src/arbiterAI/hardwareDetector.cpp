@@ -962,7 +962,7 @@ void HardwareDetector::detectUnifiedMemory()
             continue;
         }
 
-        // Read sysfs VRAM and GTT for diagnostic logging
+        // Read sysfs VRAM and GTT for unified memory sizing
         long long sysfsVramTotal=0, sysfsVramUsed=0;
         long long gttTotalBytes=0, gttUsedBytes=0;
 
@@ -983,57 +983,84 @@ void HardwareDetector::detectUnifiedMemory()
             if(file.is_open()) file >> gttUsedBytes;
         }
 
+        // Read TTM pages limit — the kernel's hard cap on GPU-accessible
+        // memory. On unified memory systems the actual usable GPU memory
+        // is min(gttTotal, ttmPagesLimit * 4096).
+        long long ttmLimitBytes=0;
+        {
+            std::ifstream file("/sys/module/ttm/parameters/pages_limit");
+            if(file.is_open())
+            {
+                long long pages=0;
+                file >> pages;
+                ttmLimitBytes=pages*4096LL;
+            }
+        }
+
         int sysfsVramTotalMb=static_cast<int>(sysfsVramTotal/(1024LL*1024LL));
         int sysfsVramUsedMb=static_cast<int>(sysfsVramUsed/(1024LL*1024LL));
         int gttTotalMb=static_cast<int>(gttTotalBytes/(1024LL*1024LL));
         int gttUsedMb=static_cast<int>(gttUsedBytes/(1024LL*1024LL));
         int gttFreeMb=gttTotalMb-gttUsedMb;
+        int ttmLimitMb=static_cast<int>(ttmLimitBytes/(1024LL*1024LL));
 
         if(gttFreeMb<0) gttFreeMb=0;
 
-        spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
-            "Unified memory GPU {}: {} — sysfs: VRAM {}MB ({}MB used), "
-            "GTT {}MB ({}MB used), budgetAlreadySet={}",
-            gpu.index, gpu.name,
-            sysfsVramTotalMb, sysfsVramUsedMb,
-            gttTotalMb, gttUsedMb, hasBudgetData);
-
-        if(hasBudgetData)
-        {
-            // Vulkan budget is authoritative for allocation decisions.
-            // Log sysfs as a diagnostic side channel only.
-            continue;
-        }
-
-        // No Vulkan budget — use sysfs data for GPU-accessible memory.
-        // Refine VRAM free from sysfs (more accurate than "assume all free").
-        if(sysfsVramTotal>0)
-        {
-            gpu.vramTotalMb=sysfsVramTotalMb;
-            gpu.vramFreeMb=sysfsVramTotalMb-sysfsVramUsedMb;
-            if(gpu.vramFreeMb<0) gpu.vramFreeMb=0;
-        }
-
+        // Compute kernel-reported usable GPU memory.
+        // Vulkan's RADV driver splits unified memory into device-local and
+        // host heaps using a 2/3 : 1/3 heuristic, which under-reports the
+        // actual GPU-accessible memory. The kernel sysfs values are
+        // authoritative: usable = min(gttTotal, ttmLimit).
+        int kernelUsableMb=0;
         if(gttTotalBytes>0)
         {
-            // GPU-accessible memory = VRAM + GTT (system RAM mapped to GPU)
-            gpu.gpuAccessibleRamMb=gpu.vramTotalMb+gttTotalMb;
-            gpu.gpuAccessibleRamFreeMb=gpu.vramFreeMb+gttFreeMb;
+            kernelUsableMb=gttTotalMb;
+            if(ttmLimitBytes>0&&ttmLimitMb<kernelUsableMb)
+            {
+                kernelUsableMb=ttmLimitMb;
+            }
+        }
+
+        spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
+            "Unified memory GPU {}: {} — sysfs: VRAM {}MB ({}MB used), "
+            "GTT {}MB ({}MB used), TTM limit {}MB, kernel usable {}MB, "
+            "vulkanBudget={}",
+            gpu.index, gpu.name,
+            sysfsVramTotalMb, sysfsVramUsedMb,
+            gttTotalMb, gttUsedMb,
+            ttmLimitMb, kernelUsableMb, hasBudgetData);
+
+        // For unified memory devices the kernel sysfs data is more accurate
+        // than Vulkan heap sizes or budgets. Use it to set vramTotalMb and
+        // gpuAccessibleRamMb regardless of whether Vulkan budget was present.
+        if(kernelUsableMb>0)
+        {
+            // Override vramTotalMb with the kernel-reported usable memory
+            // so model-fit calculations use the real capacity.
+            int usedMb=gpu.vramTotalMb-gpu.vramFreeMb;
+            if(usedMb<0) usedMb=0;
+
+            gpu.vramTotalMb=kernelUsableMb;
+            gpu.vramFreeMb=std::max(0, kernelUsableMb-usedMb);
+
+            gpu.gpuAccessibleRamMb=kernelUsableMb;
+            gpu.gpuAccessibleRamFreeMb=gpu.vramFreeMb;
 
             spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
-                "Unified memory GPU {}: {} — sysfs fallback: "
-                "total accessible {}MB ({}MB free)",
+                "Unified memory GPU {}: {} — kernel sysfs override: "
+                "total {}MB ({}MB free)",
                 gpu.index, gpu.name,
                 gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
         }
-        else
+        else if(!hasBudgetData)
         {
-            // No GTT info — fall back to system RAM
+            // No kernel sysfs data and no Vulkan budget — fall back to
+            // system RAM as a last resort.
             gpu.gpuAccessibleRamMb=m_systemInfo.totalRamMb;
             gpu.gpuAccessibleRamFreeMb=m_systemInfo.freeRamMb;
 
             spdlog::log(m_firstRefreshDone ? spdlog::level::debug : spdlog::level::info,
-                "Unified memory GPU {}: {} — no GTT info, "
+                "Unified memory GPU {}: {} — no sysfs or budget data, "
                 "falling back to system RAM ({}MB total, {}MB free)",
                 gpu.index, gpu.name,
                 gpu.gpuAccessibleRamMb, gpu.gpuAccessibleRamFreeMb);
