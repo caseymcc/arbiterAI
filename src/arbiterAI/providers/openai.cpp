@@ -1,30 +1,71 @@
 #include "arbiterAI/providers/openai.h"
 
+#include <chrono>
+#include <spdlog/spdlog.h>
+
 namespace arbiterAI
 {
 
 // Sanitize a JSON Schema for llama.cpp server compatibility.
-// The llama.cpp Jinja chat template uses `items` as a built-in filter,
-// so parameter schemas with "type": "array" cause template errors even
-// when "items" is stripped (template branches on type=="array" and expects items).
-// Convert array-typed properties to string type with a description note.
+// The llama.cpp GBNF converter doesn't support boolean, array, or opaque
+// object types.  Convert them to string equivalents with descriptive hints.
+// Also strips fields the converter doesn't understand ($schema,
+// additionalProperties) and normalises null properties.
 static void sanitizeSchemaForLlamaCpp(nlohmann::json &schema)
 {
     if(!schema.is_object())
         return;
 
-    // If this schema has "properties", recurse into each property
+    // Normalise "properties": null → remove the key entirely so downstream
+    // checks like schema.contains("properties") behave consistently.
+    if(schema.contains("properties") && schema["properties"].is_null())
+        schema.erase("properties");
+
+    // Recurse into each property (use explicit iterators — structured bindings
+    // through nlohmann::json::items() can silently copy on some compilers).
     if(schema.contains("properties") && schema["properties"].is_object())
     {
-        for(auto &[key, prop] : schema["properties"].items())
+        auto &props = schema["properties"];
+        for(auto it = props.begin(); it != props.end(); ++it)
         {
-            sanitizeSchemaForLlamaCpp(prop);
+            // Fix C++ initializer-list bug: {"type","boolean"} produces a
+            // 2-element JSON array ["type","boolean"] instead of the intended
+            // object {"type":"boolean"}.  Detect and repair this pattern.
+            if(it.value().is_array() && it.value().size() == 2
+               && it.value()[0].is_string() && it.value()[1].is_string()
+               && it.value()[0].get<std::string>() == "type")
+            {
+                std::string typeName = it.value()[1].get<std::string>();
+                it.value() = nlohmann::json{{"type", typeName}};
+                spdlog::debug("sanitizeSchema: repaired array→object for property '{}' (type={})",
+                              it.key(), typeName);
+            }
+            sanitizeSchemaForLlamaCpp(it.value());
         }
     }
 
+    // If this schema has "items" (for array type), recurse into items
+    if(schema.contains("items") && schema["items"].is_object())
+    {
+        sanitizeSchemaForLlamaCpp(schema["items"]);
+    }
+
+    // Remove fields that llama.cpp's GBNF converter doesn't understand
+    schema.erase("additionalProperties");
+    schema.erase("$schema");
+
+    if(!schema.contains("type"))
+        return;
+
+    const auto &typeVal = schema["type"];
+    if(!typeVal.is_string())
+        return;
+
+    const std::string typ = typeVal.get<std::string>();
+
     // Convert array-typed properties to string — the llama.cpp Jinja template
     // can't handle "array" type with "items" sub-schema
-    if(schema.contains("type") && schema["type"] == "array")
+    if(typ == "array")
     {
         std::string itemType = "string";
         if(schema.contains("items") && schema["items"].is_object())
@@ -38,6 +79,38 @@ static void sanitizeSchemaForLlamaCpp(nlohmann::json &schema)
             desc += " (JSON array of " + itemType + ", e.g. [\"a\",\"b\"])";
         else
             desc = "JSON array of " + itemType + ", e.g. [\"a\",\"b\"]";
+        schema["description"] = desc;
+    }
+    // Convert boolean to string — llama.cpp GBNF doesn't recognize "boolean"
+    else if(typ == "boolean")
+    {
+        spdlog::debug("sanitizeSchema: converting boolean → string enum for key context");
+        schema["type"] = "string";
+        std::string desc = schema.value("description", "");
+        if(!desc.empty())
+            desc += " (\"true\" or \"false\")";
+        else
+            desc = "\"true\" or \"false\"";
+        schema["description"] = desc;
+        schema["enum"] = nlohmann::json::array({"true", "false"});
+    }
+    // Convert integer to number — llama.cpp GBNF may not recognize "integer"
+    else if(typ == "integer")
+    {
+        schema["type"] = "number";
+    }
+    // Convert nested object to string — llama.cpp can't handle nested object
+    // schemas.  Convert if it has NO properties or if properties was null
+    // (already erased above).
+    else if(typ == "object" && !schema.contains("properties"))
+    {
+        spdlog::debug("sanitizeSchema: converting bare object → string");
+        schema["type"] = "string";
+        std::string desc = schema.value("description", "");
+        if(!desc.empty())
+            desc += " (JSON object as string)";
+        else
+            desc = "JSON object as string";
         schema["description"] = desc;
     }
 }
@@ -64,24 +137,97 @@ ErrorCode OpenAI::completion(const CompletionRequest &request,
     auto headers=createHeaders(apiKey);
     auto body=createRequestBody(request, false);
 
-    std::string completionUrl=m_apiUrl+"/chat/completions";
+    // Use model-specific apiBase if available, otherwise fall back to provider default
+    std::string baseUrl = (model.apiBase.has_value() && !model.apiBase->empty())
+        ? model.apiBase.value() : m_apiUrl;
+    std::string completionUrl=baseUrl+"/chat/completions";
 
     // Make the API request
-    auto raw_response=cpr::Post(
-        cpr::Url{ completionUrl },
-        headers,
-        cpr::Body{ body.dump() },
-        cpr::VerifySsl{ true }
-    );
+    int timeoutMs = 300000; // 5 minute default safety cap
+    if (request.timeout_ms.has_value() && request.timeout_ms.value() > 0)
+        timeoutMs = request.timeout_ms.value();
+
+    // Idle timeout: abort if no bytes received for this many seconds.
+    // Uses ProgressCallback to reset on ANY received byte (including \n keepalives)
+    // rather than LowSpeed which checks average speed over the window and fails
+    // with sparse keepalive bytes.
+    int idleTimeoutSec = 60;
+    if (request.low_speed_time_s.has_value()) {
+        idleTimeoutSec = request.low_speed_time_s.value();
+    }
+
+    // Track download progress to implement per-byte idle timeout.
+    // Each received byte (including \n keepalives) resets the idle timer.
+    cpr::cpr_off_t lastDlNow = 0;
+    auto lastByteTime = std::chrono::steady_clock::now();
+
+    auto session = cpr::Session();
+    session.SetUrl(cpr::Url{completionUrl});
+    session.SetHeader(headers);
+    session.SetBody(cpr::Body{body.dump()});
+    session.SetVerifySsl(cpr::VerifySsl{true});
+    session.SetTimeout(cpr::Timeout{timeoutMs});
+
+    if (idleTimeoutSec > 0) {
+        session.SetProgressCallback(cpr::ProgressCallback{
+            [&lastDlNow, &lastByteTime, idleTimeoutSec](
+                cpr::cpr_off_t /*dlTotal*/, cpr::cpr_off_t dlNow,
+                cpr::cpr_off_t /*ulTotal*/, cpr::cpr_off_t /*ulNow*/,
+                intptr_t /*userdata*/) -> bool {
+                auto now = std::chrono::steady_clock::now();
+                if (dlNow > lastDlNow) {
+                    lastDlNow = dlNow;
+                    lastByteTime = now;
+                }
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - lastByteTime).count();
+                return elapsed < idleTimeoutSec; // false = abort transfer
+            }});
+    }
+
+    auto raw_response = session.Post();
+
+    // Check for curl-level errors first (timeout, abort, network failure).
+    // cpr may report status_code=200 from headers even when the transfer was
+    // aborted mid-body (ProgressCallback return false, hard timeout, etc.).
+    if (raw_response.error && raw_response.error.code != cpr::ErrorCode::OK) {
+        spdlog::warn("OpenAI provider: transfer error '{}' from {} "
+                     "(HTTP {}, body_len: {})",
+                     raw_response.error.message.substr(0, 500),
+                     completionUrl, raw_response.status_code,
+                     raw_response.text.size());
+        return ErrorCode::NetworkError;
+    }
 
     // Check for HTTP errors
     if(raw_response.status_code!=200)
     {
+        spdlog::warn("OpenAI provider: HTTP {} from {} (error: {}, body: {})",
+                     raw_response.status_code, completionUrl,
+                     raw_response.error.message.substr(0, 500),
+                     raw_response.text.substr(0, 2000));
+        return ErrorCode::NetworkError;
+    }
+
+    // If body is only whitespace (keepalive \n bytes with no actual JSON content),
+    // treat as a retriable network error rather than attempting JSON parse.
+    if (raw_response.text.find_first_not_of(" \t\r\n") == std::string::npos) {
+        spdlog::warn("OpenAI provider: response body is whitespace-only "
+                     "({} bytes from {}), server did not produce a completion",
+                     raw_response.text.size(), completionUrl);
         return ErrorCode::NetworkError;
     }
 
     // Parse the response
-    return parseResponse(raw_response, response);
+    auto parseResult = parseResponse(raw_response, response);
+    if (parseResult == ErrorCode::Success && response.text.empty()) {
+        spdlog::debug("OpenAI provider: response text empty (finish_reason: '{}', "
+                      "body_len: {}, body_preview: {})",
+                      response.finishReason,
+                      raw_response.text.size(),
+                      raw_response.text.substr(0, 500));
+    }
+    return parseResult;
 }
 
 nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool streaming)
@@ -134,7 +280,7 @@ nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool 
     {
         body["temperature"]=request.temperature.value();
     }
-    if(request.max_tokens.has_value())
+    if(request.max_tokens.has_value() && request.max_tokens.value() > 0)
     {
         body["max_tokens"]=request.max_tokens.value();
     }
@@ -207,6 +353,18 @@ nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool 
             });
         }
         body["tools"] = toolsJson;
+
+        // Debug: log a compact summary of tool schemas so we can verify sanitisation
+        if(spdlog::should_log(spdlog::level::debug))
+        {
+            for(const auto &t : toolsJson)
+            {
+                const auto &fn = t.value("function", nlohmann::json::object());
+                const auto &ps = fn.value("parameters", nlohmann::json::object());
+                spdlog::debug("Tool '{}' schema keys after sanitise: {}",
+                    fn.value("name", "?"), ps.dump().substr(0, 500));
+            }
+        }
 
         // Add tool_choice if specified
         if(request.tool_choice.has_value())
@@ -434,7 +592,9 @@ ErrorCode OpenAI::getEmbeddings(const EmbeddingRequest &request,
         cpr::Url{ embeddingUrl },
         headers,
         cpr::Body{ body.dump() },
-        cpr::VerifySsl{ true }
+        cpr::VerifySsl{ true },
+        cpr::Timeout{ 60000 },
+        cpr::LowSpeed{ 1, std::chrono::seconds(60) }
     );
 
     if(raw_response.status_code!=200)

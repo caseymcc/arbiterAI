@@ -4,16 +4,20 @@
 #include "arbiterAI/cacheManager.h"
 #include "arbiterAI/costManager.h"
 #include "arbiterAI/modelManager.h"
-#include "arbiterAI/modelRuntime.h"
+#include "arbiterAI/modelFitCalculator.h"
 #include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/storageManager.h"
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/providers/openai.h"
 #include "arbiterAI/providers/anthropic.h"
 #include "arbiterAI/providers/deepseek.h"
-#include "arbiterAI/providers/llama.h"
 #include "arbiterAI/providers/openrouter.h"
 #include "arbiterAI/providers/mock.h"
+
+#ifdef ARBITERAI_ENABLE_LLAMA
+#include "arbiterAI/modelRuntime.h"
+#include "arbiterAI/providers/llama.h"
+#endif
 
 #include <memory>
 
@@ -108,10 +112,12 @@ bool ArbiterAI::doesModelNeedApiKey(const std::string &model)
 
 bool ArbiterAI::supportModelDownload(const std::string &provider)
 {
+#ifdef ARBITERAI_ENABLE_LLAMA
     if(provider=="llama")
     {
         return true;
     }
+#endif
     return false;
 }
 
@@ -129,10 +135,12 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     {
         return std::make_unique<Deepseek>();
     }
+#ifdef ARBITERAI_ENABLE_LLAMA
     else if(provider=="llama")
     {
         return std::make_unique<Llama>();
     }
+#endif
     else if(provider=="openrouter")
     {
         return std::make_unique<OpenRouter_LLM>();
@@ -543,6 +551,7 @@ ErrorCode ArbiterAI::getAvailableModels(std::vector<std::string>& models)
 
 // ========== Local Model Management ==========
 
+#ifdef ARBITERAI_ENABLE_LLAMA
 ErrorCode ArbiterAI::loadModel(const std::string &model, const std::string &variant, int contextSize,
     const RuntimeOptions *optionsOverride, const std::vector<int> &targetDevices)
 {
@@ -593,6 +602,18 @@ std::vector<LoadedModel> ArbiterAI::getLoadedModels()
 {
     return ModelRuntime::instance().getModelStates();
 }
+#else
+ErrorCode ArbiterAI::loadModel(const std::string &, const std::string &, int,
+    const RuntimeOptions *, const std::vector<int> &) { return ErrorCode::NotImplemented; }
+ErrorCode ArbiterAI::downloadModel(const std::string &, const std::string &) { return ErrorCode::NotImplemented; }
+void ArbiterAI::setMaxConcurrentDownloads(int) {}
+int ArbiterAI::getMaxConcurrentDownloads() const { return 0; }
+ErrorCode ArbiterAI::unloadModel(const std::string &) { return ErrorCode::NotImplemented; }
+ErrorCode ArbiterAI::pinModel(const std::string &) { return ErrorCode::NotImplemented; }
+ErrorCode ArbiterAI::unpinModel(const std::string &) { return ErrorCode::NotImplemented; }
+std::vector<ModelFit> ArbiterAI::getLocalModelCapabilities() { return {}; }
+std::vector<LoadedModel> ArbiterAI::getLoadedModels() { return {}; }
+#endif
 
 // ========== Telemetry ==========
 

@@ -362,6 +362,8 @@ struct CompletionRequest
     std::optional<std::vector<ToolDefinition>> tools;  ///< Available tools for the model
     std::optional<std::string> tool_choice;            ///< Tool selection mode: "auto", "none", or specific tool name
     std::optional<std::map<std::string, double>> logit_bias;  ///< Token ID to bias value
+    std::optional<int> timeout_ms;                              ///< Per-request HTTP timeout in milliseconds (0 or absent = 300s default)
+    std::optional<int> low_speed_time_s;                        ///< Low-speed abort threshold in seconds (0 = disabled, absent = 60s default)
 };
 
 inline void to_json(nlohmann::json &j, const CompletionRequest &r)
