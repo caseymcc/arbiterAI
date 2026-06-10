@@ -898,7 +898,8 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
     const std::vector<int32_t> &promptTokens,
     std::string &result, int &promptTokenCount, int &completionTokens,
     double &promptTimeMs, double &generationTimeMs,
-    std::function<void(const std::string &)> streamCallback)
+    std::function<void(const std::string &)> streamCallback,
+    std::function<bool()> shouldAbort)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
@@ -916,6 +917,14 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
 
     for(int start=0; start<nTokens; start+=nBatch)
     {
+        // Check abort between prompt batches
+        if(shouldAbort&&shouldAbort())
+        {
+            spdlog::info("[llama] inference aborted during prompt processing (batch at offset {})", start);
+            llama_batch_free(batch);
+            return ErrorCode::Cancelled;
+        }
+
         int chunkSize=std::min(nBatch, nTokens-start);
         bool isLastChunk=(start+chunkSize>=nTokens);
 
@@ -1002,6 +1011,17 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
 
     for(int i=0; i<maxOutputTokens; ++i)
     {
+        // Check abort every token
+        if(shouldAbort&&shouldAbort())
+        {
+            spdlog::info("[llama] inference aborted during generation (after {} tokens)", completionTokens);
+            llama_sampler_free(samplerChain);
+            llama_batch_free(batch);
+            generationTimeMs=std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now()-genStart).count();
+            return ErrorCode::Cancelled;
+        }
+
         llama_token nextToken=llama_sampler_sample(samplerChain, ctx, -1);
         llama_sampler_accept(samplerChain, nextToken);
 

@@ -31,7 +31,7 @@ The server supports:
 - **Model lifecycle management** — Load, unload, pin, and download models at runtime
 - **Runtime model config injection** — Add, update, or remove model configurations via REST without restarting
 - **Storage management** — Track downloaded model files, set hot ready / protected flags, configure automated cleanup, monitor disk usage and download progress with speed and ETA
-- **Telemetry** — System snapshots, inference history, swap history, and hardware info
+- **Telemetry** — System snapshots, inference history, swap history, active scheduler jobs, and hardware info
 - **Live dashboard** — Browser-based UI at `/dashboard` with storage bar, download progress, and model management
 - **CORS** — All responses include permissive CORS headers
 
@@ -738,6 +738,8 @@ Inference history within a time window.
   {
     "model": "gpt-4",
     "variant": "",
+    "job_id": 17,
+    "cancelled": false,
     "tokens_per_second": 45.2,
     "prompt_tokens": 120,
     "completion_tokens": 80,
@@ -746,6 +748,40 @@ Inference history within a time window.
   }
 ]
 ```
+
+#### `GET /api/scheduler/jobs`
+
+Active inference scheduler jobs (local models only). Jobs flow through the
+pipeline stages `queued` → `tokenizing` → `waiting` → `inferring`; completed
+and cancelled jobs are not listed. Returns `[]` when the scheduler is not
+running.
+
+**Response:**
+
+```json
+[
+  {
+    "id": 17,
+    "model": "my-local-model",
+    "stage": "inferring",
+    "streaming": true,
+    "prompt_tokens": 120,
+    "completion_tokens": 34,
+    "queue_position": 0,
+    "elapsed_ms": 2150.0
+  }
+]
+```
+
+| Field | Description |
+|-------|-------------|
+| `id` | Scheduler job ID (matches `job_id` in inference history) |
+| `stage` | `queued`, `tokenizing`, `waiting`, or `inferring` |
+| `streaming` | Whether the request is a streaming completion |
+| `prompt_tokens` | Prompt token count (available once tokenized) |
+| `completion_tokens` | Tokens generated so far (streaming jobs only) |
+| `queue_position` | Position in the accelerator queue (`0` = running) |
+| `elapsed_ms` | Time since the job was submitted |
 
 #### `GET /api/stats/swaps`
 

@@ -53,14 +53,15 @@ ArbiterAI follows a layered architecture:
 - **[`ModelManager`](../src/arbiterAI/modelManager.h)** — Singleton that loads and manages model configurations from JSON files with schema validation.
 - **Utility Components** — Cross-cutting functionality including caching ([`CacheManager`](../src/arbiterAI/cacheManager.h)), cost tracking ([`CostManager`](../src/arbiterAI/costManager.h)), model downloading ([`ModelDownloader`](../src/arbiterAI/modelDownloader.h)), and file verification ([`FileVerifier`](../src/arbiterAI/fileVerifier.h)).
 
-### Planned Components
+### Local Model Components
 
-See [Local Model Management Task](tasks/local_model_management.md) for upcoming additions:
+Components supporting local (llama.cpp) models — see [Local Model Management Task](tasks/local_model_management.md) for background:
 
-- **`HardwareDetector`** — GPU/RAM/CPU detection (NVML + Vulkan)
-- **`ModelRuntime`** — Multi-model loading, swap queueing, LRU eviction (refactor of `LlamaInterface`)
-- **`TelemetryCollector`** — Inference stats and system snapshots
-- **Standalone Server** — Separate `arbiterAI-server` application providing an OpenAI-compatible API, model management endpoints, and a live stats dashboard
+- **[`HardwareDetector`](../src/arbiterAI/hardwareDetector.h)** — GPU/RAM/CPU detection (NVML + Vulkan)
+- **[`ModelRuntime`](../src/arbiterAI/modelRuntime.h)** — Multi-model loading, swap queueing, LRU eviction, load-failure classification
+- **[`InferenceScheduler`](../src/arbiterAI/inferenceScheduler.h)** — Inference pipeline used by the server for local models. HTTP threads submit jobs; a tokenizer thread loads the model and pre-tokenizes the prompt; per-accelerator worker threads run inference. Streaming tokens flow back to the HTTP thread through a `TokenChannel`, and jobs are cancelled on client disconnect. Active jobs are exposed at `/api/scheduler/jobs`.
+- **[`TelemetryCollector`](../src/arbiterAI/telemetryCollector.h)** — Inference stats and system snapshots
+- **Standalone Server** — Separate `arbiterAI-server` application providing an OpenAI-compatible API, model management endpoints, and a live stats dashboard (see [Server Guide](server.md))
 
 ---
 

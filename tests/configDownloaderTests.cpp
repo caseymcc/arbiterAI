@@ -7,6 +7,11 @@
 #include <thread>
 #include <git2.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 namespace arbiterAI
 {
 
@@ -15,46 +20,71 @@ class ConfigDownloaderTest : public ::testing::Test
 protected:
     std::string remote_repo_path;
     std::string local_repo_path;
-    pid_t server_pid;
+
+    /// Poll until the git daemon accepts TCP connections (or timeout).
+    static bool waitForDaemon(int port, std::chrono::seconds timeout)
+    {
+        auto deadline=std::chrono::steady_clock::now()+timeout;
+
+        while(std::chrono::steady_clock::now()<deadline)
+        {
+            int sock=socket(AF_INET, SOCK_STREAM, 0);
+            if(sock>=0)
+            {
+                sockaddr_in addr{};
+                addr.sin_family=AF_INET;
+                addr.sin_port=htons(port);
+                addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+
+                int result=connect(sock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
+                close(sock);
+                if(result==0)
+                    return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return false;
+    }
 
     void SetUp() override
     {
         local_repo_path=(std::filesystem::temp_directory_path()/"test_repo").string();
         remote_repo_path=(std::filesystem::temp_directory_path()/"remote_repo.git").string();
 
-        // Create a bare git repository to act as the remote
+        // Clean up any leftovers from a previous (crashed) run
+        std::system("pkill -x git-daemon >/dev/null 2>&1");
+        std::filesystem::remove_all(local_repo_path);
+        std::filesystem::remove_all(remote_repo_path);
+
+        // Create a bare git repository to act as the remote.
+        // libgit2 must be initialized first — without it
+        // git_repository_init produces an invalid repository.
+        git_libgit2_init();
+
         git_repository *repo=nullptr;
-        git_repository_init(&repo, remote_repo_path.c_str(), 1);
+        ASSERT_EQ(git_repository_init(&repo, remote_repo_path.c_str(), 1), 0);
         git_repository_free(repo);
 
-        std::thread server_thread([this]()
+        std::thread server_thread([]()
         {
             std::string base_path=std::filesystem::temp_directory_path().string();
-            std::string command="git daemon --verbose --export-all --port=8080 --reuseaddr --base-path="+base_path+" ";
+            std::string command="git daemon --export-all --port=8080 --reuseaddr --base-path="+base_path+" >/dev/null 2>&1";
 
-            int result=std::system(command.c_str());
-            if(result!=0)
-            {
-                std::cerr<<"Failed to start git daemon"<<std::endl;
-            }
+            std::system(command.c_str());
         });
-
-        server_pid=server_thread.native_handle();
         server_thread.detach();
-        // Give the server a moment to start
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Wait until the daemon is actually accepting connections
+        ASSERT_TRUE(waitForDaemon(8080, std::chrono::seconds(10)))
+            <<"git daemon did not start listening on port 8080";
     }
 
     void TearDown() override
     {
-        // Kill the git daemon process
-        if(server_pid>0)
-        {
-            kill(server_pid, SIGTERM);
-            waitpid(server_pid, nullptr, 0);
-        }
+        std::system("pkill -x git-daemon >/dev/null 2>&1");
         std::filesystem::remove_all(local_repo_path);
         std::filesystem::remove_all(remote_repo_path);
+        git_libgit2_shutdown();
     }
 };
 

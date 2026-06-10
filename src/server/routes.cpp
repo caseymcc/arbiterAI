@@ -10,6 +10,7 @@
 #include "arbiterAI/hardwareDetector.h"
 #include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/storageManager.h"
+#include "arbiterAI/inferenceScheduler.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -909,6 +910,8 @@ nlohmann::json inferenceStatsToJson(const InferenceStats &s)
     return {
         {"model", s.model},
         {"variant", s.variant},
+        {"job_id", s.jobId},
+        {"cancelled", s.cancelled},
         {"tokens_per_second", s.tokensPerSecond},
         {"prompt_tokens_per_second", s.promptTokensPerSecond},
         {"generation_tokens_per_second", s.generationTokensPerSecond},
@@ -969,6 +972,7 @@ std::string errorCodeToString(ErrorCode code)
         case ErrorCode::GenerationError:     return "generation_error";
         case ErrorCode::ApiKeyNotFound:      return "api_key_not_found";
         case ErrorCode::ServerOverloaded:    return "server_overloaded";
+        case ErrorCode::Cancelled:           return "cancelled";
         default:                             return "unknown_error";
     }
 }
@@ -1390,6 +1394,16 @@ bool isHarmonyFormat(const std::string &modelName)
     return false;
 }
 
+bool isLocalModel(const std::string &modelName)
+{
+    ModelInfo info;
+    if(ArbiterAI::instance().getModelInfo(modelName, info)==ErrorCode::Success)
+    {
+        return info.provider=="llama";
+    }
+    return false;
+}
+
 } // anonymous namespace
 
 // ========== Override Path ==========
@@ -1406,6 +1420,8 @@ void setOverridePath(const std::string &path)
 }
 
 // ========== Route Registration ==========
+
+void handleGetSchedulerJobs(const httplib::Request &, httplib::Response &res);
 
 void registerRoutes(httplib::Server &server)
 {
@@ -1480,6 +1496,7 @@ void registerRoutes(httplib::Server &server)
     server.Get("/api/stats", handleGetStats);
     server.Get("/api/stats/history", handleGetStatsHistory);
     server.Get("/api/stats/swaps", handleGetStatsSwaps);
+    server.Get("/api/scheduler/jobs", handleGetSchedulerJobs);
     server.Get("/api/hardware", handleGetHardware);
     server.Post("/api/hardware/vram-override", handleSetVramOverride);
     server.Delete(R"(/api/hardware/vram-override/(\d+))", handleClearVramOverride);
@@ -1682,12 +1699,13 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
     }
 
     bool harmonyMode=isHarmonyFormat(arbiterRequest.model);
+    bool useScheduler=isLocalModel(arbiterRequest.model)&&InferenceScheduler::instance().isRunning();
 
     if(stream)
     {
         res.set_chunked_content_provider(
             "text/event-stream",
-            [arbiterRequest, requestId, created, includeUsage, responseModelId, harmonyMode](size_t, httplib::DataSink &sink)
+            [arbiterRequest, requestId, created, includeUsage, responseModelId, harmonyMode, useScheduler](size_t, httplib::DataSink &sink)
             {
                 // Send initial chunk with role
                 nlohmann::json roleChunk={
@@ -1706,48 +1724,137 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 sink.write(roleLine.c_str(), roleLine.length());
 
                 HarmonyStreamParser harmonyParser;
+                ErrorCode err=ErrorCode::Success;
+                int usagePromptTokens=0;
+                int usageCompletionTokens=0;
 
-                auto callback=[&](const std::string &chunk)
+                if(useScheduler)
                 {
-                    if(chunk.empty()) return;
+                    // Submit to the inference scheduler pipeline
+                    auto job=InferenceScheduler::instance().submit(arbiterRequest, true);
 
-                    std::string emitContent;
-                    if(harmonyMode)
+                    // Read tokens from the channel, sending keepalive while queued
+                    while(true)
                     {
-                        emitContent=harmonyParser.feed(chunk);
-                        if(emitContent.empty()) return;
-                    }
-                    else
-                    {
-                        emitContent=chunk;
+                        std::string token;
+                        bool alive=job->channel->pop(token, std::chrono::milliseconds(500));
+
+                        if(!alive)
+                        {
+                            // Channel finished
+                            break;
+                        }
+
+                        if(token.empty())
+                        {
+                            // Timeout — send keepalive based on current stage
+                            InferenceStage stage=job->stage.load();
+                            std::string comment;
+                            if(stage==InferenceStage::Queued||stage==InferenceStage::Tokenizing)
+                            {
+                                comment=": status: tokenizing prompt\n\n";
+                            }
+                            else if(stage==InferenceStage::WaitingAccelerator)
+                            {
+                                int pos=job->queuePosition.load();
+                                comment=": status: queued for inference (position "+std::to_string(pos)+")\n\n";
+                            }
+                            else if(stage==InferenceStage::Inferring)
+                            {
+                                comment=": status: generating\n\n";
+                            }
+                            else
+                            {
+                                comment=": status: processing\n\n";
+                            }
+                            if(!sink.write(comment.c_str(), comment.length()))
+                            {
+                                // Client disconnected — cancel the job
+                                InferenceScheduler::instance().cancel(job->id);
+                                break;
+                            }
+                            continue;
+                        }
+
+                        // Emit token via SSE
+                        std::string emitContent;
+                        if(harmonyMode)
+                        {
+                            emitContent=harmonyParser.feed(token);
+                            if(emitContent.empty()) continue;
+                        }
+                        else
+                        {
+                            emitContent=token;
+                        }
+
+                        nlohmann::json sseChunk={
+                            {"id", requestId},
+                            {"object", "chat.completion.chunk"},
+                            {"created", created},
+                            {"model", responseModelId},
+                            {"system_fingerprint", nullptr},
+                            {"choices", {{
+                                {"index", 0},
+                                {"delta", {{"content", emitContent}}},
+                                {"finish_reason", nullptr}
+                            }}}
+                        };
+                        std::string line="data: "+sseChunk.dump()+"\n\n";
+                        if(!sink.write(line.c_str(), line.length()))
+                        {
+                            // Client disconnected — cancel the job
+                            InferenceScheduler::instance().cancel(job->id);
+                            break;
+                        }
                     }
 
-                    nlohmann::json sseChunk={
-                        {"id", requestId},
-                        {"object", "chat.completion.chunk"},
-                        {"created", created},
-                        {"model", responseModelId},
-                        {"system_fingerprint", nullptr},
-                        {"choices", {{
-                            {"index", 0},
-                            {"delta", {{"content", emitContent}}},
-                            {"finish_reason", nullptr}
-                        }}}
+                    err=job->channel->getResult();
+                    usagePromptTokens=job->promptTokens;
+                    usageCompletionTokens=job->completionTokens.load();
+                }
+                else
+                {
+                    // Remote provider — use direct streaming callback
+                    auto callback=[&](const std::string &chunk)
+                    {
+                        if(chunk.empty()) return;
+
+                        std::string emitContent;
+                        if(harmonyMode)
+                        {
+                            emitContent=harmonyParser.feed(chunk);
+                            if(emitContent.empty()) return;
+                        }
+                        else
+                        {
+                            emitContent=chunk;
+                        }
+
+                        nlohmann::json sseChunk={
+                            {"id", requestId},
+                            {"object", "chat.completion.chunk"},
+                            {"created", created},
+                            {"model", responseModelId},
+                            {"system_fingerprint", nullptr},
+                            {"choices", {{
+                                {"index", 0},
+                                {"delta", {{"content", emitContent}}},
+                                {"finish_reason", nullptr}
+                            }}}
+                        };
+                        std::string line="data: "+sseChunk.dump()+"\n\n";
+                        sink.write(line.c_str(), line.length());
                     };
-                    std::string line="data: "+sseChunk.dump()+"\n\n";
-                    sink.write(line.c_str(), line.length());
-                };
 
-                // Send SSE comments while waiting for the inference lock.
-                // This keeps the connection alive and signals to clients that
-                // the request is queued for processing.
-                auto waitCallback=[&]()
-                {
-                    std::string comment=": queued - waiting for model availability\n\n";
-                    sink.write(comment.c_str(), comment.length());
-                };
+                    auto waitCallback=[&]()
+                    {
+                        std::string comment=": queued - waiting for model availability\n\n";
+                        sink.write(comment.c_str(), comment.length());
+                    };
 
-                ErrorCode err=ArbiterAI::instance().streamingCompletion(arbiterRequest, callback, waitCallback);
+                    err=ArbiterAI::instance().streamingCompletion(arbiterRequest, callback, waitCallback);
+                }
 
                 std::string finishReason=(err==ErrorCode::Success)?"stop":"error";
 
@@ -1818,9 +1925,9 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         {"system_fingerprint", nullptr},
                         {"choices", nlohmann::json::array()},
                         {"usage", {
-                            {"prompt_tokens", 0},
-                            {"completion_tokens", 0},
-                            {"total_tokens", 0}
+                            {"prompt_tokens", usagePromptTokens},
+                            {"completion_tokens", usageCompletionTokens},
+                            {"total_tokens", usagePromptTokens+usageCompletionTokens}
                         }}
                     };
                     std::string usageLine="data: "+usageChunk.dump()+"\n\n";
@@ -1834,8 +1941,198 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
             }
         );
     }
+    else if(useScheduler)
+    {
+        // Submit before committing to a chunked response (whose status is
+        // locked at 200) so fast failures — missing model file, load errors,
+        // tokenize errors — can still return a proper HTTP status.
+        auto job=InferenceScheduler::instance().submit(arbiterRequest, false);
+
+        {
+            std::unique_lock<std::mutex> lock(job->completionMutex);
+            job->completionCv.wait_for(lock, std::chrono::seconds(2), [&job]()
+            {
+                return job->complete.load();
+            });
+        }
+
+        if(job->complete.load()&&job->result!=ErrorCode::Success)
+        {
+            ErrorCode err=job->result;
+            int status=500;
+            std::string errType="server_error";
+            std::string errCode=errorCodeToString(err);
+
+            if(err==ErrorCode::UnknownModel||err==ErrorCode::ModelNotFound)
+            {
+                status=404;
+                errType="invalid_request_error";
+            }
+            else if(err==ErrorCode::InvalidRequest)
+            {
+                status=400;
+                errType="invalid_request_error";
+            }
+            else if(err==ErrorCode::ServerOverloaded||err==ErrorCode::ModelDownloading)
+            {
+                status=503;
+            }
+
+            res.status=status;
+            res.set_content(errorJson("Completion failed: "+errCode, errType, "", errCode).dump(), "application/json");
+            return;
+        }
+
+        // Non-streaming scheduler path: use chunked encoding with heartbeat
+        // newlines every ~30s to keep the client alive while queued/inferring.
+        res.set_chunked_content_provider(
+            "application/json",
+            [job, arbiterRequest, requestId, created, responseModelId, harmonyMode](size_t, httplib::DataSink &sink)
+            {
+                // Poll for completion, sending heartbeat newlines every ~30s
+                constexpr auto heartbeatInterval=std::chrono::seconds(30);
+                {
+                    std::unique_lock<std::mutex> lock(job->completionMutex);
+                    while(!job->complete.load())
+                    {
+                        if(job->completionCv.wait_for(lock, heartbeatInterval, [&job]()
+                        {
+                            return job->complete.load();
+                        }))
+                        {
+                            break;
+                        }
+
+                        // Send heartbeat newline to keep connection alive
+                        if(!sink.write("\n", 1))
+                        {
+                            // Client disconnected — cancel the job
+                            InferenceScheduler::instance().cancel(job->id);
+                            sink.done();
+                            return true;
+                        }
+                    }
+                }
+
+                CompletionResponse arbiterResponse;
+                ErrorCode err=job->result;
+
+                if(err==ErrorCode::Success)
+                {
+                    arbiterResponse.text=job->resultText;
+                    arbiterResponse.provider="llama";
+                    arbiterResponse.model=arbiterRequest.model;
+                    arbiterResponse.usage.prompt_tokens=job->promptTokens;
+                    arbiterResponse.usage.completion_tokens=job->completionTokens.load();
+                    arbiterResponse.usage.total_tokens=job->promptTokens+job->completionTokens.load();
+                    arbiterResponse.finishReason="stop";
+                }
+
+                if(err!=ErrorCode::Success)
+                {
+                    std::string errCode=errorCodeToString(err);
+                    std::string errBody=errorJson("Completion failed: "+errCode, "server_error", "", errCode).dump();
+                    sink.write(errBody.c_str(), errBody.length());
+                    sink.done();
+                    return true;
+                }
+
+                std::string finishReason=arbiterResponse.finishReason.empty()?"stop":arbiterResponse.finishReason;
+
+                if(harmonyMode&&!arbiterResponse.text.empty())
+                {
+                    HarmonyParseResult parsed=parseHarmonyFormat(arbiterResponse.text);
+                    arbiterResponse.text=parsed.content;
+                    if(!parsed.reasoningContent.empty())
+                        arbiterResponse.reasoningContent=parsed.reasoningContent;
+
+                    if(!parsed.toolCalls.empty())
+                    {
+                        for(size_t i=0; i<parsed.toolCalls.size(); i++)
+                        {
+                            ToolCall tc;
+                            tc.id="call_"+generateId("");
+                            tc.name=parsed.toolCalls[i].name;
+                            try
+                            {
+                                tc.arguments=nlohmann::json::parse(parsed.toolCalls[i].arguments);
+                            }
+                            catch(...)
+                            {
+                                tc.arguments=parsed.toolCalls[i].arguments;
+                            }
+                            arbiterResponse.toolCalls.push_back(std::move(tc));
+                        }
+                        finishReason="tool_calls";
+                    }
+                    else if(parsed.hasToolCall)
+                    {
+                        finishReason="tool_calls";
+                    }
+                }
+
+                nlohmann::json messageJson={{"role", "assistant"}};
+
+                if(!arbiterResponse.toolCalls.empty())
+                {
+                    messageJson["content"]=nullptr;
+                    nlohmann::json toolCallsJson=nlohmann::json::array();
+                    for(const ToolCall &tc:arbiterResponse.toolCalls)
+                    {
+                        std::string argsStr;
+                        if(tc.arguments.is_string())
+                            argsStr=tc.arguments.get<std::string>();
+                        else
+                            argsStr=tc.arguments.dump();
+
+                        toolCallsJson.push_back({
+                            {"id", tc.id},
+                            {"type", "function"},
+                            {"function", {
+                                {"name", tc.name},
+                                {"arguments", argsStr}
+                            }}
+                        });
+                    }
+                    messageJson["tool_calls"]=toolCallsJson;
+                    if(finishReason=="stop") finishReason="tool_calls";
+                }
+                else
+                {
+                    messageJson["content"]=arbiterResponse.text;
+                    if(!arbiterResponse.reasoningContent.empty())
+                        messageJson["reasoning_content"]=arbiterResponse.reasoningContent;
+                    messageJson["tool_calls"]=nullptr;
+                }
+
+                nlohmann::json responseJson={
+                    {"id", requestId},
+                    {"object", "chat.completion"},
+                    {"created", created},
+                    {"model", responseModelId},
+                    {"system_fingerprint", nullptr},
+                    {"choices", {{
+                        {"index", 0},
+                        {"message", messageJson},
+                        {"finish_reason", finishReason}
+                    }}},
+                    {"usage", {
+                        {"prompt_tokens", arbiterResponse.usage.prompt_tokens},
+                        {"completion_tokens", arbiterResponse.usage.completion_tokens},
+                        {"total_tokens", arbiterResponse.usage.total_tokens}
+                    }}
+                };
+
+                std::string body=responseJson.dump();
+                sink.write(body.c_str(), body.length());
+                sink.done();
+                return true;
+            }
+        );
+    }
     else
     {
+        // Non-streaming remote provider path (synchronous, no heartbeat needed)
         CompletionResponse arbiterResponse;
         ErrorCode err=ArbiterAI::instance().completion(arbiterRequest, arbiterResponse);
 
@@ -3007,6 +3304,45 @@ void handleGetStatsSwaps(const httplib::Request &, httplib::Response &res)
     for(const SwapEvent &e:swaps)
     {
         arr.push_back(swapEventToJson(e));
+    }
+
+    res.set_content(arr.dump(), "application/json");
+}
+
+void handleGetSchedulerJobs(const httplib::Request &, httplib::Response &res)
+{
+    if(!InferenceScheduler::instance().isRunning())
+    {
+        res.set_content("[]", "application/json");
+        return;
+    }
+
+    std::vector<JobSnapshot> jobs=InferenceScheduler::instance().getActiveJobs();
+
+    nlohmann::json arr=nlohmann::json::array();
+    for(const JobSnapshot &j:jobs)
+    {
+        std::string stageStr;
+        switch(j.stage)
+        {
+            case InferenceStage::Queued:            stageStr="queued"; break;
+            case InferenceStage::Tokenizing:        stageStr="tokenizing"; break;
+            case InferenceStage::WaitingAccelerator: stageStr="waiting"; break;
+            case InferenceStage::Inferring:         stageStr="inferring"; break;
+            case InferenceStage::Complete:          stageStr="complete"; break;
+            case InferenceStage::Cancelled:         stageStr="cancelled"; break;
+        }
+
+        arr.push_back({
+            {"id", j.id},
+            {"model", j.model},
+            {"stage", stageStr},
+            {"streaming", j.streaming},
+            {"prompt_tokens", j.promptTokens},
+            {"completion_tokens", j.completionTokens},
+            {"queue_position", j.queuePosition},
+            {"elapsed_ms", j.elapsedMs}
+        });
     }
 
     res.set_content(arr.dump(), "application/json");

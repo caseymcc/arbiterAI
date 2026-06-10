@@ -16,6 +16,8 @@ namespace arbiterAI
 struct InferenceStats {
     std::string model;
     std::string variant;
+    uint64_t jobId=0;
+    bool cancelled=false;
     double tokensPerSecond=0.0;
     double promptTokensPerSecond=0.0;     // prompt processing speed (tokens in / sec)
     double generationTokensPerSecond=0.0; // generation speed (tokens out / sec)

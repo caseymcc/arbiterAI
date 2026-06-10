@@ -77,7 +77,8 @@ enum class ErrorCode
     ModelDownloading,
     ModelDownloadFailed,
     InsufficientStorage,
-    ServerOverloaded
+    ServerOverloaded,
+    Cancelled
 };
 
 /**

@@ -39,6 +39,21 @@ public:
 
     ErrorCode getAvailableModels(std::vector<std::string> &models) override;
 
+    /// Tokenize the prompt outside of the inference mutex.
+    /// Only reads llama_model/vocab (thread-safe without context lock).
+    ErrorCode tokenizePrompt(llama_model *model,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        std::vector<int32_t> &tokens, std::string &formattedPrompt);
+
+    /// Run inference with pre-tokenized prompt (requires inference lock held).
+    ErrorCode runInferenceWithTokens(llama_model *model, llama_context *ctx,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        const std::vector<int32_t> &promptTokens,
+        std::string &result, int &promptTokenCount, int &completionTokens,
+        double &promptTimeMs, double &generationTimeMs,
+        std::function<void(const std::string &)> streamCallback,
+        std::function<bool()> shouldAbort=nullptr);
+
 private:
     /// Format messages into a prompt string using the model's chat template.
     std::string applyTemplate(llama_model *model,
@@ -48,24 +63,10 @@ private:
     std::string formatHarmonyPrompt(const CompletionRequest &request,
         const ModelInfo &modelInfo) const;
 
-    /// Tokenize the prompt outside of the inference mutex.
-    /// Returns the formatted prompt tokens ready for decode.
-    ErrorCode tokenizePrompt(llama_model *model,
-        const CompletionRequest &request, const ModelInfo &modelInfo,
-        std::vector<int32_t> &tokens, std::string &formattedPrompt);
-
     /// Run the inference loop (shared by completion and streaming).
     ErrorCode runInference(llama_model *model, llama_context *ctx,
         const CompletionRequest &request, const ModelInfo &modelInfo,
         std::string &result, int &promptTokens, int &completionTokens,
-        double &promptTimeMs, double &generationTimeMs,
-        std::function<void(const std::string &)> streamCallback);
-
-    /// Run inference with pre-tokenized prompt (avoids re-tokenizing under lock).
-    ErrorCode runInferenceWithTokens(llama_model *model, llama_context *ctx,
-        const CompletionRequest &request, const ModelInfo &modelInfo,
-        const std::vector<int32_t> &promptTokens,
-        std::string &result, int &promptTokenCount, int &completionTokens,
         double &promptTimeMs, double &generationTimeMs,
         std::function<void(const std::string &)> streamCallback);
 };

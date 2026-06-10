@@ -195,6 +195,16 @@ td
     background: #2a2a10;
     color: #f0c040;
 }
+.badge-cooldown
+{
+    background: #1a2a3a;
+    color: #64b5f6;
+}
+.badge-error
+{
+    background: #3a1a1a;
+    color: #ef5350;
+}
 .btn
 {
     padding: 4px 12px;
@@ -676,6 +686,7 @@ td
             <table>
                 <thead>
                     <tr>
+                        <th>Job</th>
                         <th>Model</th>
                         <th>Status</th>
                         <th>Input Tokens</th>
@@ -687,7 +698,7 @@ td
                     </tr>
                 </thead>
                 <tbody id="activeRequestTable">
-                    <tr><td colspan="8" style="color:#666;text-align:center;">No recent requests</td></tr>
+                    <tr><td colspan="9" style="color:#666;text-align:center;">No active requests</td></tr>
                 </tbody>
             </table>
         </div>
@@ -696,9 +707,9 @@ td
         <div class="card">
             <h2>Recent Inferences</h2>
             <table>
-                <thead><tr><th>Model</th><th>Prompt t/s</th><th>Gen t/s</th><th>Prompt</th><th>Completion</th><th>Latency</th></tr></thead>
+                <thead><tr><th>Job</th><th>Status</th><th>Model</th><th>Prompt t/s</th><th>Gen t/s</th><th>Prompt</th><th>Completion</th><th>Latency</th></tr></thead>
                 <tbody id="inferenceTable">
-                    <tr><td colspan="6" style="color:#666;text-align:center;">No recent inferences</td></tr>
+                    <tr><td colspan="8" style="color:#666;text-align:center;">No recent inferences</td></tr>
                 </tbody>
             </table>
         </div>
@@ -1427,7 +1438,7 @@ function renderInferences(history)
 
     if(!history||history.length===0)
     {
-        el.innerHTML='<tr><td colspan="6" style="color:#666;text-align:center;">No recent inferences</td></tr>';
+        el.innerHTML='<tr><td colspan="8" style="color:#666;text-align:center;">No recent inferences</td></tr>';
         return;
     }
 
@@ -1437,8 +1448,14 @@ function renderInferences(history)
     {
         const promptTps=s.prompt_tokens_per_second||0;
         const genTps=s.generation_tokens_per_second||0;
+        const jobId=s.job_id||"—";
+        const statusBadge=s.cancelled
+            ?'<span class="badge badge-error">Cancelled</span>'
+            :'<span class="badge badge-loaded">Complete</span>';
 
         html+=`<tr>
+            <td>#${jobId}</td>
+            <td>${statusBadge}</td>
             <td>${s.model}</td>
             <td>${promptTps.toFixed(1)}</td>
             <td>${genTps.toFixed(1)}</td>
@@ -1553,34 +1570,43 @@ function renderDownloadProgress(downloads)
     el.innerHTML=html;
 }
 
-function renderActiveRequests(history, activeCount)
+function renderActiveRequests(activeJobs)
 {
     const el=document.getElementById("activeRequestTable");
 
-    if((!history||history.length===0)&&!activeCount)
+    if(!activeJobs||activeJobs.length===0)
     {
-        el.innerHTML='<tr><td colspan="8" style="color:#666;text-align:center;">No recent requests</td></tr>';
+        el.innerHTML='<tr><td colspan="9" style="color:#666;text-align:center;">No active requests</td></tr>';
         return;
     }
 
-    const recent=history?history.slice(-20).reverse():[];
     let html="";
-    for(const s of recent)
+    for(const j of activeJobs)
     {
-        const promptTps=s.prompt_tokens_per_second||0;
-        const genTps=s.generation_tokens_per_second||0;
-        const totalMs=s.total_time_ms||0;
-        const latencyMs=s.latency_ms||0;
+        let stageBadge;
+        switch(j.stage)
+        {
+            case "queued":     stageBadge='<span class="badge badge-cooldown">Queued</span>'; break;
+            case "tokenizing": stageBadge='<span class="badge badge-downloading">Tokenizing</span>'; break;
+            case "waiting":    stageBadge='<span class="badge badge-cooldown">Waiting</span>'; break;
+            case "inferring":  stageBadge='<span class="badge badge-loaded">Inferring</span>'; break;
+            default:           stageBadge='<span class="badge">' + j.stage + '</span>';
+        }
+
+        const elapsed=(j.elapsed_ms/1000).toFixed(1);
+        const promptToks=j.prompt_tokens||0;
+        const compToks=j.completion_tokens||0;
 
         html+=`<tr>
-            <td>${s.model}</td>
-            <td><span class="badge badge-loaded">Done</span></td>
-            <td>${s.prompt_tokens.toLocaleString()}</td>
-            <td>${s.completion_tokens.toLocaleString()}</td>
-            <td>${promptTps.toFixed(1)}</td>
-            <td>${genTps.toFixed(1)}</td>
-            <td>${latencyMs.toFixed(0)} ms</td>
-            <td>${totalMs.toFixed(0)} ms</td>
+            <td>#${j.id}</td>
+            <td>${j.model}</td>
+            <td>${stageBadge}</td>
+            <td>${promptToks.toLocaleString()}</td>
+            <td>${compToks.toLocaleString()}</td>
+            <td>—</td>
+            <td>—</td>
+            <td>—</td>
+            <td>${elapsed}s</td>
         </tr>`;
     }
     el.innerHTML=html;
@@ -1596,11 +1622,12 @@ async function refreshDownloads()
 
 async function refresh()
 {
-    const [stats, history, swaps, hw]=await Promise.all([
+    const [stats, history, swaps, hw, schedulerJobs]=await Promise.all([
         fetchJson("/api/stats"),
         fetchJson("/api/stats/history?minutes=5"),
         fetchJson("/api/stats/swaps"),
-        fetchJson("/api/hardware")
+        fetchJson("/api/hardware"),
+        fetchJson("/api/scheduler/jobs")
     ]);
 
     const dot=document.getElementById("statusDot");
@@ -1654,7 +1681,7 @@ async function refresh()
     if(history) renderInferences(history);
 
     // Active requests summary
-    if(history) renderActiveRequests(history, stats.active_requests||0);
+    renderActiveRequests(schedulerJobs);
 
     // Swaps
     if(swaps) renderSwaps(swaps);
@@ -1825,6 +1852,16 @@ td
 {
     background: #2a2a10;
     color: #f0c040;
+}
+.badge-cooldown
+{
+    background: #1a2a3a;
+    color: #64b5f6;
+}
+.badge-error
+{
+    background: #3a1a1a;
+    color: #ef5350;
 }
 .btn
 {
