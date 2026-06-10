@@ -364,6 +364,7 @@ struct CompletionRequest
     std::optional<std::map<std::string, double>> logit_bias;  ///< Token ID to bias value
     std::optional<int> timeout_ms;                              ///< Per-request HTTP timeout in milliseconds (0 or absent = 300s default)
     std::optional<int> low_speed_time_s;                        ///< Low-speed abort threshold in seconds (0 = disabled, absent = 60s default)
+    std::optional<bool> cache_prompt;                           ///< llama.cpp server extension: reuse the KV cache for the common prompt prefix. Only sent when set — OpenAI itself rejects unknown arguments.
 };
 
 inline void to_json(nlohmann::json &j, const CompletionRequest &r)
@@ -382,6 +383,7 @@ inline void to_json(nlohmann::json &j, const CompletionRequest &r)
     if (r.stop.has_value()) j["stop"] = r.stop.value();
     if (r.tools.has_value()) j["tools"] = r.tools.value();
     if (r.tool_choice.has_value()) j["tool_choice"] = r.tool_choice.value();
+    if (r.cache_prompt.has_value()) j["cache_prompt"] = r.cache_prompt.value();
 }
 
 inline void from_json(const nlohmann::json &j, CompletionRequest &r)
@@ -398,6 +400,7 @@ inline void from_json(const nlohmann::json &j, CompletionRequest &r)
     if (j.contains("stop")) r.stop = j.at("stop").get<std::vector<std::string>>();
     if (j.contains("tools")) r.tools = j.at("tools").get<std::vector<ToolDefinition>>();
     if (j.contains("tool_choice")) r.tool_choice = j.at("tool_choice").get<std::string>();
+    if (j.contains("cache_prompt")) r.cache_prompt = j.at("cache_prompt").get<bool>();
 }
 
 /**

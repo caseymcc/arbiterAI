@@ -300,6 +300,13 @@ nlohmann::json OpenAI::createRequestBody(const CompletionRequest &request, bool 
     {
         body["stop"]=request.stop.value();
     }
+    if(request.cache_prompt.has_value())
+    {
+        // llama.cpp server extension: reuse the KV cache for the common
+        // prompt prefix across requests. Only sent when explicitly set —
+        // OpenAI itself rejects unrecognised request arguments.
+        body["cache_prompt"]=request.cache_prompt.value();
+    }
 
     // Serialize tools in OpenAI function-calling format
     if(request.tools.has_value() && !request.tools->empty())

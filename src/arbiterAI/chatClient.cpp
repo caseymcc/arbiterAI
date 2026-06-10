@@ -233,6 +233,9 @@ CompletionRequest ChatClient::buildRequest(const CompletionRequest& userRequest)
     fullRequest.tool_choice = userRequest.tool_choice;
     fullRequest.stop = userRequest.stop;
     fullRequest.timeout_ms = userRequest.timeout_ms;
+    fullRequest.cache_prompt = userRequest.cache_prompt.has_value()
+        ? userRequest.cache_prompt
+        : m_config.cachePrompt;
 
     return fullRequest;
 }
