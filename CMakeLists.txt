@@ -81,8 +81,6 @@ set(arbiterai_src
     ./src/arbiterAI/modelFitCalculator.cpp
     ./src/arbiterAI/telemetryCollector.h
     ./src/arbiterAI/telemetryCollector.cpp
-    ./src/arbiterAI/inferenceScheduler.h
-    ./src/arbiterAI/inferenceScheduler.cpp
     ./src/arbiterAI/storageManager.h
     ./src/arbiterAI/storageManager.cpp
     ./src/arbiterAI/providers/baseProvider.h
@@ -103,6 +101,8 @@ if(ARBITERAI_ENABLE_LLAMA)
     list(APPEND arbiterai_src
         ./src/arbiterAI/modelRuntime.h
         ./src/arbiterAI/modelRuntime.cpp
+        ./src/arbiterAI/inferenceScheduler.h
+        ./src/arbiterAI/inferenceScheduler.cpp
         ./src/arbiterAI/providers/llama.h
         ./src/arbiterAI/providers/llama.cpp
     )
