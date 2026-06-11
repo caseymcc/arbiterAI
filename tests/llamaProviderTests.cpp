@@ -3,6 +3,7 @@
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/chatClient.h"
 #include "arbiterAI/modelRuntime.h"
+#include "arbiterAI/providers/llama.h"
 #include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/modelManager.h"
 
@@ -429,6 +430,51 @@ TEST_F(LlamaConfigInjectionTest, InjectWithoutVariantsFails)
     // Loading a llama model without variants should fail
     ErrorCode loadResult=ModelRuntime::instance().loadModel("no-variants-llama");
     EXPECT_EQ(loadResult, ErrorCode::InvalidRequest);
+}
+
+// ── cache_prompt prefix reuse ────────────────────────────────────────────
+
+TEST(KvPrefixReuse, EmptyCacheReusesNothing)
+{
+    EXPECT_EQ(kvPrefixReuseLength({}, {1, 2, 3}), 0);
+}
+
+TEST(KvPrefixReuse, GrowingPromptReusesWholeCache)
+{
+    // Typical agent turn: previous prompt + generated reply + new tool result
+    EXPECT_EQ(kvPrefixReuseLength({1, 2, 3, 4}, {1, 2, 3, 4, 5, 6, 7}), 4);
+}
+
+TEST(KvPrefixReuse, IdenticalPromptLeavesOneTokenToDecode)
+{
+    // The last position must be re-decoded so sampling has fresh logits
+    EXPECT_EQ(kvPrefixReuseLength({1, 2, 3, 4}, {1, 2, 3, 4}), 3);
+}
+
+TEST(KvPrefixReuse, DivergenceTruncatesAtMismatch)
+{
+    EXPECT_EQ(kvPrefixReuseLength({1, 2, 3, 4}, {1, 2, 9, 4, 5}), 2);
+}
+
+TEST(KvPrefixReuse, ShorterPromptCapsBelowPromptLength)
+{
+    EXPECT_EQ(kvPrefixReuseLength({1, 2, 3, 4, 5, 6}, {1, 2, 3}), 2);
+}
+
+TEST(KvPrefixReuse, SingleTokenPromptNeverReuses)
+{
+    EXPECT_EQ(kvPrefixReuseLength({1, 2, 3}, {1}), 0);
+}
+
+TEST(KvPrefixReuse, CompletelyDifferentPromptReusesNothing)
+{
+    EXPECT_EQ(kvPrefixReuseLength({7, 8, 9}, {1, 2, 3}), 0);
+}
+
+TEST(KvPrefixReuse, KvCacheTokensRequiresLoadedModel)
+{
+    ModelRuntime::reset();
+    EXPECT_EQ(ModelRuntime::instance().kvCacheTokens("not-loaded"), nullptr);
 }
 
 } // namespace arbiterAI

@@ -87,6 +87,7 @@ struct LoadedModel {
     llama_model *llamaModel=nullptr;
     llama_context *llamaCtx=nullptr;
     RuntimeOptions activeOptions; // llama.cpp options active for this loaded model
+    std::vector<int32_t> kvCacheTokens; // tokens currently in llamaCtx's KV cache (seq 0), for cache_prompt prefix reuse
 };
 
 class ModelRuntime {
@@ -208,6 +209,12 @@ public:
     /// Get the llama_context handle for a loaded local model.
     /// Returns nullptr if not loaded or not a local model.
     llama_context *getLlamaContext(const std::string &model) const;
+
+    /// Access the KV-cache token record for a loaded model (nullptr if not
+    /// loaded).  Mirrors the tokens decoded into the context's KV cache on
+    /// sequence 0 so cache_prompt requests can reuse the common prefix.
+    /// Callers must hold the inference mutex while reading or mutating it.
+    std::vector<int32_t> *kvCacheTokens(const std::string &model);
 
     /// Get the ModelInfo for a loaded model.
     std::optional<ModelInfo> getLoadedModelInfo(const std::string &model) const;

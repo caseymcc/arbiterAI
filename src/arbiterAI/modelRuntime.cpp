@@ -2197,6 +2197,18 @@ llama_context *ModelRuntime::getLlamaContext(const std::string &model) const
     return nullptr;
 }
 
+std::vector<int32_t> *ModelRuntime::kvCacheTokens(const std::string &model)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
+    {
+        return &it->second.kvCacheTokens;
+    }
+    return nullptr;
+}
+
 std::optional<ModelInfo> ModelRuntime::getLoadedModelInfo(const std::string &model) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);

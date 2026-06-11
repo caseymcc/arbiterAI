@@ -241,6 +241,13 @@ ErrorCode Llama::getEmbeddings(const EmbeddingRequest &request,
 
     std::lock_guard<std::timed_mutex> inferenceLock(runtime.getInferenceMutex());
 
+    // Embedding batches overwrite the context's KV cache — the completion
+    // prefix record is no longer valid
+    if(std::vector<int32_t> *kvRecord=runtime.kvCacheTokens(request.model))
+    {
+        kvRecord->clear();
+    }
+
     // Combine input text
     std::string inputText;
     std::visit([&inputText](auto &&arg)
@@ -616,6 +623,64 @@ std::string Llama::formatHarmonyPrompt(const CompletionRequest &request,
     return prompt;
 }
 
+int kvPrefixReuseLength(const std::vector<int32_t> &cachedTokens,
+    const std::vector<int32_t> &promptTokens)
+{
+    // Keep at least one prompt token to decode so the final position has
+    // fresh logits for sampling
+    int maxReuse=std::min(static_cast<int>(cachedTokens.size()),
+        static_cast<int>(promptTokens.size())-1);
+    int reused=0;
+    while(reused<maxReuse&&cachedTokens[reused]==promptTokens[reused])
+    {
+        reused++;
+    }
+    return reused;
+}
+
+// Prepare the KV cache for a new prompt.  When the request sets cache_prompt
+// and the previous inference's tokens share a prefix with the new prompt,
+// keep that prefix in the KV cache and return how many tokens can skip
+// prefill — only the divergent suffix needs decoding.  Falls back to a full
+// clear otherwise.  kvRecord (owned by ModelRuntime, guarded by the
+// inference mutex) is cleared here and repopulated by the caller after a
+// successful inference, so any error/abort path leaves it empty and the next
+// request starts from a clean cache.
+static int prepareKvCache(llama_context *ctx, const CompletionRequest &request,
+    const std::vector<int32_t> &promptTokens, std::vector<int32_t> *kvRecord)
+{
+    llama_memory_t mem=llama_get_memory(ctx);
+    const int nTokens=static_cast<int>(promptTokens.size());
+    int reused=0;
+
+    if(request.cache_prompt.value_or(false)&&kvRecord&&!kvRecord->empty())
+    {
+        reused=kvPrefixReuseLength(*kvRecord, promptTokens);
+    }
+
+    if(reused>0&&llama_memory_seq_rm(mem, 0, reused, -1))
+    {
+        spdlog::info("[llama] cache_prompt: reusing {} of {} prompt tokens from KV cache",
+            reused, nTokens);
+    }
+    else
+    {
+        if(reused>0)
+        {
+            spdlog::warn("[llama] cache_prompt: partial KV erase unsupported — full prefill");
+        }
+        spdlog::debug("[llama] clearing KV cache, prompt tokens={}", nTokens);
+        llama_memory_clear(mem, true);
+        reused=0;
+    }
+
+    if(kvRecord)
+    {
+        kvRecord->clear();
+    }
+    return reused;
+}
+
 ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     std::string &result, int &promptTokens, int &completionTokens,
@@ -655,17 +720,17 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     tokensList.resize(nTokens);
     promptTokens=nTokens;
 
-    // Clear KV cache for fresh inference
-    spdlog::debug("[llama] clearing KV cache, prompt tokens={}", nTokens);
-    llama_memory_clear(llama_get_memory(ctx), true);
+    std::vector<int32_t> *kvRecord=ModelRuntime::instance().kvCacheTokens(request.model);
+    int reusedTokens=prepareKvCache(ctx, request, tokensList, kvRecord);
 
     int nBatch=static_cast<int>(llama_n_batch(ctx));
     llama_batch batch=llama_batch_init(std::max(nBatch, 512), 0, 1);
 
-    // Process prompt (timed) — chunk into n_batch-sized pieces
+    // Process prompt (timed) — chunk into n_batch-sized pieces, skipping any
+    // prefix already in the KV cache
     std::chrono::steady_clock::time_point promptStart=std::chrono::steady_clock::now();
 
-    for(int start=0; start<nTokens; start+=nBatch)
+    for(int start=reusedTokens; start<nTokens; start+=nBatch)
     {
         int chunkSize=std::min(nBatch, nTokens-start);
         bool isLastChunk=(start+chunkSize>=nTokens);
@@ -712,6 +777,7 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
 
     int nCur=nTokens;
     completionTokens=0;
+    std::vector<int32_t> generatedInKv;
 
     // Set up sampler chain
     llama_sampler_chain_params samplerParams=llama_sampler_chain_default_params();
@@ -848,6 +914,7 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
         }
+        generatedInKv.push_back(nextToken);
     }
 
     std::chrono::steady_clock::time_point genEnd=std::chrono::steady_clock::now();
@@ -855,6 +922,14 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
 
     llama_sampler_free(samplerChain);
     llama_batch_free(batch);
+
+    // Record what now sits in the KV cache so the next cache_prompt request
+    // can reuse the common prefix
+    if(kvRecord)
+    {
+        *kvRecord=tokensList;
+        kvRecord->insert(kvRecord->end(), generatedInKv.begin(), generatedInKv.end());
+    }
 
     return ErrorCode::Success;
 }
@@ -907,15 +982,15 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
     int nTokens=static_cast<int>(promptTokens.size());
     promptTokenCount=nTokens;
 
-    spdlog::debug("[llama] clearing KV cache, prompt tokens={}", nTokens);
-    llama_memory_clear(llama_get_memory(ctx), true);
+    std::vector<int32_t> *kvRecord=ModelRuntime::instance().kvCacheTokens(request.model);
+    int reusedTokens=prepareKvCache(ctx, request, promptTokens, kvRecord);
 
     int nBatch=static_cast<int>(llama_n_batch(ctx));
     llama_batch batch=llama_batch_init(std::max(nBatch, 512), 0, 1);
 
     std::chrono::steady_clock::time_point promptStart=std::chrono::steady_clock::now();
 
-    for(int start=0; start<nTokens; start+=nBatch)
+    for(int start=reusedTokens; start<nTokens; start+=nBatch)
     {
         // Check abort between prompt batches
         if(shouldAbort&&shouldAbort())
@@ -965,6 +1040,7 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
 
     int nCur=nTokens;
     completionTokens=0;
+    std::vector<int32_t> generatedInKv;
 
     llama_sampler_chain_params samplerParams=llama_sampler_chain_default_params();
     llama_sampler *samplerChain=llama_sampler_chain_init(samplerParams);
@@ -1098,6 +1174,7 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
         }
+        generatedInKv.push_back(nextToken);
     }
 
     std::chrono::steady_clock::time_point genEnd=std::chrono::steady_clock::now();
@@ -1105,6 +1182,14 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
 
     llama_sampler_free(samplerChain);
     llama_batch_free(batch);
+
+    // Record what now sits in the KV cache so the next cache_prompt request
+    // can reuse the common prefix
+    if(kvRecord)
+    {
+        *kvRecord=promptTokens;
+        kvRecord->insert(kvRecord->end(), generatedInKv.begin(), generatedInKv.end());
+    }
 
     return ErrorCode::Success;
 }
