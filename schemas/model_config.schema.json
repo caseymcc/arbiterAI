@@ -299,6 +299,12 @@
               "enum": ["vulkan", "rocm", "cuda"]
             },
             "uniqueItems": true
+          },
+          "api_format": {
+            "type": "string",
+            "description": "Output format produced by the model. When set (e.g. 'harmony'), the server converts the model's native output to standard OpenAI API format so clients don't need to understand the model's native format.",
+            "enum": ["", "harmony"],
+            "default": ""
           }
         }
       }

@@ -6,6 +6,7 @@
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/storageManager.h"
+#include "arbiterAI/inferenceScheduler.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -20,6 +21,8 @@
 #include <vector>
 #include <filesystem>
 #include <map>
+#include <csignal>
+#include <cstdlib>
 
 namespace
 {
@@ -574,6 +577,18 @@ int main(int argc, char *argv[])
     logger->set_level(spdlog::get_level());
     spdlog::set_default_logger(logger);
 
+    // Install crash signal handlers for better diagnostics
+    auto crashHandler=[](int sig)
+    {
+        spdlog::critical("FATAL SIGNAL {} ({}) received — aborting",
+            sig, (sig==SIGABRT?"SIGABRT":sig==SIGSEGV?"SIGSEGV":"OTHER"));
+        spdlog::default_logger()->flush();
+        std::signal(sig, SIG_DFL);
+        std::raise(sig);
+    };
+    std::signal(SIGABRT, crashHandler);
+    std::signal(SIGSEGV, crashHandler);
+
     spdlog::info("Loaded config from: {}", configPath);
 
     if(!logDir.empty())
@@ -762,6 +777,17 @@ int main(int argc, char *argv[])
         }
     }
 
+    // ── Inference Scheduler ─────────────────────────────────────────
+    {
+        std::vector<int> gpuIndices;
+        auto gpus=arbiterAI::HardwareDetector::instance().getGpus();
+        for(const auto &gpu:gpus)
+        {
+            gpuIndices.push_back(gpu.index);
+        }
+        arbiterAI::InferenceScheduler::instance().initialize(gpuIndices);
+    }
+
     // ── HTTP server ──────────────────────────────────────────────
     httplib::Server server;
 
@@ -793,6 +819,7 @@ int main(int argc, char *argv[])
     spdlog::info("  GET  /api/stats             - System snapshot");
     spdlog::info("  GET  /api/stats/history      - Inference history");
     spdlog::info("  GET  /api/stats/swaps        - Swap history");
+    spdlog::info("  GET  /api/scheduler/jobs     - Active scheduler jobs");
     spdlog::info("  GET  /api/hardware           - Hardware info");
     spdlog::info("  POST /api/hardware/vram-override  - Set VRAM override");
     spdlog::info("  DEL  /api/hardware/vram-override/:idx - Clear VRAM override");
@@ -814,7 +841,13 @@ int main(int argc, char *argv[])
     spdlog::info("Starting server on {}:{}", host, port);
     spdlog::info("Dashboard: http://{}:{}/dashboard", host=="0.0.0.0"?"localhost":host, port);
 
-    if(!server.listen(host, port))
+    bool listenOk=server.listen(host, port);
+
+    // Stop scheduler worker threads before static destruction tears down
+    // the singletons (ModelRuntime, TelemetryCollector) they depend on.
+    arbiterAI::InferenceScheduler::instance().shutdown();
+
+    if(!listenOk)
     {
         spdlog::error("Failed to start server on {}:{}", host, port);
         return 1;

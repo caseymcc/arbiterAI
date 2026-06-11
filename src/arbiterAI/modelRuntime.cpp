@@ -1331,7 +1331,10 @@ void ModelRuntime::evictIfNeeded(int requiredVramMb, int gpuIndex)
 
 void ModelRuntime::beginInference(const std::string &model)
 {
-    m_activeInference.insert(model);
+    {
+        std::lock_guard<std::mutex> lock(m_activeInferenceMutex);
+        m_activeInference.insert(model);
+    }
 
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it=m_models.find(model);
@@ -1354,9 +1357,14 @@ void ModelRuntime::endInference(const std::string &model)
         }
     }
 
-    m_activeInference.erase(model);
+    bool shouldDrain=false;
+    {
+        std::lock_guard<std::mutex> lock(m_activeInferenceMutex);
+        m_activeInference.erase(model);
+        shouldDrain=m_activeInference.empty();
+    }
 
-    if(m_activeInference.empty())
+    if(shouldDrain)
     {
         drainPendingSwaps();
     }
@@ -1364,16 +1372,19 @@ void ModelRuntime::endInference(const std::string &model)
 
 bool ModelRuntime::isInferenceActive() const
 {
+    std::lock_guard<std::mutex> lock(m_activeInferenceMutex);
     return !m_activeInference.empty();
 }
 
 bool ModelRuntime::isInferenceActive(const std::string &model) const
 {
+    std::lock_guard<std::mutex> lock(m_activeInferenceMutex);
     return m_activeInference.count(model)>0;
 }
 
 int ModelRuntime::getActiveInferenceCount() const
 {
+    std::lock_guard<std::mutex> lock(m_activeInferenceMutex);
     return static_cast<int>(m_activeInference.size());
 }
 

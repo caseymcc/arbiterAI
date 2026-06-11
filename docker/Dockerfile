@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG DOCKER_VERSION=1.2.1
+ARG DOCKER_VERSION=1.2.2
 FROM ubuntu:24.04
 
 # Install basic build tools, Python 3, and GPU libraries.
@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y \
     vulkan-tools \
     libvulkan-dev \
     mesa-vulkan-drivers \
+    spirv-headers \
     glslc \
     glslang-tools \
     wget \

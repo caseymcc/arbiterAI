@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <cstdint>
 
 // Forward declarations for llama.cpp types
 struct llama_model;
@@ -26,6 +27,10 @@ public:
     ErrorCode streamingCompletion(const CompletionRequest &request,
         std::function<void(const std::string &)> callback) override;
 
+    ErrorCode streamingCompletion(const CompletionRequest &request,
+        std::function<void(const std::string &)> callback,
+        std::function<void()> waitCallback) override;
+
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 
@@ -34,10 +39,29 @@ public:
 
     ErrorCode getAvailableModels(std::vector<std::string> &models) override;
 
+    /// Tokenize the prompt outside of the inference mutex.
+    /// Only reads llama_model/vocab (thread-safe without context lock).
+    ErrorCode tokenizePrompt(llama_model *model,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        std::vector<int32_t> &tokens, std::string &formattedPrompt);
+
+    /// Run inference with pre-tokenized prompt (requires inference lock held).
+    ErrorCode runInferenceWithTokens(llama_model *model, llama_context *ctx,
+        const CompletionRequest &request, const ModelInfo &modelInfo,
+        const std::vector<int32_t> &promptTokens,
+        std::string &result, int &promptTokenCount, int &completionTokens,
+        double &promptTimeMs, double &generationTimeMs,
+        std::function<void(const std::string &)> streamCallback,
+        std::function<bool()> shouldAbort=nullptr);
+
 private:
     /// Format messages into a prompt string using the model's chat template.
     std::string applyTemplate(llama_model *model,
         const std::vector<Message> &messages) const;
+
+    /// Format messages into harmony special token format for gpt-oss models.
+    std::string formatHarmonyPrompt(const CompletionRequest &request,
+        const ModelInfo &modelInfo) const;
 
     /// Run the inference loop (shared by completion and streaming).
     ErrorCode runInference(llama_model *model, llama_context *ctx,
