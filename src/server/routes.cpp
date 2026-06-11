@@ -1648,6 +1648,10 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 arbiterRequest.stop=requestJson.at("stop").get<std::vector<std::string>>();
         }
 
+        // llama.cpp extension: reuse the KV cache for the common prompt prefix
+        if(requestJson.contains("cache_prompt"))
+            arbiterRequest.cache_prompt=requestJson.at("cache_prompt").get<bool>();
+
         // Parse tools in OpenAI format: [{type: "function", function: {...}}]
         if(requestJson.contains("tools"))
         {
