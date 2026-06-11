@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(arbiterAI VERSION 0.1.12 LANGUAGES C CXX)
+project(arbiterAI VERSION 0.1.13 LANGUAGES C CXX)
 
 option(ARBITERAI_ENABLE_LLAMA "Enable local llama.cpp model runtime support" ON)
 
