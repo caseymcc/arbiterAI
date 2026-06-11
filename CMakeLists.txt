@@ -1,9 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
 project(arbiterAI VERSION 0.1.12 LANGUAGES C CXX)
 
+option(ARBITERAI_ENABLE_LLAMA "Enable local llama.cpp model runtime support" ON)
+
 # Read llama-cpp build number from our custom vcpkg port
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/custom_ports/llama-cpp/vcpkg.json" LLAMA_PORT_JSON)
-string(JSON ARBITERAI_LLAMACPP_BUILD GET "${LLAMA_PORT_JSON}" "version")
+if(ARBITERAI_ENABLE_LLAMA)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/custom_ports/llama-cpp/vcpkg.json" LLAMA_PORT_JSON)
+    string(JSON ARBITERAI_LLAMACPP_BUILD GET "${LLAMA_PORT_JSON}" "version")
+else()
+    set(ARBITERAI_LLAMACPP_BUILD "disabled")
+endif()
 
 # Generate version header from template
 configure_file(
@@ -42,7 +48,9 @@ find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
-find_package(llama CONFIG REQUIRED)
+if(ARBITERAI_ENABLE_LLAMA)
+    find_package(llama CONFIG REQUIRED)
+endif()
 find_package(libgit2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -71,12 +79,8 @@ set(arbiterai_src
     ./src/arbiterAI/hardwareDetector.cpp
     ./src/arbiterAI/modelFitCalculator.h
     ./src/arbiterAI/modelFitCalculator.cpp
-    ./src/arbiterAI/modelRuntime.h
-    ./src/arbiterAI/modelRuntime.cpp
     ./src/arbiterAI/telemetryCollector.h
     ./src/arbiterAI/telemetryCollector.cpp
-    ./src/arbiterAI/inferenceScheduler.h
-    ./src/arbiterAI/inferenceScheduler.cpp
     ./src/arbiterAI/storageManager.h
     ./src/arbiterAI/storageManager.cpp
     ./src/arbiterAI/providers/baseProvider.h
@@ -89,11 +93,20 @@ set(arbiterai_src
     ./src/arbiterAI/providers/deepseek.cpp
     ./src/arbiterAI/providers/mock.h
     ./src/arbiterAI/providers/mock.cpp
-    ./src/arbiterAI/providers/llama.h
-    ./src/arbiterAI/providers/llama.cpp
    ./src/arbiterAI/providers/openrouter.h
    ./src/arbiterAI/providers/openrouter.cpp
 )
+
+if(ARBITERAI_ENABLE_LLAMA)
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/modelRuntime.h
+        ./src/arbiterAI/modelRuntime.cpp
+        ./src/arbiterAI/inferenceScheduler.h
+        ./src/arbiterAI/inferenceScheduler.cpp
+        ./src/arbiterAI/providers/llama.h
+        ./src/arbiterAI/providers/llama.cpp
+    )
+endif()
 
 # Add library
 add_library(arbiterai
@@ -108,16 +121,20 @@ target_include_directories(arbiterai
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
         $<INSTALL_INTERFACE:include>
-        ${LLAMA_INCLUDE_DIRS}
     PRIVATE
         ${PICOSHA2_INCLUDE_DIRS}
 )
+
+if(ARBITERAI_ENABLE_LLAMA)
+    target_include_directories(arbiterai PUBLIC ${LLAMA_INCLUDE_DIRS})
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_LLAMA=1)
+endif()
 
 target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
         nlohmann_json::nlohmann_json
-        llama
+        $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:llama>
         libgit2::libgit2package
     PRIVATE
         spdlog::spdlog
@@ -141,13 +158,18 @@ target_link_libraries(arbiterai
         tests/providerTests.cpp
         tests/mockProviderTests.cpp
         tests/hardwareDetectorTests.cpp
-        tests/modelRuntimeTests.cpp
         tests/telemetryCollectorTests.cpp
-        tests/inferenceSchedulerTests.cpp
-        tests/llamaProviderTests.cpp
         tests/storageManagerTests.cpp
         tests/serverConnectTests.cpp
     )
+
+    if(ARBITERAI_ENABLE_LLAMA)
+        target_sources(arbiterai_tests PRIVATE
+            tests/modelRuntimeTests.cpp
+            tests/llamaProviderTests.cpp
+            tests/inferenceSchedulerTests.cpp
+        )
+    endif()
     
     target_link_libraries(arbiterai_tests
         PRIVATE

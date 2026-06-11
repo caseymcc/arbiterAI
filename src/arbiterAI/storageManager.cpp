@@ -1,5 +1,7 @@
 #include "arbiterAI/storageManager.h"
+#ifdef ARBITERAI_ENABLE_LLAMA
 #include "arbiterAI/modelRuntime.h"
+#endif
 
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -825,6 +827,7 @@ std::vector<CleanupCandidate> StorageManager::collectCleanupCandidates() const
 
         // Skip entries that are currently Loaded, Ready, or Downloading in ModelRuntime
         // Note: we don't hold ModelRuntime's lock here, so this is a best-effort check
+#ifdef ARBITERAI_ENABLE_LLAMA
         std::optional<LoadedModel> runtimeState=ModelRuntime::instance().getModelState(entry.modelName);
         if(runtimeState.has_value())
         {
@@ -834,6 +837,7 @@ std::vector<CleanupCandidate> StorageManager::collectCleanupCandidates() const
                 continue;
             }
         }
+#endif
 
         // Check staleness
         auto age=std::chrono::duration_cast<std::chrono::hours>(now-entry.lastUsedAt);
@@ -878,6 +882,7 @@ DownloadedModelFile StorageManager::entryToPublic(const ModelFileEntry &entry) c
     f.isProtected=entry.isProtected;
 
     // Cross-reference runtime state
+#ifdef ARBITERAI_ENABLE_LLAMA
     std::optional<LoadedModel> runtimeState=ModelRuntime::instance().getModelState(entry.modelName);
     if(runtimeState.has_value()&&runtimeState->variant==entry.variant)
     {
@@ -891,6 +896,7 @@ DownloadedModelFile StorageManager::entryToPublic(const ModelFileEntry &entry) c
         }
     }
     else
+#endif
     {
         f.runtimeState="Unloaded";
     }

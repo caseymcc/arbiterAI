@@ -66,9 +66,15 @@ SystemSnapshot TelemetryCollector::getSnapshot() const
 
     SystemSnapshot snapshot;
     snapshot.hardware=HardwareDetector::instance().getSystemInfo();
+#ifdef ARBITERAI_ENABLE_LLAMA
     snapshot.models=ModelRuntime::instance().getModelStates();
+#endif
     snapshot.avgTokensPerSecond=getAvgTokensPerSecond();
+#ifdef ARBITERAI_ENABLE_LLAMA
     snapshot.activeRequests=ModelRuntime::instance().getActiveInferenceCount();
+#else
+    snapshot.activeRequests=0;
+#endif
 
     // Calculate average prompt/generation speeds over last 5 minutes
     std::chrono::system_clock::time_point cutoff=

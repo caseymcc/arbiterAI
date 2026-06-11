@@ -47,6 +47,7 @@ struct ChatConfig
     std::optional<double> topP;                 ///< Top-p sampling parameter
     std::optional<double> presencePenalty;      ///< Presence penalty
     std::optional<double> frequencyPenalty;     ///< Frequency penalty
+    std::optional<bool> cachePrompt;            ///< llama.cpp server extension: reuse KV cache for the common prompt prefix (only sent when set)
 };
 
 inline void to_json(nlohmann::json &j, const ChatConfig &c)
@@ -63,6 +64,7 @@ inline void to_json(nlohmann::json &j, const ChatConfig &c)
     if (c.topP.has_value()) j["top_p"] = c.topP.value();
     if (c.presencePenalty.has_value()) j["presence_penalty"] = c.presencePenalty.value();
     if (c.frequencyPenalty.has_value()) j["frequency_penalty"] = c.frequencyPenalty.value();
+    if (c.cachePrompt.has_value()) j["cache_prompt"] = c.cachePrompt.value();
 }
 
 inline void from_json(const nlohmann::json &j, ChatConfig &c)

@@ -2,7 +2,9 @@
 #define _ARBITERAI_TELEMETRYCOLLECTOR_H_
 
 #include "arbiterAI/hardwareDetector.h"
+#ifdef ARBITERAI_ENABLE_LLAMA
 #include "arbiterAI/modelRuntime.h"
+#endif
 
 #include <string>
 #include <vector>
@@ -12,6 +14,16 @@
 
 namespace arbiterAI
 {
+
+#ifndef ARBITERAI_ENABLE_LLAMA
+// Minimal stub when local model runtime is disabled
+struct LoadedModel {
+    std::string modelName;
+    std::string variant;
+    int vramUsageMb=0;
+    int ramUsageMb=0;
+};
+#endif
 
 struct InferenceStats {
     std::string model;

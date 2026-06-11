@@ -219,18 +219,23 @@ CompletionRequest ChatClient::buildRequest(const CompletionRequest& userRequest)
         ? userRequest.frequency_penalty
         : m_config.frequencyPenalty;
 
-    // Add tools if configured
-    if (!m_tools.empty())
-    {
-        fullRequest.tools = m_tools;
-    }
-    else if (userRequest.tools.has_value())
+    // Add tools — request-level tools take priority over session-level tools.
+    // If the request explicitly sets tools (even to empty), respect that.
+    if (userRequest.tools.has_value())
     {
         fullRequest.tools = userRequest.tools;
+    }
+    else if (!m_tools.empty())
+    {
+        fullRequest.tools = m_tools;
     }
 
     fullRequest.tool_choice = userRequest.tool_choice;
     fullRequest.stop = userRequest.stop;
+    fullRequest.timeout_ms = userRequest.timeout_ms;
+    fullRequest.cache_prompt = userRequest.cache_prompt.has_value()
+        ? userRequest.cache_prompt
+        : m_config.cachePrompt;
 
     return fullRequest;
 }
