@@ -15,6 +15,12 @@ struct llama_context;
 namespace arbiterAI
 {
 
+/// How many leading tokens of promptTokens are already present in the KV
+/// cache (per cachedTokens) and can skip prefill.  Always leaves at least
+/// one prompt token to decode so the final position has fresh logits.
+int kvPrefixReuseLength(const std::vector<int32_t> &cachedTokens,
+    const std::vector<int32_t> &promptTokens);
+
 class Llama : public BaseProvider {
 public:
     Llama();
