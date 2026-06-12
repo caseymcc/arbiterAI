@@ -164,7 +164,7 @@ ErrorCode OpenAI::completion(const CompletionRequest &request,
     auto session = cpr::Session();
     session.SetUrl(cpr::Url{completionUrl});
     session.SetHeader(headers);
-    session.SetBody(cpr::Body{body.dump()});
+    session.SetBody(cpr::Body{body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)});
     session.SetVerifySsl(cpr::VerifySsl{true});
     session.SetTimeout(cpr::Timeout{timeoutMs});
 
@@ -527,7 +527,7 @@ ErrorCode OpenAI::streamingCompletion(const CompletionRequest &request,
     auto session=cpr::Session();
     session.SetUrl(cpr::Url{ completionUrl });
     session.SetHeader(headers);
-    session.SetBody(body.dump());
+    session.SetBody(body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     session.SetVerifySsl(true);
 
     // Make streaming request
@@ -598,7 +598,7 @@ ErrorCode OpenAI::getEmbeddings(const EmbeddingRequest &request,
     auto raw_response=cpr::Post(
         cpr::Url{ embeddingUrl },
         headers,
-        cpr::Body{ body.dump() },
+        cpr::Body{ body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) },
         cpr::VerifySsl{ true },
         cpr::Timeout{ 60000 },
         cpr::LowSpeed{ 1, std::chrono::seconds(60) }
