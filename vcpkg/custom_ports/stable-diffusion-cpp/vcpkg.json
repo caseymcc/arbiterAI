@@ -1,0 +1,19 @@
+{
+    "name": "stable-diffusion-cpp",
+    "version-date": "2025-01-01",
+    "port-version": 0,
+    "description": "Stable Diffusion and Flux in pure C/C++ (ggml)",
+    "homepage": "https://github.com/leejet/stable-diffusion.cpp",
+    "license": "MIT",
+    "dependencies": [
+      {
+        "name": "vcpkg-cmake",
+        "host": true
+      },
+      {
+        "name": "vcpkg-cmake-config",
+        "host": true
+      },
+      "llama-cpp"
+    ]
+  }

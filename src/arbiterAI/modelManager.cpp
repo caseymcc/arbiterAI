@@ -439,6 +439,16 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
         info.apiFormat=modelJson["api_format"].get<std::string>();
     }
 
+    if(modelJson.contains("whisper_options")&&modelJson["whisper_options"].is_object())
+    {
+        info.whisperOptions=modelJson["whisper_options"];
+    }
+
+    if(modelJson.contains("sd_options")&&modelJson["sd_options"].is_object())
+    {
+        info.sdOptions=modelJson["sd_options"];
+    }
+
     return true;
 }
 

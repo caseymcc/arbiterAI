@@ -65,6 +65,9 @@ public:
     /// Initialize with the models directory path.
     void initialize(const std::filesystem::path &modelsDir);
 
+    /// Get the configured models directory (where downloaded weights live).
+    std::filesystem::path getModelsDir() const { return m_modelsDir; }
+
     /// Shut down the background flush/cleanup timers.
     void shutdown();
 

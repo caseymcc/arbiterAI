@@ -1,0 +1,24 @@
+{
+    "name": "whisper-cpp",
+    "version": "1.7.4",
+    "port-version": 0,
+    "description": "Port of OpenAI's Whisper model in C/C++ (speech-to-text)",
+    "homepage": "https://github.com/ggml-org/whisper.cpp",
+    "license": "MIT",
+    "dependencies": [
+      {
+        "name": "vcpkg-cmake",
+        "host": true
+      },
+      {
+        "name": "vcpkg-cmake-config",
+        "host": true
+      },
+      "llama-cpp"
+    ],
+    "features": {
+      "head": {
+        "description": "Build from latest master HEAD instead of a pinned release tag"
+      }
+    }
+  }

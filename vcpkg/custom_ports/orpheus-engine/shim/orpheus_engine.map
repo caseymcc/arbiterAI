@@ -1,0 +1,4 @@
+{
+    global: arbiter_orpheus_tts;
+    local: *;
+};

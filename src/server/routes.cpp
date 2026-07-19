@@ -670,6 +670,25 @@ nlohmann::json buildServerConfigResponse(const nlohmann::json &cfg)
     return response;
 }
 
+/// Serialize a JSON body that may contain model-generated text. Model output can
+/// contain invalid UTF-8 — a multi-byte character clipped at a token/length
+/// boundary, or a llama.cpp byte-fallback token — and nlohmann's default (strict)
+/// dump() throws json.exception.type_error.316 on that. Uncaught, it terminates
+/// the whole server (SIGABRT), killing every in-flight request. Serialize with the
+/// 'replace' error handler and never let a serialization error escape.
+std::string safeDump(const nlohmann::json &j)
+{
+    try
+    {
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+    catch(const std::exception &e)
+    {
+        spdlog::error("safeDump: failed to serialize response body: {}", e.what());
+        return "{}";
+    }
+}
+
 /// Generate a unique ID with the given prefix (e.g., "chatcmpl-").
 std::string generateId(const std::string &prefix="chatcmpl-")
 {
@@ -920,7 +939,17 @@ nlohmann::json inferenceStatsToJson(const InferenceStats &s)
         {"latency_ms", s.latencyMs},
         {"total_time_ms", s.totalTimeMs},
         {"prompt_time_ms", s.promptTimeMs},
-        {"generation_time_ms", s.generationTimeMs}
+        {"generation_time_ms", s.generationTimeMs},
+        // Modality-aware fields (non-token engines). Clients group by
+        // (model, variant, hardware) to benchmark/normalize STT/image speed.
+        {"modality", s.modality},
+        {"images_generated", s.imagesGenerated},
+        {"image_steps", s.imageSteps},
+        {"audio_seconds", s.audioSeconds},
+        {"audio_characters", s.audioCharacters},
+        {"realtime_factor", s.realtimeFactor},
+        {"steps_per_second", s.stepsPerSecond},
+        {"cost", s.cost}
     };
 }
 
@@ -1476,6 +1505,11 @@ void registerRoutes(httplib::Server &server)
     // Embeddings (OpenAI-compatible)
     server.Post("/v1/embeddings", handleEmbeddings);
 
+    // Multimodal: audio / image (OpenAI-compatible)
+    server.Post("/v1/audio/transcriptions", handleAudioTranscriptions);
+    server.Post("/v1/audio/speech", handleAudioSpeech);
+    server.Post("/v1/images/generations", handleImageGenerations);
+
     // Model management
     server.Get("/api/models", handleGetModels);
     server.Get("/api/models/loaded", handleGetLoadedModels);
@@ -1804,7 +1838,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                                 {"finish_reason", nullptr}
                             }}}
                         };
-                        std::string line="data: "+sseChunk.dump()+"\n\n";
+                        std::string line="data: "+safeDump(sseChunk)+"\n\n";
                         if(!sink.write(line.c_str(), line.length()))
                         {
                             // Client disconnected — cancel the job
@@ -1847,7 +1881,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                                 {"finish_reason", nullptr}
                             }}}
                         };
-                        std::string line="data: "+sseChunk.dump()+"\n\n";
+                        std::string line="data: "+safeDump(sseChunk)+"\n\n";
                         sink.write(line.c_str(), line.length());
                     };
 
@@ -1982,8 +2016,13 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 status=503;
             }
 
+            std::string errMsg="Completion failed: "+errCode;
+            if(!job->errorDetail.empty())
+            {
+                errMsg+=" — "+job->errorDetail;
+            }
             res.status=status;
-            res.set_content(errorJson("Completion failed: "+errCode, errType, "", errCode).dump(), "application/json");
+            res.set_content(errorJson(errMsg, errType, "", errCode).dump(), "application/json");
             return;
         }
 
@@ -2035,7 +2074,12 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 if(err!=ErrorCode::Success)
                 {
                     std::string errCode=errorCodeToString(err);
-                    std::string errBody=errorJson("Completion failed: "+errCode, "server_error", "", errCode).dump();
+                    std::string errMsg="Completion failed: "+errCode;
+                    if(!job->errorDetail.empty())
+                    {
+                        errMsg+=" — "+job->errorDetail;
+                    }
+                    std::string errBody=errorJson(errMsg, "server_error", "", errCode).dump();
                     sink.write(errBody.c_str(), errBody.length());
                     sink.done();
                     return true;
@@ -2127,7 +2171,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                     }}
                 };
 
-                std::string body=responseJson.dump();
+                std::string body=safeDump(responseJson);
                 sink.write(body.c_str(), body.length());
                 sink.done();
                 return true;
@@ -2259,7 +2303,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
             }}
         };
 
-        res.set_content(responseJson.dump(), "application/json");
+        res.set_content(safeDump(responseJson), "application/json");
     }
 }
 
@@ -2441,7 +2485,255 @@ void handleEmbeddings(const httplib::Request &req, httplib::Response &res)
         }}
     };
 
-    res.set_content(responseJson.dump(), "application/json");
+    res.set_content(safeDump(responseJson), "application/json");
+}
+
+// ========== Multimodal: Audio / Image (OpenAI-compatible) ==========
+
+namespace
+{
+
+/// Map an audio container/codec name to a MIME type for the response body.
+std::string audioMimeType(const std::string &format)
+{
+    if(format=="mp3")  return "audio/mpeg";
+    if(format=="opus") return "audio/opus";
+    if(format=="aac")  return "audio/aac";
+    if(format=="flac") return "audio/flac";
+    if(format=="wav")  return "audio/wav";
+    if(format=="pcm")  return "audio/L16";
+    return "application/octet-stream";
+}
+
+/// Verify the requested model exists and is configured for the expected
+/// modality (ModelInfo::mode). On mismatch, fills res with an error and returns
+/// false. This is where mode is authoritative: it prevents e.g. pointing the
+/// transcription endpoint at a chat model.
+bool requireModelMode(const std::string &model, const char *expectedMode, httplib::Response &res)
+{
+    auto info=ModelManager::instance().getModelInfo(model);
+    if(!info)
+    {
+        res.status=404;
+        res.set_content(errorJson("Model '"+model+"' not found", "invalid_request_error", "model", "model_not_found").dump(), "application/json");
+        return false;
+    }
+    if(info->mode!=expectedMode)
+    {
+        res.status=400;
+        res.set_content(errorJson("Model '"+model+"' has mode '"+info->mode
+            +"', but this endpoint requires mode '"+expectedMode+"'",
+            "invalid_request_error", "model", "wrong_mode").dump(), "application/json");
+        return false;
+    }
+    return true;
+}
+
+/// Translate a multimodal ErrorCode into an OpenAI-style HTTP status.
+int multimodalHttpStatus(ErrorCode err)
+{
+    switch(err)
+    {
+        case ErrorCode::UnknownModel:
+        case ErrorCode::InvalidRequest:
+        case ErrorCode::InvalidResponse:
+            return 400;
+        case ErrorCode::NotImplemented:
+        case ErrorCode::UnsupportedProvider:
+            return 501;
+        case ErrorCode::ApiKeyNotFound:
+            return 401;
+        default:
+            return 500;
+    }
+}
+
+} // namespace
+
+void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &res)
+{
+    if(!req.has_file("file"))
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing 'file' in multipart form data", "invalid_request_error", "file", "missing_field").dump(), "application/json");
+        return;
+    }
+
+    const auto &file=req.get_file_value("file");
+
+    AudioTranscriptionRequest request;
+    request.audio.assign(file.content.begin(), file.content.end());
+    if(!file.filename.empty())
+        request.filename=file.filename;
+
+    if(req.has_file("model"))
+        request.model=req.get_file_value("model").content;
+    if(request.model.empty())
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing 'model' in multipart form data", "invalid_request_error", "model", "missing_field").dump(), "application/json");
+        return;
+    }
+
+    if(!requireModelMode(request.model, modes::Transcription, res))
+        return;
+
+    if(req.has_file("language"))
+        request.language=req.get_file_value("language").content;
+    if(req.has_file("prompt"))
+        request.prompt=req.get_file_value("prompt").content;
+    if(req.has_file("response_format"))
+        request.responseFormat=req.get_file_value("response_format").content;
+    if(req.has_file("temperature"))
+    {
+        try { request.temperature=std::stod(req.get_file_value("temperature").content); }
+        catch(const std::exception &) {}
+    }
+
+    AudioTranscriptionResponse response;
+    ErrorCode err=ArbiterAI::instance().transcribe(request, response);
+    if(err!=ErrorCode::Success)
+    {
+        res.status=multimodalHttpStatus(err);
+        res.set_content(errorJson("Transcription failed: "+errorCodeToString(err), "server_error", "", errorCodeToString(err)).dump(), "application/json");
+        return;
+    }
+
+    // response_format=text (or srt/vtt) returns the raw transcript; the JSON
+    // formats return an object.
+    const std::string format=request.responseFormat.value_or("json");
+    if(format=="text" || format=="srt" || format=="vtt")
+    {
+        res.set_content(response.text, "text/plain");
+        return;
+    }
+
+    nlohmann::json responseJson={{"text", response.text}};
+    if(!response.language.empty())
+        responseJson["language"]=response.language;
+    if(response.duration>0.0)
+        responseJson["duration"]=response.duration;
+    res.set_content(safeDump(responseJson), "application/json");
+}
+
+void handleAudioSpeech(const httplib::Request &req, httplib::Response &res)
+{
+    nlohmann::json requestJson;
+    try
+    {
+        requestJson=nlohmann::json::parse(req.body);
+    }
+    catch(const nlohmann::json::parse_error &)
+    {
+        res.status=400;
+        res.set_content(errorJson("Failed to parse JSON body", "invalid_request_error", "", "parse_error").dump(), "application/json");
+        return;
+    }
+
+    SpeechRequest request;
+    try
+    {
+        request.model=requestJson.at("model").get<std::string>();
+        request.input=requestJson.at("input").get<std::string>();
+        if(requestJson.contains("voice"))
+            request.voice=requestJson.at("voice").get<std::string>();
+        if(requestJson.contains("response_format"))
+            request.responseFormat=requestJson.at("response_format").get<std::string>();
+        if(requestJson.contains("speed"))
+            request.speed=requestJson.at("speed").get<double>();
+    }
+    catch(const nlohmann::json::exception &e)
+    {
+        res.status=400;
+        res.set_content(errorJson(std::string("JSON validation error: ")+e.what(), "invalid_request_error", "", "invalid_request").dump(), "application/json");
+        return;
+    }
+
+    if(!requireModelMode(request.model, modes::Speech, res))
+        return;
+
+    SpeechResponse response;
+    ErrorCode err=ArbiterAI::instance().synthesizeSpeech(request, response);
+    if(err!=ErrorCode::Success)
+    {
+        res.status=multimodalHttpStatus(err);
+        res.set_content(errorJson("Speech synthesis failed: "+errorCodeToString(err), "server_error", "", errorCodeToString(err)).dump(), "application/json");
+        return;
+    }
+
+    res.set_content(reinterpret_cast<const char *>(response.audio.data()),
+        response.audio.size(), audioMimeType(response.format));
+}
+
+void handleImageGenerations(const httplib::Request &req, httplib::Response &res)
+{
+    nlohmann::json requestJson;
+    try
+    {
+        requestJson=nlohmann::json::parse(req.body);
+    }
+    catch(const nlohmann::json::parse_error &)
+    {
+        res.status=400;
+        res.set_content(errorJson("Failed to parse JSON body", "invalid_request_error", "", "parse_error").dump(), "application/json");
+        return;
+    }
+
+    ImageGenerationRequest request;
+    try
+    {
+        request.model=requestJson.at("model").get<std::string>();
+        request.prompt=requestJson.at("prompt").get<std::string>();
+        if(requestJson.contains("negative_prompt"))
+            request.negativePrompt=requestJson.at("negative_prompt").get<std::string>();
+        if(requestJson.contains("n"))
+            request.n=requestJson.at("n").get<int>();
+        if(requestJson.contains("size"))
+            request.size=requestJson.at("size").get<std::string>();
+        if(requestJson.contains("steps"))
+            request.steps=requestJson.at("steps").get<int>();
+        if(requestJson.contains("seed"))
+            request.seed=requestJson.at("seed").get<int64_t>();
+        if(requestJson.contains("response_format"))
+            request.responseFormat=requestJson.at("response_format").get<std::string>();
+    }
+    catch(const nlohmann::json::exception &e)
+    {
+        res.status=400;
+        res.set_content(errorJson(std::string("JSON validation error: ")+e.what(), "invalid_request_error", "", "invalid_request").dump(), "application/json");
+        return;
+    }
+
+    if(!requireModelMode(request.model, modes::Image, res))
+        return;
+
+    ImageGenerationResponse response;
+    ErrorCode err=ArbiterAI::instance().generateImage(request, response);
+    if(err!=ErrorCode::Success)
+    {
+        res.status=multimodalHttpStatus(err);
+        res.set_content(errorJson("Image generation failed: "+errorCodeToString(err), "server_error", "", errorCodeToString(err)).dump(), "application/json");
+        return;
+    }
+
+    nlohmann::json data=nlohmann::json::array();
+    for(const GeneratedImage &image:response.images)
+    {
+        nlohmann::json item=nlohmann::json::object();
+        if(!image.url.empty())
+            item["url"]=image.url;
+        if(!image.b64Json.empty())
+            item["b64_json"]=image.b64Json;
+        if(!image.revisedPrompt.empty())
+            item["revised_prompt"]=image.revisedPrompt;
+        data.push_back(item);
+    }
+
+    nlohmann::json responseJson={
+        {"created", std::time(nullptr)},
+        {"data", data}
+    };
+    res.set_content(safeDump(responseJson), "application/json");
 }
 
 // ========== Health ==========
@@ -3273,7 +3565,13 @@ void handleGetStats(const httplib::Request &, httplib::Response &res)
         {"avg_tokens_per_second", snapshot.avgTokensPerSecond},
         {"avg_prompt_tokens_per_second", snapshot.avgPromptTokensPerSecond},
         {"avg_generation_tokens_per_second", snapshot.avgGenerationTokensPerSecond},
-        {"active_requests", snapshot.activeRequests}
+        {"active_requests", snapshot.activeRequests},
+        {"modality", {
+            {"requests_by_modality", snapshot.requestsByModality},
+            {"images_generated", snapshot.imagesGenerated},
+            {"audio_seconds_transcribed", snapshot.audioSecondsTranscribed},
+            {"characters_synthesized", snapshot.charactersSynthesized}
+        }}
     };
 
     res.set_content(response.dump(), "application/json");

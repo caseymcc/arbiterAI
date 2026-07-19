@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.15)
 project(arbiterAI VERSION 0.1.14 LANGUAGES C CXX)
 
 option(ARBITERAI_ENABLE_LLAMA "Enable local llama.cpp model runtime support" ON)
+option(ARBITERAI_ENABLE_WHISPER "Enable local whisper.cpp speech-to-text support" OFF)
+option(ARBITERAI_ENABLE_STABLE_DIFFUSION "Enable local stable-diffusion.cpp image generation support" OFF)
+option(ARBITERAI_ENABLE_VIBEVOICE "Enable local vibevoice.cpp text-to-speech support" OFF)
+option(ARBITERAI_ENABLE_ORPHEUS "Enable local Orpheus TTS via a dlopen'd chatllm.cpp engine library" OFF)
 
 # Read llama-cpp build number from our custom vcpkg port
 if(ARBITERAI_ENABLE_LLAMA)
@@ -50,6 +54,18 @@ find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
 if(ARBITERAI_ENABLE_LLAMA)
     find_package(llama CONFIG REQUIRED)
+endif()
+if(ARBITERAI_ENABLE_WHISPER)
+    find_package(whisper CONFIG REQUIRED)
+endif()
+if(ARBITERAI_ENABLE_STABLE_DIFFUSION)
+    find_package(stable-diffusion CONFIG REQUIRED)
+    find_package(ZLIB REQUIRED)
+endif()
+if(ARBITERAI_ENABLE_VIBEVOICE)
+    # vibevoice.cpp installs a lib + header but no package config.
+    find_path(VIBEVOICE_INCLUDE_DIR NAMES vibevoice_capi.h REQUIRED)
+    find_library(VIBEVOICE_LIBRARY NAMES vibevoice REQUIRED)
 endif()
 find_package(libgit2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
@@ -108,6 +124,35 @@ if(ARBITERAI_ENABLE_LLAMA)
     )
 endif()
 
+if(ARBITERAI_ENABLE_WHISPER)
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/providers/whisper.h
+        ./src/arbiterAI/providers/whisper.cpp
+    )
+endif()
+
+if(ARBITERAI_ENABLE_STABLE_DIFFUSION)
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/providers/stableDiffusion.h
+        ./src/arbiterAI/providers/stableDiffusion.cpp
+    )
+endif()
+
+if(ARBITERAI_ENABLE_VIBEVOICE)
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/providers/vibevoice.h
+        ./src/arbiterAI/providers/vibevoice.cpp
+    )
+endif()
+
+if(ARBITERAI_ENABLE_ORPHEUS)
+    # dlopen-based: needs only libdl (already linked via CMAKE_DL_LIBS).
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/providers/orpheus.h
+        ./src/arbiterAI/providers/orpheus.cpp
+    )
+endif()
+
 # Add library
 add_library(arbiterai
     ${arbiterai_src}
@@ -130,11 +175,32 @@ if(ARBITERAI_ENABLE_LLAMA)
     target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_LLAMA=1)
 endif()
 
+if(ARBITERAI_ENABLE_WHISPER)
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_WHISPER=1)
+endif()
+
+if(ARBITERAI_ENABLE_STABLE_DIFFUSION)
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_STABLE_DIFFUSION=1)
+endif()
+
+if(ARBITERAI_ENABLE_VIBEVOICE)
+    target_include_directories(arbiterai PRIVATE ${VIBEVOICE_INCLUDE_DIR})
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_VIBEVOICE=1)
+endif()
+
+if(ARBITERAI_ENABLE_ORPHEUS)
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_ORPHEUS=1)
+endif()
+
 target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
         nlohmann_json::nlohmann_json
         $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:llama>
+        $<$<BOOL:${ARBITERAI_ENABLE_WHISPER}>:whisper>
+        $<$<BOOL:${ARBITERAI_ENABLE_STABLE_DIFFUSION}>:stable-diffusion>
+        $<$<BOOL:${ARBITERAI_ENABLE_STABLE_DIFFUSION}>:ZLIB::ZLIB>
+        $<$<BOOL:${ARBITERAI_ENABLE_VIBEVOICE}>:${VIBEVOICE_LIBRARY}>
         libgit2::libgit2package
     PRIVATE
         spdlog::spdlog
@@ -168,6 +234,30 @@ target_link_libraries(arbiterai
             tests/modelRuntimeTests.cpp
             tests/llamaProviderTests.cpp
             tests/inferenceSchedulerTests.cpp
+        )
+    endif()
+
+    if(ARBITERAI_ENABLE_WHISPER)
+        target_sources(arbiterai_tests PRIVATE
+            tests/whisperProviderTests.cpp
+        )
+    endif()
+
+    if(ARBITERAI_ENABLE_STABLE_DIFFUSION)
+        target_sources(arbiterai_tests PRIVATE
+            tests/stableDiffusionProviderTests.cpp
+        )
+    endif()
+
+    if(ARBITERAI_ENABLE_VIBEVOICE)
+        target_sources(arbiterai_tests PRIVATE
+            tests/vibevoiceProviderTests.cpp
+        )
+    endif()
+
+    if(ARBITERAI_ENABLE_ORPHEUS)
+        target_sources(arbiterai_tests PRIVATE
+            tests/orpheusProviderTests.cpp
         )
     endif()
     

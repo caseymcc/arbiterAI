@@ -30,7 +30,7 @@
           "provider": {
             "type": "string",
             "description": "Model provider/service",
-            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock"]
+            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock", "whisper", "stable-diffusion", "vibevoice", "orpheus"]
           },
           "ranking": {
             "type": "integer",
@@ -41,7 +41,8 @@
           },
           "mode": {
             "type": "string",
-            "description": "Operation mode",
+            "description": "Model modality. Routes requests to the matching endpoint/method: chat completions, embeddings, speech-to-text (transcription), text-to-speech (speech), or image generation (image).",
+            "enum": ["chat", "embedding", "transcription", "speech", "image"],
             "default": "chat"
           },
           "api_base": {
@@ -125,7 +126,7 @@
           },
           "pricing": {
             "type": "object",
-            "description": "Token pricing information",
+            "description": "Pricing information. Token costs apply to chat/embedding models; the modality-specific costs apply to image/audio models.",
             "properties": {
               "prompt_token_cost": {
                 "type": "number",
@@ -133,6 +134,21 @@
               },
               "completion_token_cost": {
                 "type": "number",
+                "minimum": 0
+              },
+              "image_cost": {
+                "type": "number",
+                "description": "Cost per generated image (mode: image)",
+                "minimum": 0
+              },
+              "audio_input_cost_per_second": {
+                "type": "number",
+                "description": "Cost per second of transcribed audio (mode: transcription)",
+                "minimum": 0
+              },
+              "audio_output_cost_per_character": {
+                "type": "number",
+                "description": "Cost per character of synthesized speech (mode: speech)",
                 "minimum": 0
               }
             }
@@ -305,6 +321,56 @@
             "description": "Output format produced by the model. When set (e.g. 'harmony'), the server converts the model's native output to standard OpenAI API format so clients don't need to understand the model's native format.",
             "enum": ["", "harmony"],
             "default": ""
+          },
+          "whisper_options": {
+            "type": "object",
+            "description": "Engine-specific defaults for the whisper (transcription) provider. Applied when the request omits the corresponding field.",
+            "properties": {
+              "language": {
+                "type": "string",
+                "description": "Default language hint (ISO-639-1, or 'auto' to detect)"
+              },
+              "translate": {
+                "type": "boolean",
+                "description": "Translate to English instead of transcribing in the source language"
+              }
+            },
+            "additionalProperties": false
+          },
+          "sd_options": {
+            "type": "object",
+            "description": "Engine-specific defaults for the stable-diffusion (image) provider. Applied when the request omits the corresponding field.",
+            "properties": {
+              "steps": {
+                "type": "integer",
+                "description": "Default number of diffusion sample steps",
+                "minimum": 1
+              },
+              "cfg_scale": {
+                "type": "number",
+                "description": "Default classifier-free guidance scale",
+                "minimum": 0
+              },
+              "sampler": {
+                "type": "string",
+                "description": "Sampling method (e.g. euler_a, dpm++2m, dpm++2mv2)"
+              },
+              "width": {
+                "type": "integer",
+                "description": "Default image width in pixels",
+                "minimum": 64
+              },
+              "height": {
+                "type": "integer",
+                "description": "Default image height in pixels",
+                "minimum": 64
+              },
+              "vae_path": {
+                "type": "string",
+                "description": "Optional path to an external VAE file"
+              }
+            },
+            "additionalProperties": false
           }
         }
       }

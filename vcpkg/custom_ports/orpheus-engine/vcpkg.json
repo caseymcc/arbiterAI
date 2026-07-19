@@ -1,0 +1,14 @@
+{
+    "name": "orpheus-engine",
+    "version-date": "2025-01-01",
+    "port-version": 0,
+    "description": "Self-contained Orpheus TTS engine (chatllm.cpp) exposing arbiter_orpheus_tts, dlopen'd by arbiterAI",
+    "homepage": "https://github.com/foldl/chatllm.cpp",
+    "license": "MIT",
+    "dependencies": [
+      {
+        "name": "vcpkg-cmake",
+        "host": true
+      }
+    ]
+  }

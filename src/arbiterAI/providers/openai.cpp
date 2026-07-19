@@ -707,4 +707,206 @@ ErrorCode OpenAI::getAvailableModels(std::vector<std::string>& models)
     return ErrorCode::Success;
 }
 
+ErrorCode OpenAI::transcribe(const AudioTranscriptionRequest &request,
+    const ModelInfo &model,
+    AudioTranscriptionResponse &response)
+{
+    std::string apiKey;
+    auto result=getApiKey(request.model, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    std::string baseUrl=(model.apiBase.has_value() && !model.apiBase->empty())
+        ? model.apiBase.value() : m_apiUrl;
+    std::string url=baseUrl+"/audio/transcriptions";
+
+    // Multipart upload: file + model + optional decoding hints.
+    // Do not set Content-Type here — cpr fills in the multipart boundary.
+    cpr::Multipart multipart{
+        {"file", cpr::Buffer{request.audio.begin(), request.audio.end(), request.filename}},
+        {"model", request.model}
+    };
+    if(request.language.has_value())
+        multipart.parts.emplace_back("language", request.language.value());
+    if(request.prompt.has_value())
+        multipart.parts.emplace_back("prompt", request.prompt.value());
+    if(request.temperature.has_value())
+        multipart.parts.emplace_back("temperature", std::to_string(request.temperature.value()));
+    if(request.responseFormat.has_value())
+        multipart.parts.emplace_back("response_format", request.responseFormat.value());
+
+    cpr::Header headers;
+    if(!apiKey.empty())
+        headers["Authorization"]="Bearer "+apiKey;
+
+    auto raw_response=cpr::Post(
+        cpr::Url{ url },
+        headers,
+        multipart,
+        cpr::VerifySsl{ true },
+        cpr::Timeout{ 300000 }
+    );
+
+    if(raw_response.status_code!=200)
+    {
+        spdlog::warn("OpenAI provider: transcription HTTP {} from {} (body: {})",
+            raw_response.status_code, url, raw_response.text.substr(0, 500));
+        return ErrorCode::NetworkError;
+    }
+
+    response.model=request.model;
+    response.provider="openai";
+
+    // response_format=text returns raw text; json/verbose_json return an object.
+    const std::string trimmed=raw_response.text;
+    size_t firstNonWs=trimmed.find_first_not_of(" \t\r\n");
+    if(firstNonWs!=std::string::npos && trimmed[firstNonWs]=='{')
+    {
+        nlohmann::json jsonResponse;
+        try
+        {
+            jsonResponse=nlohmann::json::parse(trimmed);
+        }
+        catch(const nlohmann::json::parse_error &)
+        {
+            return ErrorCode::InvalidResponse;
+        }
+        if(jsonResponse.contains("text"))
+            response.text=jsonResponse["text"].get<std::string>();
+        if(jsonResponse.contains("language") && !jsonResponse["language"].is_null())
+            response.language=jsonResponse["language"].get<std::string>();
+        if(jsonResponse.contains("duration") && jsonResponse["duration"].is_number())
+            response.duration=jsonResponse["duration"].get<double>();
+    }
+    else
+    {
+        response.text=trimmed;
+    }
+
+    return ErrorCode::Success;
+}
+
+ErrorCode OpenAI::synthesizeSpeech(const SpeechRequest &request,
+    const ModelInfo &model,
+    SpeechResponse &response)
+{
+    std::string apiKey;
+    auto result=getApiKey(request.model, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    std::string baseUrl=(model.apiBase.has_value() && !model.apiBase->empty())
+        ? model.apiBase.value() : m_apiUrl;
+    std::string url=baseUrl+"/audio/speech";
+
+    nlohmann::json body;
+    body["model"]=request.model;
+    body["input"]=request.input;
+    body["voice"]=request.voice;
+    std::string format=request.responseFormat.value_or("mp3");
+    body["response_format"]=format;
+    if(request.speed.has_value())
+        body["speed"]=request.speed.value();
+
+    auto raw_response=cpr::Post(
+        cpr::Url{ url },
+        createHeaders(apiKey),
+        cpr::Body{ body.dump() },
+        cpr::VerifySsl{ true },
+        cpr::Timeout{ 300000 }
+    );
+
+    if(raw_response.status_code!=200)
+    {
+        spdlog::warn("OpenAI provider: speech HTTP {} from {} (body: {})",
+            raw_response.status_code, url, raw_response.text.substr(0, 500));
+        return ErrorCode::NetworkError;
+    }
+
+    // The body is the raw (binary-safe) audio payload.
+    response.audio.assign(raw_response.text.begin(), raw_response.text.end());
+    response.format=format;
+    response.model=request.model;
+    response.provider="openai";
+
+    return ErrorCode::Success;
+}
+
+ErrorCode OpenAI::generateImage(const ImageGenerationRequest &request,
+    const ModelInfo &model,
+    ImageGenerationResponse &response)
+{
+    std::string apiKey;
+    auto result=getApiKey(request.model, request.api_key, apiKey);
+    if(result!=ErrorCode::Success)
+    {
+        return result;
+    }
+
+    std::string baseUrl=(model.apiBase.has_value() && !model.apiBase->empty())
+        ? model.apiBase.value() : m_apiUrl;
+    std::string url=baseUrl+"/images/generations";
+
+    nlohmann::json body;
+    body["model"]=request.model;
+    body["prompt"]=request.prompt;
+    if(request.n.has_value())
+        body["n"]=request.n.value();
+    if(request.size.has_value())
+        body["size"]=request.size.value();
+    if(request.responseFormat.has_value())
+        body["response_format"]=request.responseFormat.value();
+
+    auto raw_response=cpr::Post(
+        cpr::Url{ url },
+        createHeaders(apiKey),
+        cpr::Body{ body.dump() },
+        cpr::VerifySsl{ true },
+        cpr::Timeout{ 300000 }
+    );
+
+    if(raw_response.status_code!=200)
+    {
+        spdlog::warn("OpenAI provider: image HTTP {} from {} (body: {})",
+            raw_response.status_code, url, raw_response.text.substr(0, 500));
+        return ErrorCode::NetworkError;
+    }
+
+    nlohmann::json jsonResponse;
+    try
+    {
+        jsonResponse=nlohmann::json::parse(raw_response.text);
+    }
+    catch(const nlohmann::json::parse_error &)
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    if(!jsonResponse.contains("data") || !jsonResponse["data"].is_array())
+    {
+        return ErrorCode::InvalidResponse;
+    }
+
+    for(const auto &item:jsonResponse["data"])
+    {
+        GeneratedImage image;
+        if(item.contains("url") && !item["url"].is_null())
+            image.url=item["url"].get<std::string>();
+        if(item.contains("b64_json") && !item["b64_json"].is_null())
+            image.b64Json=item["b64_json"].get<std::string>();
+        if(item.contains("revised_prompt") && !item["revised_prompt"].is_null())
+            image.revisedPrompt=item["revised_prompt"].get<std::string>();
+        response.images.push_back(image);
+    }
+
+    response.model=request.model;
+    response.provider="openai";
+
+    return ErrorCode::Success;
+}
+
 } // namespace arbiterAI

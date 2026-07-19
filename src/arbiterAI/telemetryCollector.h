@@ -11,6 +11,7 @@
 #include <chrono>
 #include <mutex>
 #include <deque>
+#include <map>
 
 namespace arbiterAI
 {
@@ -28,6 +29,7 @@ struct LoadedModel {
 struct InferenceStats {
     std::string model;
     std::string variant;
+    std::string modality{ "chat" }; // chat, embedding, transcription, speech, image
     uint64_t jobId=0;
     bool cancelled=false;
     double tokensPerSecond=0.0;
@@ -35,6 +37,15 @@ struct InferenceStats {
     double generationTokensPerSecond=0.0; // generation speed (tokens out / sec)
     int promptTokens=0;
     int completionTokens=0;
+    // Non-token modality counters (0 for chat/embedding).
+    int imagesGenerated=0;      // image: number of images produced
+    int imageSteps=0;           // image: diffusion steps used (per image)
+    double audioSeconds=0.0;    // transcription: input audio duration (s)
+    int audioCharacters=0;      // speech: input characters synthesized
+    // Non-token modality speed metrics (0 when N/A).
+    double realtimeFactor=0.0;  // transcription: audioSeconds / wall-time (x realtime)
+    double stepsPerSecond=0.0;  // image: total diffusion steps / wall-time
+    double cost=0.0;            // estimated cost for this request
     double latencyMs=0.0;      // time to first token
     double totalTimeMs=0.0;    // total request time
     double promptTimeMs=0.0;   // time spent processing prompt
@@ -56,6 +67,11 @@ struct SystemSnapshot {
     double avgPromptTokensPerSecond=0.0;
     double avgGenerationTokensPerSecond=0.0;
     int activeRequests=0;
+    // Modality-aware aggregates over the recent window (5 min).
+    std::map<std::string, int> requestsByModality; // request count per modality
+    int imagesGenerated=0;                          // total images generated
+    double audioSecondsTranscribed=0.0;             // total STT audio seconds
+    int charactersSynthesized=0;                    // total TTS input characters
 };
 
 class TelemetryCollector {

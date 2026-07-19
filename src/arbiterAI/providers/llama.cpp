@@ -16,6 +16,63 @@
 namespace arbiterAI
 {
 
+namespace
+{
+
+/// Byte length of the largest prefix of s that ends on a complete UTF-8
+/// sequence (i.e. does not split a multi-byte character). A lead byte with too
+/// few following continuation bytes is held back; stray/invalid bytes are passed
+/// through as-is.
+size_t utf8CompleteLen(const std::string &s)
+{
+    size_t i=0, complete=0;
+    while(i<s.size())
+    {
+        unsigned char c=static_cast<unsigned char>(s[i]);
+        size_t need;
+        if(c<0x80)            need=1; // 0xxxxxxx
+        else if((c>>5)==0x6)  need=2; // 110xxxxx
+        else if((c>>4)==0xE)  need=3; // 1110xxxx
+        else if((c>>3)==0x1E) need=4; // 11110xxx
+        else { i+=1; complete=i; continue; } // invalid lead / stray continuation
+        if(i+need>s.size()) break;    // truncated multi-byte at the tail — hold back
+        i+=need;
+        complete=i;
+    }
+    return complete;
+}
+
+/// Wraps a streaming callback so it never emits a partial multi-byte UTF-8
+/// character. Model tokens can split a character across token boundaries (or emit
+/// a llama.cpp byte-fallback token); emitting that as a streaming delta yields
+/// invalid UTF-8. Complete characters are forwarded immediately; an incomplete
+/// tail is buffered until the next token completes it, and any residue is flushed
+/// on destruction (end of generation).
+class Utf8StreamBuffer
+{
+public:
+    explicit Utf8StreamBuffer(const std::function<void(const std::string &)> &cb) : m_cb(cb) {}
+    ~Utf8StreamBuffer() { if(m_cb && !m_pending.empty()) m_cb(m_pending); }
+
+    void feed(const std::string &text)
+    {
+        if(!m_cb) return;
+        m_pending+=text;
+        size_t n=utf8CompleteLen(m_pending);
+        if(n>0)
+        {
+            m_cb(m_pending.substr(0, n));
+            m_pending.erase(0, n);
+        }
+    }
+
+private:
+    const std::function<void(const std::string &)> &m_cb;
+    std::string m_pending;
+};
+
+} // namespace
+
 Llama::Llama():
     BaseProvider("llama")
 {
@@ -714,6 +771,7 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
         if(nTokens<0)
         {
             spdlog::error("Failed to tokenize prompt");
+            m_lastErrorDetail="failed to tokenize prompt";
             return ErrorCode::GenerationError;
         }
     }
@@ -755,6 +813,9 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
         {
             spdlog::error("[llama] llama_decode failed during prompt processing (chunk at offset {}, chunkSize={}, totalTokens={}, result={})",
                 start, chunkSize, nTokens, decodeResult);
+            m_lastErrorDetail="llama backend failed to process the prompt (llama_decode result="
+                +std::to_string(decodeResult)+", "+std::to_string(nTokens)
+                +" prompt tokens) — the context may exceed the model/hardware limit or the GPU backend errored";
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
         }
@@ -827,6 +888,8 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
             harmonyCallToken, harmonyReturnToken);
     }
 
+    Utf8StreamBuffer streamBuf(streamCallback);
+
     for(int i=0; i<maxOutputTokens; ++i)
     {
         llama_token nextToken=llama_sampler_sample(samplerChain, ctx, -1);
@@ -843,7 +906,7 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
                 if(nextToken==harmonyCallToken)
                 {
                     result+="<|call|>";
-                    if(streamCallback) streamCallback("<|call|>");
+                    streamBuf.feed("<|call|>");
                 }
                 completionTokens++;
                 break;
@@ -869,10 +932,7 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
             result+=tokenText;
             completionTokens++;
 
-            if(streamCallback)
-            {
-                streamCallback(tokenText);
-            }
+            streamBuf.feed(tokenText);
         }
 
         // Check stop sequences
@@ -910,6 +970,9 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
         {
             spdlog::error("[llama] llama_decode failed during generation (token #{}, pos={}, result={})",
                 i, nCur-1, decodeResult);
+            m_lastErrorDetail="llama backend failed during token generation (llama_decode result="
+                +std::to_string(decodeResult)+" at position "+std::to_string(nCur-1)
+                +") — likely a GPU/backend error or the context was exhausted";
             llama_sampler_free(samplerChain);
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
@@ -961,6 +1024,7 @@ ErrorCode Llama::tokenizePrompt(llama_model *model,
         if(nTokens<0)
         {
             spdlog::error("Failed to tokenize prompt");
+            m_lastErrorDetail="failed to tokenize the formatted prompt";
             return ErrorCode::GenerationError;
         }
     }
@@ -1022,6 +1086,9 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
         {
             spdlog::error("[llama] llama_decode failed during prompt processing (chunk at offset {}, chunkSize={}, totalTokens={}, result={})",
                 start, chunkSize, nTokens, decodeResult);
+            m_lastErrorDetail="llama backend failed to process the prompt (llama_decode result="
+                +std::to_string(decodeResult)+", "+std::to_string(nTokens)
+                +" prompt tokens) — the context may exceed the model/hardware limit or the GPU backend errored";
             llama_batch_free(batch);
             return ErrorCode::GenerationError;
         }
@@ -1085,6 +1152,8 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
             harmonyCallToken, harmonyReturnToken);
     }
 
+    Utf8StreamBuffer streamBuf(streamCallback);
+
     for(int i=0; i<maxOutputTokens; ++i)
     {
         // Check abort every token
@@ -1108,7 +1177,7 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
                 if(nextToken==harmonyCallToken)
                 {
                     result+="<|call|>";
-                    if(streamCallback) streamCallback("<|call|>");
+                    streamBuf.feed("<|call|>");
                 }
                 completionTokens++;
                 break;
@@ -1132,10 +1201,7 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
             result+=tokenText;
             completionTokens++;
 
-            if(streamCallback)
-            {
-                streamCallback(tokenText);
-            }
+            streamBuf.feed(tokenText);
         }
 
         if(request.stop.has_value())
@@ -1170,6 +1236,9 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
         {
             spdlog::error("[llama] llama_decode failed during generation (token #{}, pos={}, result={})",
                 i, nCur-1, decodeResult);
+            m_lastErrorDetail="llama backend failed during token generation (llama_decode result="
+                +std::to_string(decodeResult)+" at position "+std::to_string(nCur-1)
+                +") — likely a GPU/backend error or the context was exhausted";
             llama_sampler_free(samplerChain);
             llama_batch_free(batch);
             return ErrorCode::GenerationError;

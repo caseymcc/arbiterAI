@@ -96,6 +96,12 @@ SystemSnapshot TelemetryCollector::getSnapshot() const
                 genSum+=stat.generationTokensPerSecond;
                 genCount++;
             }
+
+            // Modality-aware aggregates
+            snapshot.requestsByModality[stat.modality]++;
+            snapshot.imagesGenerated+=stat.imagesGenerated;
+            snapshot.audioSecondsTranscribed+=stat.audioSeconds;
+            snapshot.charactersSynthesized+=stat.audioCharacters;
         }
     }
 

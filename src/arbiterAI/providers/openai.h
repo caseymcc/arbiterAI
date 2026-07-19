@@ -25,6 +25,18 @@ public:
     ErrorCode getEmbeddings(const EmbeddingRequest &request,
         EmbeddingResponse &response) override;
 
+    ErrorCode transcribe(const AudioTranscriptionRequest &request,
+        const ModelInfo &model,
+        AudioTranscriptionResponse &response) override;
+
+    ErrorCode synthesizeSpeech(const SpeechRequest &request,
+        const ModelInfo &model,
+        SpeechResponse &response) override;
+
+    ErrorCode generateImage(const ImageGenerationRequest &request,
+        const ModelInfo &model,
+        ImageGenerationResponse &response) override;
+
     ErrorCode getAvailableModels(std::vector<std::string>& models) override;
 
     void setApiUrl(const std::string &url) override { m_apiUrl = url; }
