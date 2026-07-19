@@ -81,6 +81,9 @@ struct Pricing
 {
     double prompt_token_cost=0.0;
     double completion_token_cost=0.0;
+    double image_cost=0.0;                     ///< Per generated image (mode: image)
+    double audio_input_cost_per_second=0.0;    ///< Per second of transcribed audio (mode: transcription)
+    double audio_output_cost_per_character=0.0;///< Per character synthesized (mode: speech)
 };
 
 inline void to_json(nlohmann::json &j, const Pricing &p)
@@ -89,12 +92,21 @@ inline void to_json(nlohmann::json &j, const Pricing &p)
         {"prompt_token_cost", p.prompt_token_cost},
         {"completion_token_cost", p.completion_token_cost}
     };
+    if(p.image_cost>0.0)
+        j["image_cost"]=p.image_cost;
+    if(p.audio_input_cost_per_second>0.0)
+        j["audio_input_cost_per_second"]=p.audio_input_cost_per_second;
+    if(p.audio_output_cost_per_character>0.0)
+        j["audio_output_cost_per_character"]=p.audio_output_cost_per_character;
 }
 
 inline void from_json(const nlohmann::json &j, Pricing &p)
 {
-    j.at("prompt_token_cost").get_to(p.prompt_token_cost);
-    j.at("completion_token_cost").get_to(p.completion_token_cost);
+    if(j.contains("prompt_token_cost")) j.at("prompt_token_cost").get_to(p.prompt_token_cost);
+    if(j.contains("completion_token_cost")) j.at("completion_token_cost").get_to(p.completion_token_cost);
+    if(j.contains("image_cost")) j.at("image_cost").get_to(p.image_cost);
+    if(j.contains("audio_input_cost_per_second")) j.at("audio_input_cost_per_second").get_to(p.audio_input_cost_per_second);
+    if(j.contains("audio_output_cost_per_character")) j.at("audio_output_cost_per_character").get_to(p.audio_output_cost_per_character);
 }
 
 struct ModelInfo
@@ -124,6 +136,8 @@ struct ModelInfo
     std::vector<std::string> backendPriority;   // Ordered preference: ["vulkan", "rocm", "cuda"]
     std::vector<std::string> disabledBackends;  // Backends to exclude (model-level override)
     std::string apiFormat;                      // API output format: "" (default/openai) or "harmony"
+    nlohmann::json whisperOptions;              // Engine-specific whisper (STT) defaults (whisper_options)
+    nlohmann::json sdOptions;                   // Engine-specific stable-diffusion (image) defaults (sd_options)
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;

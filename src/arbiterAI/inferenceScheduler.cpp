@@ -563,6 +563,11 @@ void InferenceScheduler::acceleratorLoop(AcceleratorQueue &queue)
         runtime.endInference(job->request.model);
         job->completionTokens.store(completionTokens);
 
+        if(code!=ErrorCode::Success)
+        {
+            job->errorDetail=llamaProvider.lastErrorDetail();
+        }
+
         auto endTime=std::chrono::steady_clock::now();
         double totalTimeMs=std::chrono::duration<double, std::milli>(
             endTime-job->inferenceStartTime).count();

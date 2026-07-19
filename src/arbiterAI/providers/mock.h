@@ -90,6 +90,36 @@ public:
         EmbeddingResponse &response) override;
 
     /**
+     * @brief Mock transcription (speech-to-text)
+     *
+     * Returns deterministic text. If the request prompt contains an
+     * <echo>...</echo> tag, the tagged content is returned instead.
+     */
+    ErrorCode transcribe(const AudioTranscriptionRequest &request,
+        const ModelInfo &model,
+        AudioTranscriptionResponse &response) override;
+
+    /**
+     * @brief Mock speech synthesis (text-to-speech)
+     *
+     * Returns the UTF-8 bytes of the input text as the "audio" payload so
+     * tests can assert on deterministic output without real audio.
+     */
+    ErrorCode synthesizeSpeech(const SpeechRequest &request,
+        const ModelInfo &model,
+        SpeechResponse &response) override;
+
+    /**
+     * @brief Mock image generation (diffusion)
+     *
+     * Returns a single deterministic image entry whose b64Json is derived
+     * from the prompt, and echoes the prompt back as revisedPrompt.
+     */
+    ErrorCode generateImage(const ImageGenerationRequest &request,
+        const ModelInfo &model,
+        ImageGenerationResponse &response) override;
+
+    /**
      * @brief Get available mock models
      *
      * Returns a single mock model identifier.

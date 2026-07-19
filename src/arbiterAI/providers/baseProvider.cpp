@@ -1,7 +1,11 @@
 #include "arbiterAI/providers/baseProvider.h"
 #include "arbiterAI/modelManager.h"
+#include "arbiterAI/modelDownloader.h"
+#include "arbiterAI/storageManager.h"
+#include <spdlog/spdlog.h>
 #include <cstdlib>
 #include <algorithm>
+#include <filesystem>
 #include <string>
 #include <future>
 #include <vector>
@@ -62,6 +66,62 @@ ErrorCode BaseProvider::getApiKey(const std::string &modelName,
 }
 
 
+std::string BaseProvider::resolveDownloadableModelFile(const ModelInfo &model)
+{
+    namespace fs=std::filesystem;
+
+    // 1. Explicit local file that already exists wins.
+    if(model.filePath.has_value() && !model.filePath->empty()
+        && fs::exists(model.filePath.value()))
+    {
+        return model.filePath.value();
+    }
+
+    // 2. Download from the primary variant's configured files if present.
+    if(!model.variants.empty())
+    {
+        const ModelVariant &variant=model.variants.front();
+        std::vector<VariantDownload> files=variant.getAllFiles();
+        std::string primaryFilename=variant.getPrimaryFilename();
+
+        if(!files.empty() && !primaryFilename.empty())
+        {
+            fs::path modelsDir=StorageManager::instance().getModelsDir();
+            if(modelsDir.empty())
+            {
+                spdlog::warn("{} provider: no models directory configured for auto-download of '{}'",
+                    m_provider, model.model);
+            }
+            else
+            {
+                ModelDownloader downloader;
+                for(const VariantDownload &file:files)
+                {
+                    if(file.url.empty() || file.filename.empty())
+                        continue;
+                    fs::path localPath=modelsDir/file.filename;
+                    if(fs::exists(localPath))
+                        continue;
+                    spdlog::info("{} provider: downloading '{}' -> '{}'",
+                        m_provider, file.url, localPath.string());
+                    std::optional<std::string> hash;
+                    if(!file.sha256.empty()) hash=file.sha256;
+                    auto fut=downloader.downloadModel(file.url, localPath.string(), hash);
+                    if(!fut.get())
+                    {
+                        spdlog::error("{} provider: download failed for '{}'", m_provider, file.url);
+                        return {};
+                    }
+                }
+                return (modelsDir/primaryFilename).string();
+            }
+        }
+    }
+
+    // 3. Fall back to file_path (may not exist / be empty — caller handles it).
+    return model.filePath.value_or(std::string{});
+}
+
 DownloadStatus BaseProvider::getDownloadStatus(const std::string &modelName, std::string &error)
 {
     // Default implementation for cloud providers - no download needed
@@ -82,6 +142,30 @@ ErrorCode BaseProvider::getDownloadProgress(const std::string &modelName, Downlo
 
 ErrorCode BaseProvider::getAvailableModels(std::vector<std::string>& models)
 {
+    return ErrorCode::NotImplemented;
+}
+
+ErrorCode BaseProvider::transcribe(const AudioTranscriptionRequest &request,
+    const ModelInfo &model,
+    AudioTranscriptionResponse &response)
+{
+    // Default: provider does not support speech-to-text
+    return ErrorCode::NotImplemented;
+}
+
+ErrorCode BaseProvider::synthesizeSpeech(const SpeechRequest &request,
+    const ModelInfo &model,
+    SpeechResponse &response)
+{
+    // Default: provider does not support text-to-speech
+    return ErrorCode::NotImplemented;
+}
+
+ErrorCode BaseProvider::generateImage(const ImageGenerationRequest &request,
+    const ModelInfo &model,
+    ImageGenerationResponse &response)
+{
+    // Default: provider does not support image generation
     return ErrorCode::NotImplemented;
 }
 

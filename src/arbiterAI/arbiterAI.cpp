@@ -19,6 +19,22 @@
 #include "arbiterAI/providers/llama.h"
 #endif
 
+#ifdef ARBITERAI_ENABLE_WHISPER
+#include "arbiterAI/providers/whisper.h"
+#endif
+
+#ifdef ARBITERAI_ENABLE_STABLE_DIFFUSION
+#include "arbiterAI/providers/stableDiffusion.h"
+#endif
+
+#ifdef ARBITERAI_ENABLE_VIBEVOICE
+#include "arbiterAI/providers/vibevoice.h"
+#endif
+
+#ifdef ARBITERAI_ENABLE_ORPHEUS
+#include "arbiterAI/providers/orpheus.h"
+#endif
+
 #include <memory>
 
 namespace arbiterAI
@@ -139,6 +155,30 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     else if(provider=="llama")
     {
         return std::make_unique<Llama>();
+    }
+#endif
+#ifdef ARBITERAI_ENABLE_WHISPER
+    else if(provider=="whisper")
+    {
+        return std::make_unique<Whisper>();
+    }
+#endif
+#ifdef ARBITERAI_ENABLE_STABLE_DIFFUSION
+    else if(provider=="stable-diffusion")
+    {
+        return std::make_unique<StableDiffusion>();
+    }
+#endif
+#ifdef ARBITERAI_ENABLE_VIBEVOICE
+    else if(provider=="vibevoice")
+    {
+        return std::make_unique<VibeVoice>();
+    }
+#endif
+#ifdef ARBITERAI_ENABLE_ORPHEUS
+    else if(provider=="orpheus")
+    {
+        return std::make_unique<Orpheus>();
     }
 #endif
     else if(provider=="openrouter")
@@ -432,6 +472,139 @@ ErrorCode ArbiterAI::getEmbeddings(const EmbeddingRequest &request, EmbeddingRes
     }
 
     return provider->getEmbeddings(request, response);
+}
+
+ErrorCode ArbiterAI::transcribe(const AudioTranscriptionRequest &request, AudioTranscriptionResponse &response)
+{
+    if(!ArbiterAI::instance().initialized)
+    {
+        return ErrorCode::InvalidRequest;
+    }
+
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    auto start=std::chrono::steady_clock::now();
+    ErrorCode result=provider->transcribe(request, *modelInfo, response);
+    if(result==ErrorCode::Success)
+    {
+        if(response.cost==0.0
+            && modelInfo->pricing.audio_input_cost_per_second>0.0 && response.duration>0.0)
+        {
+            response.cost=response.duration*modelInfo->pricing.audio_input_cost_per_second;
+        }
+
+        InferenceStats stats;
+        stats.model=request.model;
+        stats.modality=modes::Transcription;
+        stats.audioSeconds=response.duration;
+        stats.cost=response.cost;
+        stats.totalTimeMs=std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now()-start).count();
+        if(stats.totalTimeMs>0.0 && response.duration>0.0)
+            stats.realtimeFactor=response.duration/(stats.totalTimeMs/1000.0);
+        stats.timestamp=std::chrono::system_clock::now();
+        TelemetryCollector::instance().recordInference(stats);
+    }
+    return result;
+}
+
+ErrorCode ArbiterAI::synthesizeSpeech(const SpeechRequest &request, SpeechResponse &response)
+{
+    if(!ArbiterAI::instance().initialized)
+    {
+        return ErrorCode::InvalidRequest;
+    }
+
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    auto start=std::chrono::steady_clock::now();
+    ErrorCode result=provider->synthesizeSpeech(request, *modelInfo, response);
+    if(result==ErrorCode::Success)
+    {
+        if(response.cost==0.0 && modelInfo->pricing.audio_output_cost_per_character>0.0)
+        {
+            response.cost=static_cast<double>(request.input.length())
+                *modelInfo->pricing.audio_output_cost_per_character;
+        }
+
+        InferenceStats stats;
+        stats.model=request.model;
+        stats.modality=modes::Speech;
+        stats.audioCharacters=static_cast<int>(request.input.length());
+        stats.cost=response.cost;
+        stats.totalTimeMs=std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now()-start).count();
+        stats.timestamp=std::chrono::system_clock::now();
+        TelemetryCollector::instance().recordInference(stats);
+    }
+    return result;
+}
+
+ErrorCode ArbiterAI::generateImage(const ImageGenerationRequest &request, ImageGenerationResponse &response)
+{
+    if(!ArbiterAI::instance().initialized)
+    {
+        return ErrorCode::InvalidRequest;
+    }
+
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    auto start=std::chrono::steady_clock::now();
+    ErrorCode result=provider->generateImage(request, *modelInfo, response);
+    if(result==ErrorCode::Success)
+    {
+        if(response.cost==0.0 && modelInfo->pricing.image_cost>0.0)
+        {
+            response.cost=static_cast<double>(response.images.size())*modelInfo->pricing.image_cost;
+        }
+
+        InferenceStats stats;
+        stats.model=request.model;
+        stats.modality=modes::Image;
+        stats.imagesGenerated=static_cast<int>(response.images.size());
+        stats.imageSteps=request.steps.value_or(0);
+        stats.cost=response.cost;
+        stats.totalTimeMs=std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now()-start).count();
+        if(stats.totalTimeMs>0.0 && stats.imageSteps>0)
+        {
+            double totalSteps=static_cast<double>(stats.imageSteps)*stats.imagesGenerated;
+            stats.stepsPerSecond=totalSteps/(stats.totalTimeMs/1000.0);
+        }
+        stats.timestamp=std::chrono::system_clock::now();
+        TelemetryCollector::instance().recordInference(stats);
+    }
+    return result;
 }
 
 ErrorCode ArbiterAI::getDownloadStatus(const std::string &modelName, std::string &error)

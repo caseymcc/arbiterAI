@@ -1,0 +1,19 @@
+{
+    "name": "vibevoice-cpp",
+    "version-date": "2025-01-01",
+    "port-version": 0,
+    "description": "VibeVoice text-to-speech in C/C++ (ggml)",
+    "homepage": "https://github.com/localai-org/vibevoice.cpp",
+    "license": "MIT",
+    "dependencies": [
+      {
+        "name": "vcpkg-cmake",
+        "host": true
+      },
+      {
+        "name": "vcpkg-cmake-config",
+        "host": true
+      },
+      "llama-cpp"
+    ]
+  }

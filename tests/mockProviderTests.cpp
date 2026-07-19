@@ -390,4 +390,71 @@ TEST_F(MockProviderTest, SpecialCharactersInEcho)
     EXPECT_EQ(response.text, R"(Special chars: !@#$%^&*(){}[]|\"')");
 }
 
+// --- Multimodal (STT / TTS / Image) Tests ---
+
+TEST_F(MockProviderTest, TranscribeDefault)
+{
+    AudioTranscriptionRequest request;
+    request.model = "mock-model";
+    request.audio = {0x01, 0x02, 0x03, 0x04};
+
+    AudioTranscriptionResponse response;
+    ErrorCode result = provider->transcribe(request, modelInfo, response);
+
+    EXPECT_EQ(result, ErrorCode::Success);
+    EXPECT_THAT(response.text, ::testing::HasSubstr("mock transcription"));
+    EXPECT_EQ(response.provider, "mock");
+    EXPECT_EQ(response.language, "en");
+}
+
+TEST_F(MockProviderTest, TranscribeEchoPrompt)
+{
+    AudioTranscriptionRequest request;
+    request.model = "mock-model";
+    request.audio = {0x01, 0x02};
+    request.prompt = "hint <echo>hello world</echo>";
+    request.language = "fr";
+
+    AudioTranscriptionResponse response;
+    ErrorCode result = provider->transcribe(request, modelInfo, response);
+
+    EXPECT_EQ(result, ErrorCode::Success);
+    EXPECT_EQ(response.text, "hello world");
+    EXPECT_EQ(response.language, "fr");
+}
+
+TEST_F(MockProviderTest, SynthesizeSpeech)
+{
+    SpeechRequest request;
+    request.model = "mock-model";
+    request.input = "hello";
+    request.responseFormat = "mp3";
+
+    SpeechResponse response;
+    ErrorCode result = provider->synthesizeSpeech(request, modelInfo, response);
+
+    EXPECT_EQ(result, ErrorCode::Success);
+    ASSERT_EQ(response.audio.size(), 5u);
+    EXPECT_EQ(std::string(response.audio.begin(), response.audio.end()), "hello");
+    EXPECT_EQ(response.format, "mp3");
+    EXPECT_EQ(response.provider, "mock");
+}
+
+TEST_F(MockProviderTest, GenerateImage)
+{
+    ImageGenerationRequest request;
+    request.model = "mock-model";
+    request.prompt = "a red cube";
+    request.n = 2;
+
+    ImageGenerationResponse response;
+    ErrorCode result = provider->generateImage(request, modelInfo, response);
+
+    EXPECT_EQ(result, ErrorCode::Success);
+    ASSERT_EQ(response.images.size(), 2u);
+    EXPECT_FALSE(response.images[0].b64Json.empty());
+    EXPECT_EQ(response.images[0].revisedPrompt, "a red cube");
+    EXPECT_EQ(response.provider, "mock");
+}
+
 } // namespace arbiterAI

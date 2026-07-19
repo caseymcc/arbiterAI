@@ -100,6 +100,11 @@ struct InferenceJob {
     double generationTimeMs=0.0;
     ErrorCode result=ErrorCode::Success;
 
+    /// Human-readable detail for why the job failed (set alongside a non-Success
+    /// result), surfaced in the API error response so clients see the reason,
+    /// not just the error code. Empty on success.
+    std::string errorDetail;
+
     /// Completion token count. Atomic because the dashboard snapshots it
     /// while the accelerator thread is still generating.
     std::atomic<int> completionTokens{0};

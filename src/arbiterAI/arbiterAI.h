@@ -56,6 +56,17 @@ struct VersionInfo {
  */
 VersionInfo getVersion();
 
+/// Canonical model modality identifiers (see ModelInfo::mode). Used to route a
+/// request to the correct provider method and server endpoint.
+namespace modes
+{
+    constexpr const char *Chat="chat";
+    constexpr const char *Embedding="embedding";
+    constexpr const char *Transcription="transcription";
+    constexpr const char *Speech="speech";
+    constexpr const char *Image="image";
+}
+
 /**
  * @enum ErrorCode
  * @brief Error codes returned by ArbiterAI operations
@@ -506,6 +517,112 @@ struct EmbeddingResponse
     Usage usage;
 };
 
+// ========== Multimodal: Speech-to-text (STT) ==========
+
+/**
+ * @struct AudioTranscriptionRequest
+ * @brief Parameters for audio transcription (speech-to-text) requests
+ */
+struct AudioTranscriptionRequest
+{
+    std::string model;
+    std::vector<uint8_t> audio;              ///< Raw audio file bytes
+    std::string filename{ "audio.wav" };     ///< Original filename; extension informs the decoder
+    std::optional<std::string> language;     ///< ISO-639-1 language hint
+    std::optional<std::string> prompt;       ///< Optional decoding prompt / bias text
+    std::optional<double> temperature;       ///< Sampling temperature
+    std::optional<std::string> responseFormat; ///< json, text, verbose_json, srt, vtt
+    std::optional<std::string> api_key;
+    std::optional<std::string> provider;
+};
+
+/**
+ * @struct AudioTranscriptionResponse
+ * @brief Results from audio transcription requests
+ */
+struct AudioTranscriptionResponse
+{
+    std::string text;
+    std::string model;
+    std::string provider;
+    std::string language;    ///< Detected language, if reported
+    double duration = 0.0;   ///< Audio duration in seconds, if reported
+    double cost = 0.0;
+};
+
+// ========== Multimodal: Text-to-speech (TTS) ==========
+
+/**
+ * @struct SpeechRequest
+ * @brief Parameters for speech synthesis (text-to-speech) requests
+ */
+struct SpeechRequest
+{
+    std::string model;
+    std::string input;                       ///< Text to synthesize
+    std::string voice{ "alloy" };            ///< Voice identifier
+    std::optional<std::string> responseFormat; ///< mp3, opus, aac, flac, wav, pcm
+    std::optional<double> speed;             ///< Playback speed (0.25 - 4.0)
+    std::optional<std::string> api_key;
+    std::optional<std::string> provider;
+};
+
+/**
+ * @struct SpeechResponse
+ * @brief Results from speech synthesis requests
+ */
+struct SpeechResponse
+{
+    std::vector<uint8_t> audio;   ///< Raw synthesized audio bytes
+    std::string format;           ///< Container/codec of the returned audio
+    std::string model;
+    std::string provider;
+    double cost = 0.0;
+};
+
+// ========== Multimodal: Image generation (diffusion) ==========
+
+/**
+ * @struct ImageGenerationRequest
+ * @brief Parameters for image generation (diffusion) requests
+ */
+struct ImageGenerationRequest
+{
+    std::string model;
+    std::string prompt;
+    std::optional<std::string> negativePrompt; ///< Local diffusion only; ignored by OpenAI
+    std::optional<int> n;                       ///< Number of images to generate
+    std::optional<std::string> size;            ///< e.g. "1024x1024"
+    std::optional<int> steps;                   ///< Diffusion steps (local engines)
+    std::optional<int64_t> seed;                ///< RNG seed (local / reproducibility)
+    std::optional<std::string> responseFormat;  ///< url or b64_json
+    std::optional<std::string> api_key;
+    std::optional<std::string> provider;
+};
+
+/**
+ * @struct GeneratedImage
+ * @brief A single generated image result
+ */
+struct GeneratedImage
+{
+    std::string url;          ///< Populated when responseFormat == "url"
+    std::string b64Json;      ///< Base64-encoded image when responseFormat == "b64_json"
+    std::string revisedPrompt; ///< Provider-revised prompt, if any
+};
+
+/**
+ * @struct ImageGenerationResponse
+ * @brief Results from image generation requests
+ */
+struct ImageGenerationResponse
+{
+    std::vector<GeneratedImage> images;
+    std::string model;
+    std::string provider;
+    double cost = 0.0;
+};
+
 /**
  * @class ArbiterAI
  * @brief Main interface for ArbiterAI LLM operations
@@ -648,6 +765,32 @@ public:
      * @return ErrorCode indicating success or failure
      */
     ErrorCode getEmbeddings(const EmbeddingRequest &request, EmbeddingResponse &response);
+
+    // ========== Multimodal (STT / TTS / Image) ==========
+
+    /**
+     * @brief Transcribe audio to text (speech-to-text)
+     * @param request Transcription parameters (audio bytes + options)
+     * @param[out] response Transcription results
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode transcribe(const AudioTranscriptionRequest &request, AudioTranscriptionResponse &response);
+
+    /**
+     * @brief Synthesize speech from text (text-to-speech)
+     * @param request Speech synthesis parameters
+     * @param[out] response Synthesized audio bytes
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode synthesizeSpeech(const SpeechRequest &request, SpeechResponse &response);
+
+    /**
+     * @brief Generate image(s) from a text prompt (diffusion)
+     * @param request Image generation parameters
+     * @param[out] response Generated image(s)
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode generateImage(const ImageGenerationRequest &request, ImageGenerationResponse &response);
 
     /**
      * @brief Get download status for a model

@@ -14,5 +14,31 @@
         "libgit2",
         "cxxopts",
         "llama-cpp"
-    ]
+    ],
+    "features": {
+        "whisper": {
+            "description": "Local speech-to-text via whisper.cpp",
+            "dependencies": [
+                "whisper-cpp"
+            ]
+        },
+        "stable-diffusion": {
+            "description": "Local image generation via stable-diffusion.cpp",
+            "dependencies": [
+                "stable-diffusion-cpp"
+            ]
+        },
+        "vibevoice": {
+            "description": "Local text-to-speech via vibevoice.cpp",
+            "dependencies": [
+                "vibevoice-cpp"
+            ]
+        },
+        "orpheus": {
+            "description": "Local Orpheus TTS engine (chatllm.cpp), dlopen'd at runtime",
+            "dependencies": [
+                "orpheus-engine"
+            ]
+        }
+    }
 }

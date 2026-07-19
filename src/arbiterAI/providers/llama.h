@@ -39,6 +39,11 @@ public:
 
     ErrorCode getAvailableModels(std::vector<std::string> &models) override;
 
+    /// Human-readable detail for the most recent failure on this instance.
+    /// Set alongside a returned error code so callers can report *why* a
+    /// generation failed rather than just the error code. Empty on success.
+    const std::string &lastErrorDetail() const { return m_lastErrorDetail; }
+
     /// Tokenize the prompt outside of the inference mutex.
     /// Only reads llama_model/vocab (thread-safe without context lock).
     ErrorCode tokenizePrompt(llama_model *model,
@@ -69,6 +74,9 @@ private:
         std::string &result, int &promptTokens, int &completionTokens,
         double &promptTimeMs, double &generationTimeMs,
         std::function<void(const std::string &)> streamCallback);
+
+    /// Detail for the most recent failure (see lastErrorDetail()).
+    std::string m_lastErrorDetail;
 };
 
 } // namespace arbiterAI

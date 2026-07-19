@@ -111,6 +111,57 @@ ErrorCode Mock::getAvailableModels(std::vector<std::string>& models)
     return ErrorCode::Success;
 }
 
+ErrorCode Mock::transcribe(const AudioTranscriptionRequest &request,
+    const ModelInfo &model,
+    AudioTranscriptionResponse &response)
+{
+    std::string echoContent;
+    if(request.prompt.has_value() && extractEchoContent(request.prompt.value(), echoContent))
+    {
+        response.text=echoContent;
+    }
+    else
+    {
+        response.text="This is a mock transcription of "
+            +std::to_string(request.audio.size())+" bytes of audio.";
+    }
+    response.model=request.model;
+    response.provider="mock";
+    response.language=request.language.value_or("en");
+    return ErrorCode::Success;
+}
+
+ErrorCode Mock::synthesizeSpeech(const SpeechRequest &request,
+    const ModelInfo &model,
+    SpeechResponse &response)
+{
+    // Deterministic "audio": the UTF-8 bytes of the input text.
+    response.audio.assign(request.input.begin(), request.input.end());
+    response.format=request.responseFormat.value_or("wav");
+    response.model=request.model;
+    response.provider="mock";
+    return ErrorCode::Success;
+}
+
+ErrorCode Mock::generateImage(const ImageGenerationRequest &request,
+    const ModelInfo &model,
+    ImageGenerationResponse &response)
+{
+    int count=request.n.value_or(1);
+    if(count<1)
+        count=1;
+    for(int i=0; i<count; ++i)
+    {
+        GeneratedImage image;
+        image.b64Json="bW9jay1pbWFnZQ=="; // base64("mock-image")
+        image.revisedPrompt=request.prompt;
+        response.images.push_back(image);
+    }
+    response.model=request.model;
+    response.provider="mock";
+    return ErrorCode::Success;
+}
+
 bool Mock::extractEchoContent(const std::string &message, std::string &echoContent) const
 {
     // Use regex to find <echo>...</echo> tags (supporting multiline and greedy matching)

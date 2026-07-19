@@ -320,4 +320,57 @@ TEST_F(TelemetryCollectorTest, SwapModelRecordsTelemetry)
     EXPECT_GT(swaps[0].timeMs, 0.0);
 }
 
+// --- Modality-aware telemetry ---
+
+TEST_F(TelemetryCollectorTest, ModalityAggregatesInSnapshot)
+{
+    TelemetryCollector &tc=TelemetryCollector::instance();
+    auto now=std::chrono::system_clock::now();
+
+    InferenceStats img;
+    img.model="dall-e-3";
+    img.modality="image";
+    img.imagesGenerated=2;
+    img.cost=0.08;
+    img.timestamp=now;
+    tc.recordInference(img);
+
+    InferenceStats speech;
+    speech.model="tts-1";
+    speech.modality="speech";
+    speech.audioCharacters=5;
+    speech.timestamp=now;
+    tc.recordInference(speech);
+
+    InferenceStats stt;
+    stt.model="whisper-1";
+    stt.modality="transcription";
+    stt.audioSeconds=3.0;
+    stt.timestamp=now;
+    tc.recordInference(stt);
+
+    SystemSnapshot snap=tc.getSnapshot();
+    EXPECT_EQ(snap.imagesGenerated, 2);
+    EXPECT_EQ(snap.charactersSynthesized, 5);
+    EXPECT_DOUBLE_EQ(snap.audioSecondsTranscribed, 3.0);
+    EXPECT_EQ(snap.requestsByModality["image"], 1);
+    EXPECT_EQ(snap.requestsByModality["speech"], 1);
+    EXPECT_EQ(snap.requestsByModality["transcription"], 1);
+}
+
+TEST_F(TelemetryCollectorTest, ModalityDefaultsToChat)
+{
+    TelemetryCollector &tc=TelemetryCollector::instance();
+    InferenceStats stats;
+    stats.model="gpt-4";
+    stats.promptTokens=10;
+    stats.completionTokens=20;
+    stats.timestamp=std::chrono::system_clock::now();
+    tc.recordInference(stats);
+
+    SystemSnapshot snap=tc.getSnapshot();
+    EXPECT_EQ(snap.requestsByModality["chat"], 1);
+    EXPECT_EQ(snap.imagesGenerated, 0);
+}
+
 } // namespace arbiterAI

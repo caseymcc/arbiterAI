@@ -11,6 +11,12 @@ namespace arbiterAI
 
 struct EmbeddingRequest;
 struct EmbeddingResponse;
+struct AudioTranscriptionRequest;
+struct AudioTranscriptionResponse;
+struct SpeechRequest;
+struct SpeechResponse;
+struct ImageGenerationRequest;
+struct ImageGenerationResponse;
 
 /**
  * @class BaseProvider
@@ -83,6 +89,36 @@ public:
         EmbeddingResponse &response) = 0;
 
     /**
+     * @brief Transcribe audio to text (speech-to-text)
+     *
+     * Default implementation returns ErrorCode::NotImplemented. Providers that
+     * support STT override this.
+     */
+    virtual ErrorCode transcribe(const AudioTranscriptionRequest &request,
+        const ModelInfo &model,
+        AudioTranscriptionResponse &response);
+
+    /**
+     * @brief Synthesize speech from text (text-to-speech)
+     *
+     * Default implementation returns ErrorCode::NotImplemented. Providers that
+     * support TTS override this.
+     */
+    virtual ErrorCode synthesizeSpeech(const SpeechRequest &request,
+        const ModelInfo &model,
+        SpeechResponse &response);
+
+    /**
+     * @brief Generate image(s) from a text prompt (diffusion)
+     *
+     * Default implementation returns ErrorCode::NotImplemented. Providers that
+     * support image generation override this.
+     */
+    virtual ErrorCode generateImage(const ImageGenerationRequest &request,
+        const ModelInfo &model,
+        ImageGenerationResponse &response);
+
+    /**
      * @brief Get download status for a model (legacy interface)
      * @param modelName Name of the model
      * @param[out] error Error message if failed
@@ -132,6 +168,24 @@ public:
 protected:
     ErrorCode getApiKey(const std::string &modelName,
         const std::optional<std::string> &requestApiKey, std::string &apiKey);
+
+    /**
+     * @brief Resolve a local-engine model's weight file, downloading if needed.
+     *
+     * Resolution order:
+     *  1. If the model's `file_path` is set and the file exists, use it.
+     *  2. Otherwise, if the model's primary variant carries download info
+     *     (`variants[].download.url` / `files[]`), download every file to the
+     *     StorageManager models directory (skipping ones already present) and
+     *     return the primary file's local path — same auto-download behavior as
+     *     llama GGUFs. Multi-file variants (e.g. TTS model + tokenizer + voice)
+     *     are all fetched.
+     *  3. Otherwise return `file_path` as-is (may be empty; caller errors).
+     *
+     * The download is synchronous (blocks the load/first request). Returns an
+     * empty string only if a required download fails.
+     */
+    std::string resolveDownloadableModelFile(const ModelInfo &model);
 
 protected:
     std::string m_provider;

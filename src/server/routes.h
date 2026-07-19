@@ -27,6 +27,12 @@ void handleGetModelV1(const httplib::Request &req, httplib::Response &res);
 
 void handleEmbeddings(const httplib::Request &req, httplib::Response &res);
 
+// ========== Multimodal: Audio / Image (OpenAI-compatible) ==========
+
+void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &res);
+void handleAudioSpeech(const httplib::Request &req, httplib::Response &res);
+void handleImageGenerations(const httplib::Request &req, httplib::Response &res);
+
 // ========== Health ==========
 
 void handleHealth(const httplib::Request &req, httplib::Response &res);
