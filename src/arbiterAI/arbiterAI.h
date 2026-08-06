@@ -63,6 +63,8 @@ namespace modes
     constexpr const char *Chat="chat";
     constexpr const char *Embedding="embedding";
     constexpr const char *Transcription="transcription";
+    constexpr const char *AudioEmbedding="audio_embedding";
+    constexpr const char *AudioClassification="audio_classification";
     constexpr const char *Speech="speech";
     constexpr const char *Image="image";
 }
@@ -532,8 +534,36 @@ struct AudioTranscriptionRequest
     std::optional<std::string> prompt;       ///< Optional decoding prompt / bias text
     std::optional<double> temperature;       ///< Sampling temperature
     std::optional<std::string> responseFormat; ///< json, text, verbose_json, srt, vtt
+    std::optional<bool> wordTimestamps;      ///< Request word-level timestamps (verbose_json)
+    std::optional<bool> diarize;             ///< Request speaker diarization (engine-dependent)
     std::optional<std::string> api_key;
     std::optional<std::string> provider;
+};
+
+/**
+ * @struct TranscriptionWord
+ * @brief A single word with its time span and optional speaker
+ */
+struct TranscriptionWord
+{
+    std::string word;
+    double start = 0.0;          ///< Start time in seconds
+    double end = 0.0;            ///< End time in seconds
+    std::optional<int> speaker;  ///< Speaker index when diarization is available
+};
+
+/**
+ * @struct TranscriptionSegment
+ * @brief A contiguous transcript segment with timing, optional speaker and words
+ */
+struct TranscriptionSegment
+{
+    int id = 0;
+    double start = 0.0;          ///< Start time in seconds
+    double end = 0.0;            ///< End time in seconds
+    std::string text;
+    std::optional<int> speaker;  ///< Speaker index when diarization is available
+    std::vector<TranscriptionWord> words;
 };
 
 /**
@@ -548,6 +578,70 @@ struct AudioTranscriptionResponse
     std::string language;    ///< Detected language, if reported
     double duration = 0.0;   ///< Audio duration in seconds, if reported
     double cost = 0.0;
+    std::vector<TranscriptionSegment> segments; ///< Timed segments (verbose_json); empty for plain text
+};
+
+// ========== Multimodal: Speaker embedding (voice identity) ==========
+
+/**
+ * @struct AudioEmbeddingRequest
+ * @brief Parameters for a speaker-embedding (voice fingerprint) request
+ */
+struct AudioEmbeddingRequest
+{
+    std::string model;
+    std::vector<uint8_t> audio;            ///< Raw audio file bytes (WAV)
+    std::string filename{ "audio.wav" };   ///< Original filename; extension informs the decoder
+    std::optional<std::string> provider;
+};
+
+/**
+ * @struct AudioEmbeddingResponse
+ * @brief A single fixed-length speaker-embedding vector for the input audio
+ */
+struct AudioEmbeddingResponse
+{
+    std::string model;
+    std::string provider;
+    std::vector<float> embedding;   ///< L2-comparable voice fingerprint
+    double duration = 0.0;          ///< Audio duration in seconds
+};
+
+// ========== Multimodal: Audio classification (sound tagging) ==========
+
+/**
+ * @struct AudioClassificationRequest
+ * @brief Parameters for an audio-tagging (sound event) request
+ */
+struct AudioClassificationRequest
+{
+    std::string model;
+    std::vector<uint8_t> audio;            ///< Raw audio file bytes (WAV)
+    std::string filename{ "audio.wav" };
+    std::optional<int> topK;               ///< Max labels to return (default: model config)
+    std::optional<std::string> provider;
+};
+
+/**
+ * @struct AudioTag
+ * @brief A single audio-event label with its probability
+ */
+struct AudioTag
+{
+    std::string label;
+    float score = 0.0f;
+};
+
+/**
+ * @struct AudioClassificationResponse
+ * @brief Ranked audio-event labels for the input audio (most probable first)
+ */
+struct AudioClassificationResponse
+{
+    std::string model;
+    std::string provider;
+    std::vector<AudioTag> tags;
+    double duration = 0.0;
 };
 
 // ========== Multimodal: Text-to-speech (TTS) ==========
@@ -775,6 +869,22 @@ public:
      * @return ErrorCode indicating success or failure
      */
     ErrorCode transcribe(const AudioTranscriptionRequest &request, AudioTranscriptionResponse &response);
+
+    /**
+     * @brief Compute a speaker-embedding (voice fingerprint) for audio
+     * @param request Audio bytes + model
+     * @param[out] response The embedding vector
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode embedAudio(const AudioEmbeddingRequest &request, AudioEmbeddingResponse &response);
+
+    /**
+     * @brief Classify audio into sound-event labels (music, speech, TV, …)
+     * @param request Audio bytes + model
+     * @param[out] response Ranked labels with probabilities
+     * @return ErrorCode indicating success or failure
+     */
+    ErrorCode classifyAudio(const AudioClassificationRequest &request, AudioClassificationResponse &response);
 
     /**
      * @brief Synthesize speech from text (text-to-speech)

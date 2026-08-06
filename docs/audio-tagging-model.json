@@ -1,0 +1,32 @@
+{
+  "model": "audio-tagging",
+  "provider": "sherpa-onnx",
+  "mode": "audio_classification",
+  "ranking": 40,
+  "hardware_requirements": {
+    "min_system_ram_mb": 2048,
+    "parameter_count": "CED-tiny (~6M)"
+  },
+  "sherpa_options": {
+    "model_type": "audio_tagging",
+    "audio_tagging": {
+      "ced": "sherpa-onnx-ced-tiny-audio-tagging-2024-04-19/model.int8.onnx",
+      "labels": "sherpa-onnx-ced-tiny-audio-tagging-2024-04-19/class_labels_indices.csv",
+      "num_threads": 2,
+      "top_k": 5
+    }
+  },
+  "variants": [
+    {
+      "quantization": "int8",
+      "file_size_mb": 28,
+      "min_vram_mb": 0,
+      "recommended_vram_mb": 0,
+      "download": {
+        "filename": "sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2",
+        "sha256": "",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/audio-tagging-models/sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2"
+      }
+    }
+  ]
+}

@@ -13,6 +13,10 @@ struct EmbeddingRequest;
 struct EmbeddingResponse;
 struct AudioTranscriptionRequest;
 struct AudioTranscriptionResponse;
+struct AudioEmbeddingRequest;
+struct AudioEmbeddingResponse;
+struct AudioClassificationRequest;
+struct AudioClassificationResponse;
 struct SpeechRequest;
 struct SpeechResponse;
 struct ImageGenerationRequest;
@@ -97,6 +101,26 @@ public:
     virtual ErrorCode transcribe(const AudioTranscriptionRequest &request,
         const ModelInfo &model,
         AudioTranscriptionResponse &response);
+
+    /**
+     * @brief Compute a speaker-embedding (voice fingerprint) for audio
+     *
+     * Default implementation returns ErrorCode::NotImplemented. Providers that
+     * support speaker embeddings (sherpa-onnx) override this.
+     */
+    virtual ErrorCode embedAudio(const AudioEmbeddingRequest &request,
+        const ModelInfo &model,
+        AudioEmbeddingResponse &response);
+
+    /**
+     * @brief Classify audio into sound-event labels
+     *
+     * Default implementation returns ErrorCode::NotImplemented. Providers that
+     * support audio tagging (sherpa-onnx) override this.
+     */
+    virtual ErrorCode classifyAudio(const AudioClassificationRequest &request,
+        const ModelInfo &model,
+        AudioClassificationResponse &response);
 
     /**
      * @brief Synthesize speech from text (text-to-speech)

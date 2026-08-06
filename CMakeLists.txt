@@ -6,6 +6,7 @@ option(ARBITERAI_ENABLE_WHISPER "Enable local whisper.cpp speech-to-text support
 option(ARBITERAI_ENABLE_STABLE_DIFFUSION "Enable local stable-diffusion.cpp image generation support" OFF)
 option(ARBITERAI_ENABLE_VIBEVOICE "Enable local vibevoice.cpp text-to-speech support" OFF)
 option(ARBITERAI_ENABLE_ORPHEUS "Enable local Orpheus TTS via a dlopen'd chatllm.cpp engine library" OFF)
+option(ARBITERAI_ENABLE_SHERPA "Enable local speech-to-text via sherpa-onnx" OFF)
 
 # Read llama-cpp build number from our custom vcpkg port
 if(ARBITERAI_ENABLE_LLAMA)
@@ -66,6 +67,23 @@ if(ARBITERAI_ENABLE_VIBEVOICE)
     # vibevoice.cpp installs a lib + header but no package config.
     find_path(VIBEVOICE_INCLUDE_DIR NAMES vibevoice_capi.h REQUIRED)
     find_library(VIBEVOICE_LIBRARY NAMES vibevoice REQUIRED)
+endif()
+if(ARBITERAI_ENABLE_SHERPA)
+    # sherpa-onnx installs a header + several static libs but no package config.
+    find_path(SHERPA_ONNX_INCLUDE_DIR NAMES sherpa-onnx/c-api/c-api.h REQUIRED)
+    set(SHERPA_ONNX_LIBS "")
+    foreach(_l sherpa-onnx-c-api sherpa-onnx-core sherpa-onnx-fst sherpa-onnx-fstfar
+               sherpa-onnx-kaldifst-core kaldi-decoder-core kaldi-native-fbank-core
+               ssentencepiece_core onnxruntime)
+        find_library(SHERPA_LIB_${_l} NAMES ${_l} REQUIRED)
+        list(APPEND SHERPA_ONNX_LIBS ${SHERPA_LIB_${_l}})
+    endforeach()
+    # kissfft-float is a standalone lib only in newer sherpa-onnx (>=1.12); older
+    # versions (e.g. 1.10.39) fold kissfft into kaldi-native-fbank. Link only if present.
+    find_library(SHERPA_LIB_kissfft-float NAMES kissfft-float)
+    if(SHERPA_LIB_kissfft-float)
+        list(APPEND SHERPA_ONNX_LIBS ${SHERPA_LIB_kissfft-float})
+    endif()
 endif()
 find_package(libgit2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
@@ -153,6 +171,13 @@ if(ARBITERAI_ENABLE_ORPHEUS)
     )
 endif()
 
+if(ARBITERAI_ENABLE_SHERPA)
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/providers/sherpaOnnx.h
+        ./src/arbiterAI/providers/sherpaOnnx.cpp
+    )
+endif()
+
 # Add library
 add_library(arbiterai
     ${arbiterai_src}
@@ -192,6 +217,11 @@ if(ARBITERAI_ENABLE_ORPHEUS)
     target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_ORPHEUS=1)
 endif()
 
+if(ARBITERAI_ENABLE_SHERPA)
+    target_include_directories(arbiterai PRIVATE ${SHERPA_ONNX_INCLUDE_DIR})
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_SHERPA=1)
+endif()
+
 target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
@@ -210,6 +240,13 @@ target_link_libraries(arbiterai
         OpenSSL::Crypto
         ${CMAKE_DL_LIBS}
 )
+
+if(ARBITERAI_ENABLE_SHERPA)
+    # sherpa-onnx ships several interdependent static libs and no package config;
+    # wrap them in a link group so the circular references resolve.
+    target_link_libraries(arbiterai PRIVATE
+        -Wl,--start-group ${SHERPA_ONNX_LIBS} -Wl,--end-group)
+endif()
  
  if(BUILD_TESTING)
     find_package(GTest CONFIG REQUIRED)
@@ -258,6 +295,12 @@ target_link_libraries(arbiterai
     if(ARBITERAI_ENABLE_ORPHEUS)
         target_sources(arbiterai_tests PRIVATE
             tests/orpheusProviderTests.cpp
+        )
+    endif()
+
+    if(ARBITERAI_ENABLE_SHERPA)
+        target_sources(arbiterai_tests PRIVATE
+            tests/sherpaOnnxProviderTests.cpp
         )
     endif()
     

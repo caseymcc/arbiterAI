@@ -449,6 +449,11 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
         info.sdOptions=modelJson["sd_options"];
     }
 
+    if(modelJson.contains("sherpa_options")&&modelJson["sherpa_options"].is_object())
+    {
+        info.sherpaOptions=modelJson["sherpa_options"];
+    }
+
     return true;
 }
 
@@ -684,6 +689,12 @@ void ModelManager::mergeModelInfo(ModelInfo &existing, const ModelInfo &source, 
         existing.configVersion=source.configVersion;
     if(sourceJson.contains("api_format"))
         existing.apiFormat=source.apiFormat;
+    if(sourceJson.contains("whisper_options"))
+        existing.whisperOptions=source.whisperOptions;
+    if(sourceJson.contains("sd_options"))
+        existing.sdOptions=source.sdOptions;
+    if(sourceJson.contains("sherpa_options"))
+        existing.sherpaOptions=source.sherpaOptions;
 }
 
 bool ModelManager::addModelFromJson(const nlohmann::json &modelJson, std::string &error)
@@ -1064,6 +1075,14 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
     {
         j["api_format"]=info.apiFormat;
     }
+
+    // Engine-specific option blocks (whisper / stable-diffusion / sherpa-onnx)
+    if(info.whisperOptions.is_object()&&!info.whisperOptions.empty())
+        j["whisper_options"]=info.whisperOptions;
+    if(info.sdOptions.is_object()&&!info.sdOptions.empty())
+        j["sd_options"]=info.sdOptions;
+    if(info.sherpaOptions.is_object()&&!info.sherpaOptions.empty())
+        j["sherpa_options"]=info.sherpaOptions;
 
     return j;
 }

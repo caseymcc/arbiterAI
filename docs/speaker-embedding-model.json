@@ -1,0 +1,30 @@
+{
+  "model": "speaker-embedding",
+  "provider": "sherpa-onnx",
+  "mode": "audio_embedding",
+  "ranking": 40,
+  "hardware_requirements": {
+    "min_system_ram_mb": 2048,
+    "parameter_count": "CAM++ (~7M)"
+  },
+  "sherpa_options": {
+    "model_type": "speaker_embedding",
+    "num_threads": 2,
+    "speaker_embedding": {
+      "model": "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
+    }
+  },
+  "variants": [
+    {
+      "quantization": "onnx",
+      "file_size_mb": 28,
+      "min_vram_mb": 0,
+      "recommended_vram_mb": 0,
+      "download": {
+        "filename": "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        "sha256": "",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recognition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
+      }
+    }
+  ]
+}

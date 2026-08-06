@@ -30,6 +30,8 @@ void handleEmbeddings(const httplib::Request &req, httplib::Response &res);
 // ========== Multimodal: Audio / Image (OpenAI-compatible) ==========
 
 void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &res);
+void handleAudioEmbeddings(const httplib::Request &req, httplib::Response &res);
+void handleAudioClassify(const httplib::Request &req, httplib::Response &res);
 void handleAudioSpeech(const httplib::Request &req, httplib::Response &res);
 void handleImageGenerations(const httplib::Request &req, httplib::Response &res);
 

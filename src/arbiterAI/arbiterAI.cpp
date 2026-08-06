@@ -35,6 +35,10 @@
 #include "arbiterAI/providers/orpheus.h"
 #endif
 
+#ifdef ARBITERAI_ENABLE_SHERPA
+#include "arbiterAI/providers/sherpaOnnx.h"
+#endif
+
 #include <memory>
 
 namespace arbiterAI
@@ -179,6 +183,12 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     else if(provider=="orpheus")
     {
         return std::make_unique<Orpheus>();
+    }
+#endif
+#ifdef ARBITERAI_ENABLE_SHERPA
+    else if(provider=="sherpa-onnx")
+    {
+        return std::make_unique<SherpaOnnx>();
     }
 #endif
     else if(provider=="openrouter")
@@ -512,6 +522,76 @@ ErrorCode ArbiterAI::transcribe(const AudioTranscriptionRequest &request, AudioT
             std::chrono::steady_clock::now()-start).count();
         if(stats.totalTimeMs>0.0 && response.duration>0.0)
             stats.realtimeFactor=response.duration/(stats.totalTimeMs/1000.0);
+        stats.timestamp=std::chrono::system_clock::now();
+        TelemetryCollector::instance().recordInference(stats);
+    }
+    return result;
+}
+
+ErrorCode ArbiterAI::embedAudio(const AudioEmbeddingRequest &request, AudioEmbeddingResponse &response)
+{
+    if(!ArbiterAI::instance().initialized)
+    {
+        return ErrorCode::InvalidRequest;
+    }
+
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    auto start=std::chrono::steady_clock::now();
+    ErrorCode result=provider->embedAudio(request, *modelInfo, response);
+    if(result==ErrorCode::Success)
+    {
+        InferenceStats stats;
+        stats.model=request.model;
+        stats.modality=modes::AudioEmbedding;
+        stats.audioSeconds=response.duration;
+        stats.totalTimeMs=std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now()-start).count();
+        stats.timestamp=std::chrono::system_clock::now();
+        TelemetryCollector::instance().recordInference(stats);
+    }
+    return result;
+}
+
+ErrorCode ArbiterAI::classifyAudio(const AudioClassificationRequest &request, AudioClassificationResponse &response)
+{
+    if(!ArbiterAI::instance().initialized)
+    {
+        return ErrorCode::InvalidRequest;
+    }
+
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(request.model);
+    if(!modelInfo)
+    {
+        return ErrorCode::UnknownModel;
+    }
+
+    BaseProvider *provider=getProvider(modelInfo->provider, request.model);
+    if(!provider)
+    {
+        return ErrorCode::UnsupportedProvider;
+    }
+
+    auto start=std::chrono::steady_clock::now();
+    ErrorCode result=provider->classifyAudio(request, *modelInfo, response);
+    if(result==ErrorCode::Success)
+    {
+        InferenceStats stats;
+        stats.model=request.model;
+        stats.modality=modes::AudioClassification;
+        stats.audioSeconds=response.duration;
+        stats.totalTimeMs=std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now()-start).count();
         stats.timestamp=std::chrono::system_clock::now();
         TelemetryCollector::instance().recordInference(stats);
     }

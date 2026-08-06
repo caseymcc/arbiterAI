@@ -153,6 +153,22 @@ ErrorCode BaseProvider::transcribe(const AudioTranscriptionRequest &request,
     return ErrorCode::NotImplemented;
 }
 
+ErrorCode BaseProvider::embedAudio(const AudioEmbeddingRequest &request,
+    const ModelInfo &model,
+    AudioEmbeddingResponse &response)
+{
+    // Default: provider does not support speaker embeddings
+    return ErrorCode::NotImplemented;
+}
+
+ErrorCode BaseProvider::classifyAudio(const AudioClassificationRequest &request,
+    const ModelInfo &model,
+    AudioClassificationResponse &response)
+{
+    // Default: provider does not support audio classification
+    return ErrorCode::NotImplemented;
+}
+
 ErrorCode BaseProvider::synthesizeSpeech(const SpeechRequest &request,
     const ModelInfo &model,
     SpeechResponse &response)
