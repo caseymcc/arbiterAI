@@ -1,12 +1,34 @@
 cmake_minimum_required(VERSION 3.15)
-project(arbiterAI VERSION 0.1.15 LANGUAGES C CXX)
 
+# Engine options are declared *before* project(): the vcpkg toolchain runs during
+# project() and reads VCPKG_MANIFEST_FEATURES to decide which ports to install, so
+# the option -> feature mapping below has to be resolved first. Declaring them
+# after project() would install nothing and the REQUIRED find_package/find_library
+# calls further down would hard-fail.
+#
+# Default policy: an engine ships ON once it is verified functional. Engines that
+# are known broken or unverified stay OFF.
 option(ARBITERAI_ENABLE_LLAMA "Enable local llama.cpp model runtime support" ON)
 option(ARBITERAI_ENABLE_WHISPER "Enable local whisper.cpp speech-to-text support" OFF)
 option(ARBITERAI_ENABLE_STABLE_DIFFUSION "Enable local stable-diffusion.cpp image generation support" OFF)
 option(ARBITERAI_ENABLE_VIBEVOICE "Enable local vibevoice.cpp text-to-speech support" OFF)
 option(ARBITERAI_ENABLE_ORPHEUS "Enable local Orpheus TTS via a dlopen'd chatllm.cpp engine library" OFF)
-option(ARBITERAI_ENABLE_SHERPA "Enable local speech-to-text via sherpa-onnx" OFF)
+option(ARBITERAI_ENABLE_SHERPA "Enable local audio (STT / speaker embedding / audio tagging) via sherpa-onnx" ON)
+
+# Map each enabled engine onto its vcpkg manifest feature (see vcpkg.json).
+# ARBITERAI_ENABLE_LLAMA has no entry: llama-cpp is a base dependency, not a feature.
+foreach(_pair "WHISPER:whisper" "STABLE_DIFFUSION:stable-diffusion"
+              "VIBEVOICE:vibevoice" "ORPHEUS:orpheus" "SHERPA:sherpa-onnx")
+    string(REPLACE ":" ";" _pair "${_pair}")
+    list(GET _pair 0 _opt)
+    list(GET _pair 1 _feature)
+    if(ARBITERAI_ENABLE_${_opt})
+        list(APPEND VCPKG_MANIFEST_FEATURES "${_feature}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+
+project(arbiterAI VERSION 0.1.15 LANGUAGES C CXX)
 
 # Read llama-cpp build number from our custom vcpkg port
 if(ARBITERAI_ENABLE_LLAMA)
