@@ -11,7 +11,7 @@ cmake_minimum_required(VERSION 3.15)
 option(ARBITERAI_ENABLE_LLAMA "Enable local llama.cpp model runtime support" ON)
 option(ARBITERAI_ENABLE_WHISPER "Enable local whisper.cpp speech-to-text support" OFF)
 option(ARBITERAI_ENABLE_STABLE_DIFFUSION "Enable local stable-diffusion.cpp image generation support" OFF)
-option(ARBITERAI_ENABLE_VIBEVOICE "Enable local vibevoice.cpp text-to-speech support" OFF)
+option(ARBITERAI_ENABLE_VIBEVOICE "Enable local vibevoice.cpp text-to-speech support" ON)
 option(ARBITERAI_ENABLE_ORPHEUS "Enable local Orpheus TTS via a dlopen'd chatllm.cpp engine library" OFF)
 option(ARBITERAI_ENABLE_SHERPA "Enable local audio (STT / speaker embedding / audio tagging) via sherpa-onnx" ON)
 
