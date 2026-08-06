@@ -30,7 +30,7 @@
           "provider": {
             "type": "string",
             "description": "Model provider/service",
-            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock", "whisper", "stable-diffusion", "vibevoice", "orpheus"]
+            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock", "whisper", "stable-diffusion", "vibevoice", "orpheus", "sherpa-onnx"]
           },
           "ranking": {
             "type": "integer",
@@ -368,6 +368,70 @@
               "vae_path": {
                 "type": "string",
                 "description": "Optional path to an external VAE file"
+              }
+            },
+            "additionalProperties": false
+          },
+          "sherpa_options": {
+            "type": "object",
+            "description": "Model spec for the sherpa-onnx (transcription) provider. Selects a model family and its files; paths are resolved relative to file_path's directory when not absolute.",
+            "properties": {
+              "model_type": {
+                "type": "string",
+                "enum": ["whisper", "sense_voice", "paraformer", "nemo_ctc", "moonshine", "transducer"]
+              },
+              "tokens": { "type": "string", "description": "Path to tokens.txt" },
+              "num_threads": { "type": "integer", "minimum": 1 },
+              "feature_dim": { "type": "integer", "minimum": 1 },
+              "decoding_method": { "type": "string" },
+              "whisper": {
+                "type": "object",
+                "properties": {
+                  "encoder": { "type": "string" },
+                  "decoder": { "type": "string" },
+                  "language": { "type": "string" },
+                  "task": { "type": "string", "enum": ["transcribe", "translate"] },
+                  "tail_paddings": { "type": "integer" }
+                },
+                "additionalProperties": false
+              },
+              "sense_voice": {
+                "type": "object",
+                "properties": {
+                  "model": { "type": "string" },
+                  "language": { "type": "string" },
+                  "use_itn": { "type": "boolean" }
+                },
+                "additionalProperties": false
+              },
+              "paraformer": {
+                "type": "object",
+                "properties": { "model": { "type": "string" } },
+                "additionalProperties": false
+              },
+              "nemo_ctc": {
+                "type": "object",
+                "properties": { "model": { "type": "string" } },
+                "additionalProperties": false
+              },
+              "moonshine": {
+                "type": "object",
+                "properties": {
+                  "preprocessor": { "type": "string" },
+                  "encoder": { "type": "string" },
+                  "uncached_decoder": { "type": "string" },
+                  "cached_decoder": { "type": "string" }
+                },
+                "additionalProperties": false
+              },
+              "transducer": {
+                "type": "object",
+                "properties": {
+                  "encoder": { "type": "string" },
+                  "decoder": { "type": "string" },
+                  "joiner": { "type": "string" }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false

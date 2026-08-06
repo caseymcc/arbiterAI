@@ -1507,6 +1507,8 @@ void registerRoutes(httplib::Server &server)
 
     // Multimodal: audio / image (OpenAI-compatible)
     server.Post("/v1/audio/transcriptions", handleAudioTranscriptions);
+    server.Post("/v1/audio/embeddings", handleAudioEmbeddings);
+    server.Post("/v1/audio/classify", handleAudioClassify);
     server.Post("/v1/audio/speech", handleAudioSpeech);
     server.Post("/v1/images/generations", handleImageGenerations);
 
@@ -2548,6 +2550,69 @@ int multimodalHttpStatus(ErrorCode err)
     }
 }
 
+/// Format seconds as an SRT (HH:MM:SS,mmm) or WebVTT (HH:MM:SS.mmm) timestamp.
+std::string formatTimestamp(double seconds, bool vtt)
+{
+    if(seconds<0) seconds=0;
+    int ms=static_cast<int>((seconds-static_cast<long>(seconds))*1000.0+0.5);
+    long total=static_cast<long>(seconds);
+    long h=total/3600, m=(total%3600)/60, s=total%60;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%02ld:%02ld:%02ld%c%03d", h, m, s, vtt?'.':',', ms);
+    return buf;
+}
+
+/// OpenAI-compatible verbose_json "segments"/"words" arrays.
+nlohmann::json transcriptionSegmentsToJson(const std::vector<TranscriptionSegment> &segments)
+{
+    nlohmann::json arr=nlohmann::json::array();
+    for(const TranscriptionSegment &seg:segments)
+    {
+        nlohmann::json j={
+            {"id", seg.id},
+            {"start", seg.start},
+            {"end", seg.end},
+            {"text", seg.text}
+        };
+        if(seg.speaker.has_value())
+            j["speaker"]=seg.speaker.value();
+        if(!seg.words.empty())
+        {
+            nlohmann::json words=nlohmann::json::array();
+            for(const TranscriptionWord &w:seg.words)
+            {
+                nlohmann::json wj={{"word", w.word}, {"start", w.start}, {"end", w.end}};
+                if(w.speaker.has_value()) wj["speaker"]=w.speaker.value();
+                words.push_back(wj);
+            }
+            j["words"]=words;
+        }
+        arr.push_back(j);
+    }
+    return arr;
+}
+
+/// Build an SRT (vtt=false) or WebVTT (vtt=true) document from segments.
+std::string transcriptionToSubtitles(const std::vector<TranscriptionSegment> &segments,
+    const std::string &fallbackText, bool vtt)
+{
+    if(segments.empty())
+        return fallbackText;
+    std::string out;
+    if(vtt) out+="WEBVTT\n\n";
+    int idx=1;
+    for(const TranscriptionSegment &seg:segments)
+    {
+        if(!vtt) out+=std::to_string(idx++)+"\n";
+        out+=formatTimestamp(seg.start, vtt)+" --> "+formatTimestamp(seg.end, vtt)+"\n";
+        std::string line=seg.text;
+        if(seg.speaker.has_value())
+            line="[Speaker "+std::to_string(seg.speaker.value())+"] "+line;
+        out+=line+"\n\n";
+    }
+    return out;
+}
+
 } // namespace
 
 void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &res)
@@ -2590,6 +2655,25 @@ void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &r
         catch(const std::exception &) {}
     }
 
+    const std::string format=request.responseFormat.value_or("json");
+    auto flag=[&](const char *key)
+    {
+        if(!req.has_file(key)) return false;
+        std::string v=req.get_file_value(key).content;
+        return v=="1"||v=="true"||v=="True"||v=="yes";
+    };
+    // Word timestamps: verbose_json/srt/vtt need segment timing; verbose_json (or
+    // timestamp_granularities[]=word) also gets per-word timing.
+    bool wantSegments=(format=="verbose_json"||format=="srt"||format=="vtt");
+    bool wantWords=(format=="verbose_json")||flag("word_timestamps");
+    if(req.has_file("timestamp_granularities[]")
+        && req.get_file_value("timestamp_granularities[]").content=="word")
+        wantWords=true;
+    if(wantSegments||wantWords)
+        request.wordTimestamps=wantWords;
+    if(flag("diarize"))
+        request.diarize=true;
+
     AudioTranscriptionResponse response;
     ErrorCode err=ArbiterAI::instance().transcribe(request, response);
     if(err!=ErrorCode::Success)
@@ -2599,12 +2683,15 @@ void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &r
         return;
     }
 
-    // response_format=text (or srt/vtt) returns the raw transcript; the JSON
-    // formats return an object.
-    const std::string format=request.responseFormat.value_or("json");
-    if(format=="text" || format=="srt" || format=="vtt")
+    if(format=="text")
     {
         res.set_content(response.text, "text/plain");
+        return;
+    }
+    if(format=="srt" || format=="vtt")
+    {
+        res.set_content(transcriptionToSubtitles(response.segments, response.text, format=="vtt"),
+            "text/plain");
         return;
     }
 
@@ -2613,6 +2700,116 @@ void handleAudioTranscriptions(const httplib::Request &req, httplib::Response &r
         responseJson["language"]=response.language;
     if(response.duration>0.0)
         responseJson["duration"]=response.duration;
+    if(format=="verbose_json")
+    {
+        responseJson["task"]="transcribe";
+        if(!response.segments.empty())
+            responseJson["segments"]=transcriptionSegmentsToJson(response.segments);
+    }
+    res.set_content(safeDump(responseJson), "application/json");
+}
+
+void handleAudioEmbeddings(const httplib::Request &req, httplib::Response &res)
+{
+    if(!req.has_file("file"))
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing 'file' in multipart form data", "invalid_request_error", "file", "missing_field").dump(), "application/json");
+        return;
+    }
+
+    const auto &file=req.get_file_value("file");
+
+    AudioEmbeddingRequest request;
+    request.audio.assign(file.content.begin(), file.content.end());
+    if(!file.filename.empty())
+        request.filename=file.filename;
+
+    if(req.has_file("model"))
+        request.model=req.get_file_value("model").content;
+    if(request.model.empty())
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing 'model' in multipart form data", "invalid_request_error", "model", "missing_field").dump(), "application/json");
+        return;
+    }
+
+    if(!requireModelMode(request.model, modes::AudioEmbedding, res))
+        return;
+
+    AudioEmbeddingResponse response;
+    ErrorCode err=ArbiterAI::instance().embedAudio(request, response);
+    if(err!=ErrorCode::Success)
+    {
+        res.status=multimodalHttpStatus(err);
+        res.set_content(errorJson("Audio embedding failed: "+errorCodeToString(err), "server_error", "", errorCodeToString(err)).dump(), "application/json");
+        return;
+    }
+
+    // OpenAI-style embeddings envelope (data[0].embedding), plus voice metadata.
+    nlohmann::json data=nlohmann::json::array();
+    data.push_back({{"object", "embedding"}, {"index", 0}, {"embedding", response.embedding}});
+    nlohmann::json responseJson={
+        {"object", "list"},
+        {"model", response.model},
+        {"provider", response.provider},
+        {"duration", response.duration},
+        {"data", data}
+    };
+    res.set_content(safeDump(responseJson), "application/json");
+}
+
+void handleAudioClassify(const httplib::Request &req, httplib::Response &res)
+{
+    if(!req.has_file("file"))
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing 'file' in multipart form data", "invalid_request_error", "file", "missing_field").dump(), "application/json");
+        return;
+    }
+
+    const auto &file=req.get_file_value("file");
+
+    AudioClassificationRequest request;
+    request.audio.assign(file.content.begin(), file.content.end());
+    if(!file.filename.empty())
+        request.filename=file.filename;
+
+    if(req.has_file("model"))
+        request.model=req.get_file_value("model").content;
+    if(request.model.empty())
+    {
+        res.status=400;
+        res.set_content(errorJson("Missing 'model' in multipart form data", "invalid_request_error", "model", "missing_field").dump(), "application/json");
+        return;
+    }
+    if(req.has_file("top_k"))
+    {
+        try { request.topK=std::stoi(req.get_file_value("top_k").content); }
+        catch(const std::exception &) {}
+    }
+
+    if(!requireModelMode(request.model, modes::AudioClassification, res))
+        return;
+
+    AudioClassificationResponse response;
+    ErrorCode err=ArbiterAI::instance().classifyAudio(request, response);
+    if(err!=ErrorCode::Success)
+    {
+        res.status=multimodalHttpStatus(err);
+        res.set_content(errorJson("Audio classification failed: "+errorCodeToString(err), "server_error", "", errorCodeToString(err)).dump(), "application/json");
+        return;
+    }
+
+    nlohmann::json tags=nlohmann::json::array();
+    for(const auto &t:response.tags)
+        tags.push_back({{"label", t.label}, {"score", t.score}});
+    nlohmann::json responseJson={
+        {"model", response.model},
+        {"provider", response.provider},
+        {"duration", response.duration},
+        {"tags", tags}
+    };
     res.set_content(safeDump(responseJson), "application/json");
 }
 

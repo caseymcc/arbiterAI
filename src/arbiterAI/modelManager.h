@@ -138,6 +138,7 @@ struct ModelInfo
     std::string apiFormat;                      // API output format: "" (default/openai) or "harmony"
     nlohmann::json whisperOptions;              // Engine-specific whisper (STT) defaults (whisper_options)
     nlohmann::json sdOptions;                   // Engine-specific stable-diffusion (image) defaults (sd_options)
+    nlohmann::json sherpaOptions;               // sherpa-onnx STT model spec (sherpa_options)
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;

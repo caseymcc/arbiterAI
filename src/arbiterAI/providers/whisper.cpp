@@ -136,21 +136,50 @@ ErrorCode Whisper::decodeAudio(const std::vector<uint8_t> &bytes,
     }
     if(audioFormat!=1 || bitsPerSample!=16)
     {
-        error="Unsupported WAV: only uncompressed 16-bit PCM is supported";
+        error="Unsupported WAV: only uncompressed 16-bit PCM is supported "
+            "(transcode compressed formats to PCM WAV before calling)";
         return ErrorCode::InvalidRequest;
     }
-    if(numChannels!=1 || sampleRate!=static_cast<uint32_t>(WHISPER_SAMPLE_RATE_HZ))
+    if(numChannels<1 || sampleRate==0)
     {
-        error="Unsupported WAV: expected 16 kHz mono (transcode before calling)";
+        error="Malformed WAV: invalid channel count or sample rate";
         return ErrorCode::InvalidRequest;
     }
 
-    const size_t sampleCount=dataSize/2;
-    samplesOut.resize(sampleCount);
-    for(size_t i=0; i<sampleCount; ++i)
+    // Decode interleaved int16 -> float, downmixing any channel count to mono.
+    const size_t totalSamples=dataSize/2;
+    const size_t frames=totalSamples/numChannels;
+    std::vector<float> mono(frames);
+    for(size_t f=0; f<frames; ++f)
     {
-        int16_t s=static_cast<int16_t>(readLE(bytes, dataOffset+i*2, 2));
-        samplesOut[i]=static_cast<float>(s)/32768.0f;
+        float acc=0.0f;
+        for(uint16_t c=0; c<numChannels; ++c)
+        {
+            int16_t s=static_cast<int16_t>(readLE(bytes, dataOffset+(f*numChannels+c)*2, 2));
+            acc+=static_cast<float>(s)/32768.0f;
+        }
+        mono[f]=acc/numChannels;
+    }
+
+    // Resample to whisper's required 16 kHz (linear interpolation).
+    if(sampleRate==static_cast<uint32_t>(WHISPER_SAMPLE_RATE_HZ) || frames==0)
+    {
+        samplesOut=std::move(mono);
+    }
+    else
+    {
+        const double ratio=static_cast<double>(WHISPER_SAMPLE_RATE_HZ)/sampleRate;
+        const size_t outN=static_cast<size_t>(frames*ratio);
+        samplesOut.resize(outN);
+        for(size_t i=0; i<outN; ++i)
+        {
+            double srcPos=i/ratio;
+            size_t idx=static_cast<size_t>(srcPos);
+            double frac=srcPos-idx;
+            float a=mono[std::min(idx, frames-1)];
+            float b=mono[std::min(idx+1, frames-1)];
+            samplesOut[i]=a+(b-a)*static_cast<float>(frac);
+        }
     }
 
     return ErrorCode::Success;
@@ -200,6 +229,11 @@ ErrorCode Whisper::transcribe(const AudioTranscriptionRequest &request,
     wparams.detect_language=(language=="auto");
     wparams.translate=translate;
 
+    const bool wantWords=request.wordTimestamps.value_or(false);
+    const bool diarize=request.diarize.value_or(false);
+    wparams.token_timestamps=wantWords;     // per-token times for word timestamps
+    wparams.tdrz_enable=diarize;            // tinydiarize speaker-turn detection (needs a *.tdrz model)
+
     // whisper_full is not reentrant on a shared context — serialize inference.
     {
         std::lock_guard<std::mutex> lock(m_inferenceMutex);
@@ -211,12 +245,67 @@ ErrorCode Whisper::transcribe(const AudioTranscriptionRequest &request,
         }
 
         std::string text;
-        int segments=whisper_full_n_segments(ctx);
-        for(int i=0; i<segments; ++i)
+        int nSeg=whisper_full_n_segments(ctx);
+        int speaker=0;
+        for(int i=0; i<nSeg; ++i)
         {
             const char *segText=whisper_full_get_segment_text(ctx, i);
-            if(segText)
-                text+=segText;
+            std::string segStr=segText ? segText : "";
+            text+=segStr;
+
+            TranscriptionSegment seg;
+            seg.id=i;
+            seg.start=whisper_full_get_segment_t0(ctx, i)/100.0; // centiseconds -> seconds
+            seg.end=whisper_full_get_segment_t1(ctx, i)/100.0;
+            seg.text=segStr;
+            if(diarize)
+                seg.speaker=speaker;
+
+            if(wantWords)
+            {
+                // Merge sub-word tokens into words (a new word begins at a token
+                // whose text starts with a space). Skip special/timestamp tokens.
+                std::string cur;
+                double curStart=seg.start, curEnd=seg.start;
+                bool have=false;
+                auto flush=[&]()
+                {
+                    if(!have || cur.empty()) { have=false; cur.clear(); return; }
+                    TranscriptionWord w;
+                    w.word=cur; w.start=curStart; w.end=curEnd;
+                    if(diarize) w.speaker=speaker;
+                    seg.words.push_back(std::move(w));
+                    have=false; cur.clear();
+                };
+                int nTok=whisper_full_n_tokens(ctx, i);
+                for(int j=0; j<nTok; ++j)
+                {
+                    const char *tt=whisper_full_get_token_text(ctx, i, j);
+                    if(!tt) continue;
+                    std::string t=tt;
+                    if(t.empty() || t[0]=='[') continue; // special / timestamp token
+                    whisper_token_data td=whisper_full_get_token_data(ctx, i, j);
+                    if(!t.empty() && t[0]==' ')
+                    {
+                        flush();
+                        curStart=td.t0/100.0;
+                        have=true;
+                        cur=t.substr(1);
+                    }
+                    else
+                    {
+                        if(!have) { curStart=td.t0/100.0; have=true; }
+                        cur+=t;
+                    }
+                    curEnd=td.t1/100.0;
+                }
+                flush();
+            }
+
+            response.segments.push_back(std::move(seg));
+
+            if(diarize && whisper_full_get_segment_speaker_turn_next(ctx, i))
+                ++speaker;
         }
         response.text=std::move(text);
 

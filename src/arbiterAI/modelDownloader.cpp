@@ -198,6 +198,10 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
 
         cpr::Response r=cpr::Get(
             cpr::Url{downloadUrl},
+            cpr::Redirect{50, true, true, cpr::PostRedirectFlags::POST_ALL},
+            cpr::Header{{"User-Agent", "arbiterAI/1.0"}},
+            cpr::ConnectTimeout{std::chrono::seconds(30)},
+            cpr::LowSpeed{1024, std::chrono::seconds(60)},
             cpr::WriteCallback([&outFile, &writeError](const std::string_view &data, intptr_t) -> bool
             {
                 outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
@@ -253,6 +257,18 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
         );
 
         outFile.close();
+
+        if(r.error)
+        {
+            spdlog::error("Download transport error for {}: [curl {}] {} (http {}, {} bytes received)",
+                downloadUrl, static_cast<int>(r.error.code), r.error.message,
+                r.status_code, downloadState->bytesDownloaded.load());
+            std::error_code ec;
+            std::filesystem::remove(partialPath, ec);
+            downloadState->status=DownloadStatus::Failed;
+            downloadState->error="Transport error: "+r.error.message;
+            return false;
+        }
 
         if(writeError)
         {

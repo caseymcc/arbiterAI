@@ -1,0 +1,51 @@
+{
+    "schema_version": "1.1.0",
+    "models": [
+        {
+            "model": "whisper-large-v3-turbo",
+            "provider": "whisper",
+            "mode": "transcription",
+            "ranking": 60,
+            "file_path": "/srv/models/whisper/ggml-large-v3-turbo.bin",
+            "whisper_options": { "language": "auto" }
+        },
+        {
+            "model": "whisper-diarize",
+            "provider": "whisper",
+            "mode": "transcription",
+            "ranking": 40,
+            "file_path": "/srv/models/whisper/ggml-small.en-tdrz.bin"
+        },
+        {
+            "model": "sensevoice",
+            "provider": "sherpa-onnx",
+            "mode": "transcription",
+            "ranking": 55,
+            "file_path": "/srv/models/sherpa/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tokens.txt",
+            "sherpa_options": {
+                "model_type": "sense_voice",
+                "tokens": "tokens.txt",
+                "num_threads": 4,
+                "sense_voice": { "model": "model.int8.onnx", "language": "auto", "use_itn": true }
+            }
+        },
+        {
+            "_comment": "DISABLED. History: sherpa-onnx was briefly bumped to 1.13.4 to try parakeet-tdt-v3, but 1.13.4 bundles a prebuilt onnxruntime 1.23.2 whose autoEP DeviceDiscovery::DiscoverDevicesForPlatform() aborts with 'free(): invalid pointer' during Ort CreateEnv (ABI mismatch in the statically-linked prebuilt ORT) — that runs before any model loads, so it crashed EVERY sherpa recognizer (parakeet, Zipformer, AND SenseVoice), verified via the C API on both build container and prod node. The port was therefore REVERTED to 1.10.39 (bundles ORT 1.17.1, no DeviceDiscovery); SenseVoice and Zipformer transducers work again on it. parakeet-tdt-v3 stays disabled because its TDT model format needs a sherpa newer than 1.10.39, and the newer sherpa is unusable until upstream ships an ORT without the CreateEnv crash. Working sherpa STT: SenseVoice (below) + Zipformer transducers. Whisper models use whisper.cpp (no onnxruntime) and were never affected.",
+            "model": "parakeet-v3",
+            "provider": "sherpa-onnx",
+            "mode": "transcription",
+            "ranking": 65,
+            "file_path": "/srv/models/sherpa/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/tokens.txt",
+            "sherpa_options": {
+                "model_type": "transducer",
+                "tokens": "tokens.txt",
+                "num_threads": 4,
+                "transducer": {
+                    "encoder": "encoder.int8.onnx",
+                    "decoder": "decoder.int8.onnx",
+                    "joiner": "joiner.int8.onnx"
+                }
+            }
+        }
+    ]
+}

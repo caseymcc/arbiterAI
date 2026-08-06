@@ -39,6 +39,12 @@
             "dependencies": [
                 "orpheus-engine"
             ]
+        },
+        "sherpa-onnx": {
+            "description": "Local speech-to-text via sherpa-onnx (onnxruntime)",
+            "dependencies": [
+                "sherpa-onnx"
+            ]
         }
     }
 }
