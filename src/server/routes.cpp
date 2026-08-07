@@ -5,6 +5,7 @@
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/modelManager.h"
+#include "arbiterAI/thinkTags.h"
 #include "arbiterAI/modelRuntime.h"
 #include "arbiterAI/modelFitCalculator.h"
 #include "arbiterAI/hardwareDetector.h"
@@ -1412,6 +1413,17 @@ private:
     bool m_hasToolCall=false;
 };
 
+/// Check if a model wraps its reasoning in <think> tags.
+bool isThinkTagFormat(const std::string &modelName)
+{
+    ModelInfo info;
+    if(ArbiterAI::instance().getModelInfo(modelName, info)==ErrorCode::Success)
+    {
+        return info.apiFormat=="think_tags";
+    }
+    return false;
+}
+
 /// Check if a model uses harmony API format.
 bool isHarmonyFormat(const std::string &modelName)
 {
@@ -1521,6 +1533,7 @@ void registerRoutes(httplib::Server &server)
     server.Post(R"(/api/models/([^/]+)/unpin)", handleUnpinModel);
     server.Post(R"(/api/models/([^/]+)/download)", handleDownloadModel);
     server.Get(R"(/api/models/([^/]+)/download)", handleGetDownloadStatus);
+    server.Delete(R"(/api/models/([^/]+)/download)", handleCancelDownload);
 
     // Model config injection
     server.Post("/api/models/config", handleAddModelConfig);
@@ -1773,13 +1786,14 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
     }
 
     bool harmonyMode=isHarmonyFormat(arbiterRequest.model);
+    bool thinkTagMode=isThinkTagFormat(arbiterRequest.model);
     bool useScheduler=isLocalModel(arbiterRequest.model)&&InferenceScheduler::instance().isRunning();
 
     if(stream)
     {
         res.set_chunked_content_provider(
             "text/event-stream",
-            [arbiterRequest, requestId, created, includeUsage, responseModelId, harmonyMode, useScheduler](size_t, httplib::DataSink &sink)
+            [arbiterRequest, requestId, created, includeUsage, responseModelId, harmonyMode, thinkTagMode, useScheduler](size_t, httplib::DataSink &sink)
             {
                 // Send initial chunk with role
                 nlohmann::json roleChunk={
@@ -1798,6 +1812,29 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 sink.write(roleLine.c_str(), roleLine.length());
 
                 HarmonyStreamParser harmonyParser;
+                ThinkTagStreamParser thinkParser;
+
+                // Build one SSE delta chunk. Reasoning goes to reasoning_content
+                // (the DeepSeek convention) so clients can show or hide it.
+                auto makeDelta=[&](const std::string &content, const std::string &reasoning)
+                {
+                    nlohmann::json delta=nlohmann::json::object();
+                    if(!content.empty()) delta["content"]=content;
+                    if(!reasoning.empty()) delta["reasoning_content"]=reasoning;
+
+                    return nlohmann::json{
+                        {"id", requestId},
+                        {"object", "chat.completion.chunk"},
+                        {"created", created},
+                        {"model", responseModelId},
+                        {"system_fingerprint", nullptr},
+                        {"choices", {{
+                            {"index", 0},
+                            {"delta", delta},
+                            {"finish_reason", nullptr}
+                        }}}
+                    };
+                };
                 ErrorCode err=ErrorCode::Success;
                 int usagePromptTokens=0;
                 int usageCompletionTokens=0;
@@ -1852,34 +1889,39 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
 
                         // Emit token via SSE
                         std::string emitContent;
+                        std::string emitReasoning;
                         if(harmonyMode)
                         {
                             emitContent=harmonyParser.feed(token);
                             if(emitContent.empty()) continue;
+                        }
+                        else if(thinkTagMode)
+                        {
+                            thinkParser.feed(token, emitContent, emitReasoning);
+                            if(emitContent.empty()&&emitReasoning.empty()) continue;
                         }
                         else
                         {
                             emitContent=token;
                         }
 
-                        nlohmann::json sseChunk={
-                            {"id", requestId},
-                            {"object", "chat.completion.chunk"},
-                            {"created", created},
-                            {"model", responseModelId},
-                            {"system_fingerprint", nullptr},
-                            {"choices", {{
-                                {"index", 0},
-                                {"delta", {{"content", emitContent}}},
-                                {"finish_reason", nullptr}
-                            }}}
-                        };
-                        std::string line="data: "+safeDump(sseChunk)+"\n\n";
+                        std::string line="data: "+safeDump(makeDelta(emitContent, emitReasoning))+"\n\n";
                         if(!sink.write(line.c_str(), line.length()))
                         {
                             // Client disconnected — cancel the job
                             InferenceScheduler::instance().cancel(job->id);
                             break;
+                        }
+                    }
+
+                    if(thinkTagMode)
+                    {
+                        std::string tailContent, tailReasoning;
+                        thinkParser.flush(tailContent, tailReasoning);
+                        if(!tailContent.empty()||!tailReasoning.empty())
+                        {
+                            std::string line="data: "+safeDump(makeDelta(tailContent, tailReasoning))+"\n\n";
+                            sink.write(line.c_str(), line.length());
                         }
                     }
 
@@ -1895,29 +1937,23 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         if(chunk.empty()) return;
 
                         std::string emitContent;
+                        std::string emitReasoning;
                         if(harmonyMode)
                         {
                             emitContent=harmonyParser.feed(chunk);
                             if(emitContent.empty()) return;
+                        }
+                        else if(thinkTagMode)
+                        {
+                            thinkParser.feed(chunk, emitContent, emitReasoning);
+                            if(emitContent.empty()&&emitReasoning.empty()) return;
                         }
                         else
                         {
                             emitContent=chunk;
                         }
 
-                        nlohmann::json sseChunk={
-                            {"id", requestId},
-                            {"object", "chat.completion.chunk"},
-                            {"created", created},
-                            {"model", responseModelId},
-                            {"system_fingerprint", nullptr},
-                            {"choices", {{
-                                {"index", 0},
-                                {"delta", {{"content", emitContent}}},
-                                {"finish_reason", nullptr}
-                            }}}
-                        };
-                        std::string line="data: "+safeDump(sseChunk)+"\n\n";
+                        std::string line="data: "+safeDump(makeDelta(emitContent, emitReasoning))+"\n\n";
                         sink.write(line.c_str(), line.length());
                     };
 
@@ -1928,6 +1964,17 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                     };
 
                     err=ArbiterAI::instance().streamingCompletion(arbiterRequest, callback, waitCallback);
+
+                    if(thinkTagMode)
+                    {
+                        std::string tailContent, tailReasoning;
+                        thinkParser.flush(tailContent, tailReasoning);
+                        if(!tailContent.empty()||!tailReasoning.empty())
+                        {
+                            std::string line="data: "+safeDump(makeDelta(tailContent, tailReasoning))+"\n\n";
+                            sink.write(line.c_str(), line.length());
+                        }
+                    }
                 }
 
                 std::string finishReason=(err==ErrorCode::Success)?"stop":"error";
@@ -2066,7 +2113,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
         // newlines every ~30s to keep the client alive while queued/inferring.
         res.set_chunked_content_provider(
             "application/json",
-            [job, arbiterRequest, requestId, created, responseModelId, harmonyMode](size_t, httplib::DataSink &sink)
+            [job, arbiterRequest, requestId, created, responseModelId, harmonyMode, thinkTagMode](size_t, httplib::DataSink &sink)
             {
                 // Poll for completion, sending heartbeat newlines every ~30s
                 constexpr auto heartbeatInterval=std::chrono::seconds(30);
@@ -2122,6 +2169,14 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 }
 
                 std::string finishReason=arbiterResponse.finishReason.empty()?"stop":arbiterResponse.finishReason;
+
+                if(thinkTagMode&&!arbiterResponse.text.empty())
+                {
+                    ThinkTagParseResult parsed=parseThinkTags(arbiterResponse.text);
+                    arbiterResponse.text=parsed.content;
+                    if(!parsed.reasoningContent.empty())
+                        arbiterResponse.reasoningContent=parsed.reasoningContent;
+                }
 
                 if(harmonyMode&&!arbiterResponse.text.empty())
                 {
@@ -2250,6 +2305,14 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
         std::string finishReason=arbiterResponse.finishReason.empty()?"stop":arbiterResponse.finishReason;
 
         // Convert harmony format to standard OpenAI format if needed
+        if(thinkTagMode&&!arbiterResponse.text.empty())
+        {
+            ThinkTagParseResult parsed=parseThinkTags(arbiterResponse.text);
+            arbiterResponse.text=parsed.content;
+            if(!parsed.reasoningContent.empty())
+                arbiterResponse.reasoningContent=parsed.reasoningContent;
+        }
+
         if(harmonyMode&&!arbiterResponse.text.empty())
         {
             HarmonyParseResult parsed=parseHarmonyFormat(arbiterResponse.text);
@@ -3517,13 +3580,58 @@ void handleUnpinModel(const httplib::Request &req, httplib::Response &res)
     }
 }
 
+void handleCancelDownload(const httplib::Request &req, httplib::Response &res)
+{
+    std::string modelName=req.matches[1];
+
+    ErrorCode err=ArbiterAI::instance().cancelDownload(modelName);
+
+    if(err==ErrorCode::Success)
+    {
+        res.set_content(nlohmann::json{{"status", "cancelled"}, {"model", modelName}}.dump(),
+            "application/json");
+    }
+    else if(err==ErrorCode::ModelNotFound)
+    {
+        res.status=404;
+        res.set_content(errorJson("No active download for model '"+modelName+"'",
+            "not_found_error", "model", "no_active_download").dump(), "application/json");
+    }
+    else
+    {
+        res.status=400;
+        res.set_content(errorJson("Failed to cancel download: "+errorCodeToString(err),
+            "invalid_request_error", "model", errorCodeToString(err)).dump(), "application/json");
+    }
+}
+
 void handleDownloadModel(const httplib::Request &req, httplib::Response &res)
 {
     std::string modelName=req.matches[1];
 
+    // Variant may come as ?variant=... or in a JSON body; accept both so a
+    // body-style request doesn't silently download the auto-selected variant.
     std::string variant;
     if(req.has_param("variant"))
+    {
         variant=req.get_param_value("variant");
+    }
+    else if(!req.body.empty())
+    {
+        try
+        {
+            nlohmann::json body=nlohmann::json::parse(req.body);
+            if(body.is_object()&&body.contains("variant")&&body["variant"].is_string())
+                variant=body["variant"].get<std::string>();
+        }
+        catch(const std::exception &)
+        {
+            res.status=400;
+            res.set_content(errorJson("Invalid JSON body", "invalid_request_error", "", "invalid_json").dump(),
+                "application/json");
+            return;
+        }
+    }
 
     ErrorCode err=ArbiterAI::instance().downloadModel(modelName, variant);
 

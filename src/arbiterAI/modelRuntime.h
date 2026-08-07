@@ -122,6 +122,12 @@ public:
         const std::string &model,
         const std::string &variant="");
 
+    /// Cancel an in-flight download for a model.  The transfer aborts, the
+    /// partial file is removed, and the model returns to Unloaded.
+    /// @return Success if a download was cancelled, ModelNotFound if none was
+    ///         active for that model.
+    ErrorCode cancelDownload(const std::string &model);
+
     /// Set the base directory for model files (default: "/models").
     void setModelsDir(const std::string &dir);
 

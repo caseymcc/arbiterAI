@@ -38,6 +38,8 @@ struct ActiveDownload {
     std::atomic<int64_t> totalBytes{0};
     std::atomic<float> percentComplete{0.0f};
     std::atomic<DownloadStatus> status{DownloadStatus::NotStarted};
+    std::atomic<bool> cancelled{false};
+    std::atomic<int> connections{1};   ///< Parallel connections in use
     std::string error;
     std::string modelName;
     std::string variant;
@@ -46,6 +48,7 @@ struct ActiveDownload {
     mutable std::mutex speedMutex;
     std::deque<std::pair<std::chrono::steady_clock::time_point, int64_t>> speedSamples;
     std::chrono::steady_clock::time_point startTime;
+    std::chrono::steady_clock::time_point lastSampleTime;
 };
 
 /**
@@ -111,6 +114,28 @@ public:
                                                   const std::string &variant = "");
 
     /**
+     * @brief Cancel an in-flight download
+     *
+     * Signals the transfer threads to abort; the partial file is removed by the
+     * download itself as it unwinds.  Returns false if no download is active
+     * for that model.
+     * @param modelName Name of the model
+     */
+    bool cancelDownload(const std::string &modelName);
+
+    /**
+     * @brief Set how many parallel connections a single large download may use
+     *
+     * Servers commonly throttle per-connection, so ranged parallel transfers are
+     * substantially faster than one stream. 1 disables parallel downloading.
+     * Default 8.
+     */
+    void setMaxConnectionsPerDownload(int connections);
+
+    /// Get the parallel connection limit for a single download.
+    int getMaxConnectionsPerDownload() const { return m_maxConnectionsPerDownload; }
+
+    /**
      * @brief Get the current download state for a model
      * @param modelName Name of the model
      * @return Active download state, or nullptr if not downloading
@@ -150,12 +175,38 @@ private:
     void saveToCache(const std::string &key, const nlohmann::json &config);
     DownloadProgressSnapshot buildSnapshot(const std::shared_ptr<ActiveDownload> &download);
 
+    /// Update byte counters, percent, speed samples and the caller's progress
+    /// callback.  Rate-limits speed sampling so a fast transfer doesn't flood
+    /// the sample deque.
+    void recordProgress(const std::shared_ptr<ActiveDownload> &download,
+        int64_t bytesDownloaded, int64_t totalBytes,
+        const DownloadProgressCallback &progressCallback);
+
+    /// Probe a URL for its size and whether it supports range requests.
+    /// Returns false if the probe failed (caller falls back to a single stream).
+    bool probeDownload(const std::string &url, int64_t &sizeOut, bool &acceptsRangesOut);
+
+    /// Fetch a byte range into an already-sized file at the matching offset.
+    bool downloadRange(const std::string &url, const std::string &filePath,
+        int64_t start, int64_t end,
+        const std::shared_ptr<ActiveDownload> &download,
+        std::atomic<int64_t> &totalDownloaded,
+        const DownloadProgressCallback &progressCallback,
+        std::string &errorOut);
+
     std::filesystem::path m_cacheDir;
     std::shared_ptr<IFileVerifier> m_fileVerifier;
     
     // Track active downloads
     std::map<std::string, std::shared_ptr<ActiveDownload>> m_activeDownloads;
     std::mutex m_downloadsMutex;
+
+    /// Parallel connections for a single large download (see setMaxConnectionsPerDownload).
+    int m_maxConnectionsPerDownload=8;
+
+    /// Files smaller than this stay on a single connection — the extra
+    /// round-trips aren't worth it.
+    static constexpr int64_t kParallelThresholdBytes=64*1024*1024;
 };
 
 } // namespace arbiterAI

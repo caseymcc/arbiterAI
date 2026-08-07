@@ -821,6 +821,11 @@ ErrorCode ArbiterAI::downloadModel(const std::string &model, const std::string &
     return ModelRuntime::instance().downloadModel(model, variant);
 }
 
+ErrorCode ArbiterAI::cancelDownload(const std::string &model)
+{
+    return ModelRuntime::instance().cancelDownload(model);
+}
+
 void ArbiterAI::setMaxConcurrentDownloads(int max)
 {
     ModelRuntime::instance().setMaxConcurrentDownloads(max);
@@ -859,6 +864,7 @@ std::vector<LoadedModel> ArbiterAI::getLoadedModels()
 ErrorCode ArbiterAI::loadModel(const std::string &, const std::string &, int,
     const RuntimeOptions *, const std::vector<int> &) { return ErrorCode::NotImplemented; }
 ErrorCode ArbiterAI::downloadModel(const std::string &, const std::string &) { return ErrorCode::NotImplemented; }
+ErrorCode ArbiterAI::cancelDownload(const std::string &) { return ErrorCode::NotImplemented; }
 void ArbiterAI::setMaxConcurrentDownloads(int) {}
 int ArbiterAI::getMaxConcurrentDownloads() const { return 0; }
 ErrorCode ArbiterAI::unloadModel(const std::string &) { return ErrorCode::NotImplemented; }

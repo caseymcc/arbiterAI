@@ -2076,6 +2076,18 @@ ErrorCode ModelRuntime::loadLlamaModel(
             mparamsMtmd.n_threads=static_cast<int>(std::thread::hardware_concurrency());
             mparamsMtmd.print_timings=false;
 
+            // Token budget per image.  Left at the GGUF-provided defaults unless
+            // the config overrides them: Qwen-VL, for instance, needs a floor of
+            // 1024 for reliable grounding/OCR, at proportionally higher cost.
+            if(options.imageMinTokens.has_value())
+            {
+                mparamsMtmd.image_min_tokens=options.imageMinTokens.value();
+            }
+            if(options.imageMaxTokens.has_value())
+            {
+                mparamsMtmd.image_max_tokens=options.imageMaxTokens.value();
+            }
+
             mtmdCtx=mtmd_init_from_file(mmprojPath.c_str(), llamaModel, mparamsMtmd);
             if(!mtmdCtx)
             {
@@ -2244,6 +2256,28 @@ llama_context *ModelRuntime::getLlamaContext(const std::string &model) const
         return it->second.llamaCtx;
     }
     return nullptr;
+}
+
+ErrorCode ModelRuntime::cancelDownload(const std::string &model)
+{
+    if(!m_downloader.cancelDownload(model))
+    {
+        return ErrorCode::ModelNotFound;
+    }
+
+    // The download thread removes the partial file and releases its slot as it
+    // unwinds; drop the placeholder entry so the model reads as Unloaded again.
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it=m_models.find(model);
+        if(it!=m_models.end()&&it->second.state==ModelState::Downloading)
+        {
+            m_models.erase(it);
+        }
+    }
+
+    spdlog::info("Cancelled download for model '{}'", model);
+    return ErrorCode::Success;
 }
 
 mtmd_context *ModelRuntime::getMtmdContext(const std::string &model) const

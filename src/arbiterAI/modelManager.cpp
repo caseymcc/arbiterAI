@@ -106,6 +106,8 @@ void RuntimeOptions::mergeFrom(const RuntimeOptions &other)
     if(other.overrideTensor.has_value()) overrideTensor=other.overrideTensor;
     if(other.vulkanNoHostVisibleVram.has_value()) vulkanNoHostVisibleVram=other.vulkanNoHostVisibleVram;
     if(other.mmprojUseGpu.has_value()) mmprojUseGpu=other.mmprojUseGpu;
+    if(other.imageMinTokens.has_value()) imageMinTokens=other.imageMinTokens;
+    if(other.imageMaxTokens.has_value()) imageMaxTokens=other.imageMaxTokens;
 }
 
 ModelManager &ModelManager::instance()
@@ -471,6 +473,10 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
             info.runtimeOptions.overrideTensor=ro["override_tensor"].get<std::string>();
         if(ro.contains("mmproj_use_gpu")&&ro["mmproj_use_gpu"].is_boolean())
             info.runtimeOptions.mmprojUseGpu=ro["mmproj_use_gpu"].get<bool>();
+        if(ro.contains("image_min_tokens")&&ro["image_min_tokens"].is_number_integer())
+            info.runtimeOptions.imageMinTokens=ro["image_min_tokens"].get<int>();
+        if(ro.contains("image_max_tokens")&&ro["image_max_tokens"].is_number_integer())
+            info.runtimeOptions.imageMaxTokens=ro["image_max_tokens"].get<int>();
     }
 
     // Backend priority (ordered preference for GPU compute backends)
@@ -1144,6 +1150,10 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
             ro["override_tensor"]=info.runtimeOptions.overrideTensor.value();
         if(info.runtimeOptions.mmprojUseGpu.has_value())
             ro["mmproj_use_gpu"]=info.runtimeOptions.mmprojUseGpu.value();
+        if(info.runtimeOptions.imageMinTokens.has_value())
+            ro["image_min_tokens"]=info.runtimeOptions.imageMinTokens.value();
+        if(info.runtimeOptions.imageMaxTokens.has_value())
+            ro["image_max_tokens"]=info.runtimeOptions.imageMaxTokens.value();
         if(!ro.empty())
             j["runtime_options"]=ro;
     }

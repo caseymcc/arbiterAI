@@ -808,7 +808,7 @@ TEST_F(ModelManagerTest, VisionModelMmprojParsing)
         {"model", "vision-model"},
         {"provider", "llama"},
         {"input_modalities", {"text", "image"}},
-        {"runtime_options", {{"mmproj_use_gpu", false}}},
+        {"runtime_options", {{"mmproj_use_gpu", false}, {"image_min_tokens", 1024}, {"image_max_tokens", 4096}}},
         {"variants", {{
             {"quantization", "Q4_K_M"},
             {"file_size_mb", 18847},
@@ -839,6 +839,10 @@ TEST_F(ModelManagerTest, VisionModelMmprojParsing)
     EXPECT_TRUE(info->supportsImageInput());
     ASSERT_TRUE(info->runtimeOptions.mmprojUseGpu.has_value());
     EXPECT_FALSE(info->runtimeOptions.mmprojUseGpu.value());
+    ASSERT_TRUE(info->runtimeOptions.imageMinTokens.has_value());
+    EXPECT_EQ(info->runtimeOptions.imageMinTokens.value(), 1024);
+    ASSERT_TRUE(info->runtimeOptions.imageMaxTokens.has_value());
+    EXPECT_EQ(info->runtimeOptions.imageMaxTokens.value(), 4096);
 
     ASSERT_EQ(info->variants.size(), 1u);
     const ModelVariant &v=info->variants[0];
@@ -867,6 +871,8 @@ TEST_F(ModelManagerTest, VisionModelMmprojParsing)
     EXPECT_EQ(outputJson["variants"][0]["mmproj"]["file_size_mb"].get<int>(), 737);
     ASSERT_TRUE(outputJson.contains("runtime_options"));
     EXPECT_FALSE(outputJson["runtime_options"]["mmproj_use_gpu"].get<bool>());
+    EXPECT_EQ(outputJson["runtime_options"]["image_min_tokens"].get<int>(), 1024);
+    EXPECT_EQ(outputJson["runtime_options"]["image_max_tokens"].get<int>(), 4096);
 }
 
 TEST_F(ModelManagerTest, TextModelHasNoImageSupport)

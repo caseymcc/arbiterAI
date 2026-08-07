@@ -59,6 +59,7 @@ void handlePinModel(const httplib::Request &req, httplib::Response &res);
 void handleUnpinModel(const httplib::Request &req, httplib::Response &res);
 void handleDownloadModel(const httplib::Request &req, httplib::Response &res);
 void handleGetDownloadStatus(const httplib::Request &req, httplib::Response &res);
+void handleCancelDownload(const httplib::Request &req, httplib::Response &res);
 
 // ========== Model Config Injection ==========
 

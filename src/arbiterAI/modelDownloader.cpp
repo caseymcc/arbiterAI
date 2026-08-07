@@ -7,6 +7,9 @@
 #include <iostream>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <thread>
+#include <vector>
 
 namespace arbiterAI
 {
@@ -174,9 +177,12 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
             return false;
         }
 
-        // Stream directly to a .partial file on disk to avoid buffering the
-        // entire response body in RAM.  A 20 GB model download would otherwise
-        // require 20+ GB of heap, which caused OOM / heap corruption (SEGV).
+        // Stream to a .partial file on disk rather than buffering the response
+        // body in RAM — a 20 GB model would otherwise need 20+ GB of heap.
+        //
+        // Large files are fetched over several ranged connections in parallel:
+        // hosts commonly throttle per-connection, so one stream can be an order
+        // of magnitude slower than the link actually supports.
         std::string partialPath=filePathStr+".partial";
 
         // Remove stale partial file so we start fresh
@@ -185,109 +191,214 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
             std::filesystem::remove(partialPath, ec);
         }
 
-        std::ofstream outFile(partialPath, std::ios::binary|std::ios::trunc);
-        if(!outFile.is_open())
+        int64_t remoteSize=0;
+        bool acceptsRanges=false;
+        bool probed=probeDownload(downloadUrl, remoteSize, acceptsRanges);
+
+        int connections=1;
+        if(probed&&acceptsRanges&&remoteSize>=kParallelThresholdBytes&&m_maxConnectionsPerDownload>1)
         {
-            spdlog::error("Failed to open partial file for writing: {}", partialPath);
-            downloadState->status=DownloadStatus::Failed;
-            downloadState->error="Failed to open "+partialPath;
-            return false;
+            connections=m_maxConnectionsPerDownload;
+            // Never split into pieces so small the per-request overhead dominates.
+            int64_t maxUseful=remoteSize/(8*1024*1024);
+            if(maxUseful<1) maxUseful=1;
+            if(connections>maxUseful) connections=static_cast<int>(maxUseful);
+        }
+        downloadState->connections=connections;
+
+        if(probed&&remoteSize>0)
+        {
+            downloadState->totalBytes=remoteSize;
         }
 
-        bool writeError=false;
+        if(connections>1)
+        {
+            spdlog::info("Downloading {} ({} MB) over {} parallel connections",
+                filePathStr, remoteSize/(1024*1024), connections);
 
-        cpr::Response r=cpr::Get(
-            cpr::Url{downloadUrl},
-            cpr::Redirect{50, true, true, cpr::PostRedirectFlags::POST_ALL},
-            cpr::Header{{"User-Agent", "arbiterAI/1.0"}},
-            cpr::ConnectTimeout{std::chrono::seconds(30)},
-            cpr::LowSpeed{1024, std::chrono::seconds(60)},
-            cpr::WriteCallback([&outFile, &writeError](const std::string_view &data, intptr_t) -> bool
+            // Size the file up front so each connection can write straight to
+            // its own offset without coordinating with the others.
             {
-                outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
-                if(!outFile.good())
+                std::ofstream create(partialPath, std::ios::binary|std::ios::trunc);
+                if(!create.is_open())
                 {
-                    writeError=true;
-                    return false; // abort transfer
+                    spdlog::error("Failed to create partial file: {}", partialPath);
+                    downloadState->status=DownloadStatus::Failed;
+                    downloadState->error="Failed to open "+partialPath;
+                    return false;
                 }
-                return true;
-            }),
-            cpr::ProgressCallback([&downloadState, &progressCallback](cpr::cpr_off_t downloadTotal,
-                cpr::cpr_off_t downloadNow,
-                cpr::cpr_off_t uploadTotal,
-                cpr::cpr_off_t uploadNow,
-                intptr_t userdata) -> bool
+            }
+            std::error_code ec;
+            std::filesystem::resize_file(partialPath, static_cast<uintmax_t>(remoteSize), ec);
+            if(ec)
             {
-                (void)uploadTotal;
-                (void)uploadNow;
-                (void)userdata;
+                spdlog::error("Failed to preallocate {} bytes for {}: {}",
+                    remoteSize, partialPath, ec.message());
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="Failed to preallocate partial file";
+                return false;
+            }
 
-                downloadState->bytesDownloaded=downloadNow;
-                downloadState->totalBytes=downloadTotal;
+            std::atomic<int64_t> totalDownloaded{0};
+            std::atomic<bool> anyFailed{false};
+            std::mutex errorMutex;
+            std::string firstError;
 
-                float percent=0.0f;
-                if(downloadTotal>0)
+            int64_t chunkSize=(remoteSize+connections-1)/connections;
+            std::vector<std::thread> workers;
+            workers.reserve(static_cast<size_t>(connections));
+
+            for(int i=0; i<connections; ++i)
+            {
+                int64_t start=static_cast<int64_t>(i)*chunkSize;
+                if(start>=remoteSize) break;
+                int64_t end=std::min(start+chunkSize-1, remoteSize-1);
+
+                workers.emplace_back([this, &downloadUrl, &partialPath, start, end, &downloadState,
+                    &totalDownloaded, &progressCallback, &anyFailed, &errorMutex, &firstError]()
                 {
-                    percent=(static_cast<float>(downloadNow)/downloadTotal)*100.0f;
-                }
-                downloadState->percentComplete=percent;
-
-                // Record speed sample
-                {
-                    std::lock_guard<std::mutex> lock(downloadState->speedMutex);
-                    std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now();
-
-                    downloadState->speedSamples.push_back({now, downloadNow});
-
-                    // Keep only last 10 seconds of samples
-                    std::chrono::steady_clock::time_point cutoff=now-std::chrono::seconds(10);
-                    while(!downloadState->speedSamples.empty()&&downloadState->speedSamples.front().first<cutoff)
+                    std::string error;
+                    if(!downloadRange(downloadUrl, partialPath, start, end,
+                        downloadState, totalDownloaded, progressCallback, error))
                     {
-                        downloadState->speedSamples.pop_front();
+                        anyFailed=true;
+                        std::lock_guard<std::mutex> lock(errorMutex);
+                        if(firstError.empty()) firstError=error;
                     }
-                }
+                });
+            }
 
-                if(progressCallback)
+            for(std::thread &worker:workers)
+            {
+                worker.join();
+            }
+
+            if(anyFailed||downloadState->cancelled.load())
+            {
+                std::error_code removeEc;
+                std::filesystem::remove(partialPath, removeEc);
+
+                if(downloadState->cancelled.load())
                 {
-                    progressCallback(downloadNow, downloadTotal, percent);
+                    spdlog::info("Download cancelled: {}", filePathStr);
+                    downloadState->status=DownloadStatus::Cancelled;
+                    downloadState->error="Download cancelled";
                 }
+                else
+                {
+                    spdlog::error("Parallel download failed for {}: {}", downloadUrl, firstError);
+                    downloadState->status=DownloadStatus::Failed;
+                    downloadState->error=firstError.empty()?"Parallel download failed":firstError;
+                }
+                return false;
+            }
 
-                return true;
-            })
-        );
-
-        outFile.close();
-
-        if(r.error)
-        {
-            spdlog::error("Download transport error for {}: [curl {}] {} (http {}, {} bytes received)",
-                downloadUrl, static_cast<int>(r.error.code), r.error.message,
-                r.status_code, downloadState->bytesDownloaded.load());
-            std::error_code ec;
-            std::filesystem::remove(partialPath, ec);
-            downloadState->status=DownloadStatus::Failed;
-            downloadState->error="Transport error: "+r.error.message;
-            return false;
+            int64_t written=static_cast<int64_t>(std::filesystem::file_size(partialPath, ec));
+            if(ec||written!=remoteSize)
+            {
+                spdlog::error("Short parallel download for {}: {} of {} bytes", filePathStr, written, remoteSize);
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="Incomplete download";
+                return false;
+            }
         }
-
-        if(writeError)
+        else
         {
-            spdlog::error("Write error during download to {}", partialPath);
-            std::error_code ec;
-            std::filesystem::remove(partialPath, ec);
-            downloadState->status=DownloadStatus::Failed;
-            downloadState->error="Disk write error";
-            return false;
-        }
+            std::ofstream outFile(partialPath, std::ios::binary|std::ios::trunc);
+            if(!outFile.is_open())
+            {
+                spdlog::error("Failed to open partial file for writing: {}", partialPath);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="Failed to open "+partialPath;
+                return false;
+            }
 
-        if(r.status_code!=200)
-        {
-            spdlog::error("Failed to download model. Status code: {}", r.status_code);
-            std::error_code ec;
-            std::filesystem::remove(partialPath, ec);
-            downloadState->status=DownloadStatus::Failed;
-            downloadState->error="HTTP error: "+std::to_string(r.status_code);
-            return false;
+            bool writeError=false;
+            int64_t received=0;
+
+            cpr::Response r=cpr::Get(
+                cpr::Url{downloadUrl},
+                cpr::Redirect{50, true, true, cpr::PostRedirectFlags::POST_ALL},
+                cpr::Header{{"User-Agent", "arbiterAI/1.0"}},
+                cpr::ConnectTimeout{std::chrono::seconds(30)},
+                cpr::LowSpeed{1024, std::chrono::seconds(60)},
+                cpr::WriteCallback([this, &outFile, &writeError, &received, &downloadState,
+                    &progressCallback](const std::string_view &data, intptr_t) -> bool
+                {
+                    if(downloadState->cancelled.load()) return false;
+
+                    outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
+                    if(!outFile.good())
+                    {
+                        writeError=true;
+                        return false; // abort transfer
+                    }
+
+                    received+=static_cast<int64_t>(data.size());
+                    recordProgress(downloadState, received, downloadState->totalBytes.load(), progressCallback);
+                    return true;
+                }),
+                cpr::ProgressCallback([&downloadState](cpr::cpr_off_t downloadTotal,
+                    cpr::cpr_off_t downloadNow,
+                    cpr::cpr_off_t uploadTotal,
+                    cpr::cpr_off_t uploadNow,
+                    intptr_t userdata) -> bool
+                {
+                    (void)downloadNow;
+                    (void)uploadTotal;
+                    (void)uploadNow;
+                    (void)userdata;
+
+                    if(downloadTotal>0) downloadState->totalBytes=downloadTotal;
+                    return !downloadState->cancelled.load();
+                })
+            );
+
+            outFile.close();
+
+            if(downloadState->cancelled.load())
+            {
+                spdlog::info("Download cancelled: {}", filePathStr);
+                std::error_code ec;
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Cancelled;
+                downloadState->error="Download cancelled";
+                return false;
+            }
+
+            if(r.error)
+            {
+                spdlog::error("Download transport error for {}: [curl {}] {} (http {}, {} bytes received)",
+                    downloadUrl, static_cast<int>(r.error.code), r.error.message,
+                    r.status_code, downloadState->bytesDownloaded.load());
+                std::error_code ec;
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="Transport error: "+r.error.message;
+                return false;
+            }
+
+            if(writeError)
+            {
+                spdlog::error("Write error during download to {}", partialPath);
+                std::error_code ec;
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="Disk write error";
+                return false;
+            }
+
+            if(r.status_code!=200)
+            {
+                spdlog::error("Failed to download model. Status code: {}", r.status_code);
+                std::error_code ec;
+                std::filesystem::remove(partialPath, ec);
+                downloadState->status=DownloadStatus::Failed;
+                downloadState->error="HTTP error: "+std::to_string(r.status_code);
+                return false;
+            }
         }
 
         // Rename .partial -> final path atomically
@@ -327,6 +438,203 @@ std::future<bool> ModelDownloader::downloadModelWithProgress(
         downloadState->percentComplete=100.0f;
         return true;
     });
+}
+
+void ModelDownloader::setMaxConnectionsPerDownload(int connections)
+{
+    m_maxConnectionsPerDownload=connections<1?1:connections;
+}
+
+void ModelDownloader::recordProgress(const std::shared_ptr<ActiveDownload> &download,
+    int64_t bytesDownloaded, int64_t totalBytes,
+    const DownloadProgressCallback &progressCallback)
+{
+    download->bytesDownloaded=bytesDownloaded;
+    if(totalBytes>0) download->totalBytes=totalBytes;
+
+    int64_t total=download->totalBytes.load();
+    float percent=total>0?(static_cast<float>(bytesDownloaded)/total)*100.0f:0.0f;
+    download->percentComplete=percent;
+
+    // Sampling is rate-limited: write callbacks fire every few KB, which would
+    // otherwise push thousands of samples per second into the speed window.
+    bool sample=false;
+    {
+        std::lock_guard<std::mutex> lock(download->speedMutex);
+        std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now();
+
+        if(download->lastSampleTime.time_since_epoch().count()==0||
+            now-download->lastSampleTime>=std::chrono::milliseconds(250))
+        {
+            download->lastSampleTime=now;
+            download->speedSamples.push_back({now, bytesDownloaded});
+            sample=true;
+
+            std::chrono::steady_clock::time_point cutoff=now-std::chrono::seconds(10);
+            while(!download->speedSamples.empty()&&download->speedSamples.front().first<cutoff)
+            {
+                download->speedSamples.pop_front();
+            }
+        }
+    }
+
+    if(sample&&progressCallback)
+    {
+        progressCallback(bytesDownloaded, total, percent);
+    }
+}
+
+bool ModelDownloader::probeDownload(const std::string &url, int64_t &sizeOut, bool &acceptsRangesOut)
+{
+    sizeOut=0;
+    acceptsRangesOut=false;
+
+    cpr::Response r=cpr::Head(
+        cpr::Url{url},
+        cpr::Redirect{50, true, true, cpr::PostRedirectFlags::POST_ALL},
+        cpr::Header{{"User-Agent", "arbiterAI/1.0"}},
+        cpr::ConnectTimeout{std::chrono::seconds(30)},
+        cpr::Timeout{std::chrono::seconds(60)});
+
+    if(r.error||r.status_code!=200)
+    {
+        spdlog::debug("HEAD probe failed for {} (http {}), falling back to a single stream",
+            url, r.status_code);
+        return false;
+    }
+
+    auto lengthIt=r.header.find("Content-Length");
+    if(lengthIt==r.header.end())
+    {
+        return false;
+    }
+
+    try
+    {
+        sizeOut=std::stoll(lengthIt->second);
+    }
+    catch(const std::exception &)
+    {
+        return false;
+    }
+
+    auto rangesIt=r.header.find("Accept-Ranges");
+    if(rangesIt!=r.header.end())
+    {
+        std::string value=rangesIt->second;
+        std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+        acceptsRangesOut=(value.find("bytes")!=std::string::npos);
+    }
+
+    return sizeOut>0;
+}
+
+bool ModelDownloader::downloadRange(const std::string &url, const std::string &filePath,
+    int64_t start, int64_t end,
+    const std::shared_ptr<ActiveDownload> &download,
+    std::atomic<int64_t> &totalDownloaded,
+    const DownloadProgressCallback &progressCallback,
+    std::string &errorOut)
+{
+    std::ofstream out(filePath, std::ios::binary|std::ios::in|std::ios::out);
+    if(!out.is_open())
+    {
+        errorOut="Failed to open "+filePath+" for range write";
+        return false;
+    }
+    out.seekp(static_cast<std::streamoff>(start));
+    if(!out.good())
+    {
+        errorOut="Failed to seek to offset "+std::to_string(start);
+        return false;
+    }
+
+    const int64_t expected=end-start+1;
+    int64_t received=0;
+    bool writeError=false;
+
+    std::string range=std::to_string(start)+"-"+std::to_string(end);
+
+    cpr::Response r=cpr::Get(
+        cpr::Url{url},
+        cpr::Redirect{50, true, true, cpr::PostRedirectFlags::POST_ALL},
+        cpr::Header{{"User-Agent", "arbiterAI/1.0"}, {"Range", "bytes="+range}},
+        cpr::ConnectTimeout{std::chrono::seconds(30)},
+        cpr::LowSpeed{1024, std::chrono::seconds(60)},
+        cpr::WriteCallback([this, &out, &writeError, &received, &totalDownloaded, &download,
+            &progressCallback](const std::string_view &data, intptr_t) -> bool
+        {
+            if(download->cancelled.load()) return false;
+
+            out.write(data.data(), static_cast<std::streamsize>(data.size()));
+            if(!out.good())
+            {
+                writeError=true;
+                return false;
+            }
+
+            received+=static_cast<int64_t>(data.size());
+            int64_t soFar=totalDownloaded.fetch_add(static_cast<int64_t>(data.size()))
+                +static_cast<int64_t>(data.size());
+            recordProgress(download, soFar, download->totalBytes.load(), progressCallback);
+            return true;
+        }));
+
+    out.close();
+
+    if(download->cancelled.load())
+    {
+        errorOut="cancelled";
+        return false;
+    }
+    if(writeError)
+    {
+        errorOut="Disk write error";
+        return false;
+    }
+    if(r.error)
+    {
+        errorOut="Transport error on range "+range+": "+r.error.message;
+        return false;
+    }
+    // 206 is the expected reply; a 200 means the server ignored the range.
+    if(r.status_code!=206&&r.status_code!=200)
+    {
+        errorOut="HTTP "+std::to_string(r.status_code)+" on range "+range;
+        return false;
+    }
+    if(received!=expected)
+    {
+        errorOut="Short range "+range+": got "+std::to_string(received)
+            +" of "+std::to_string(expected)+" bytes";
+        return false;
+    }
+
+    return true;
+}
+
+bool ModelDownloader::cancelDownload(const std::string &modelName)
+{
+    std::shared_ptr<ActiveDownload> download;
+    {
+        std::lock_guard<std::mutex> lock(m_downloadsMutex);
+        auto it=m_activeDownloads.find(modelName);
+        if(it==m_activeDownloads.end())
+        {
+            return false;
+        }
+        download=it->second;
+    }
+
+    DownloadStatus status=download->status.load();
+    if(status!=DownloadStatus::Pending&&status!=DownloadStatus::InProgress)
+    {
+        return false;
+    }
+
+    spdlog::info("Cancelling download for '{}'", modelName);
+    download->cancelled=true;
+    return true;
 }
 
 std::shared_ptr<ActiveDownload> ModelDownloader::getDownloadState(const std::string &modelName)

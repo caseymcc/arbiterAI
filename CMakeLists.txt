@@ -123,6 +123,8 @@ set(arbiterai_src
     ./src/arbiterAI/arbiterAI.cpp
     ./src/arbiterAI/base64.h
     ./src/arbiterAI/base64.cpp
+    ./src/arbiterAI/thinkTags.h
+    ./src/arbiterAI/thinkTags.cpp
     ./src/arbiterAI/chatClient.h
     ./src/arbiterAI/chatClient.cpp
     ./src/arbiterAI/cacheManager.h
@@ -291,6 +293,7 @@ endif()
         tests/configDownloaderTests.cpp
         tests/arbiterAITests.cpp
         tests/contentPartsTests.cpp
+        tests/thinkTagsTests.cpp
         tests/chatClientTests.cpp
         tests/providerTests.cpp
         tests/mockProviderTests.cpp

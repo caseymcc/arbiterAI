@@ -343,6 +343,16 @@
               "mmproj_use_gpu": {
                 "type": "boolean",
                 "description": "Offload the multimodal projector to the GPU (inverse of --no-mmproj-offload). Set false to run the vision encoder on CPU when the GPU backend is unstable for it."
+              },
+              "image_min_tokens": {
+                "type": "integer",
+                "description": "Minimum tokens an image expands to (--image-min-tokens). Vision models with dynamic resolution read a default from GGUF metadata; Qwen-VL needs at least 1024 for reliable grounding/OCR. Higher = more accurate and more expensive.",
+                "minimum": 1
+              },
+              "image_max_tokens": {
+                "type": "integer",
+                "description": "Maximum tokens an image expands to (--image-max-tokens). Caps prompt cost for large images.",
+                "minimum": 1
               }
             },
             "additionalProperties": false
@@ -358,8 +368,8 @@
           },
           "api_format": {
             "type": "string",
-            "description": "Output format produced by the model. When set (e.g. 'harmony'), the server converts the model's native output to standard OpenAI API format so clients don't need to understand the model's native format.",
-            "enum": ["", "harmony"],
+            "description": "Output format produced by the model. When set, the server converts the model's native output to standard OpenAI API format so clients don't need to understand it. 'harmony' = gpt-oss channel format; 'think_tags' = reasoning wrapped in <think>...</think> (Qwen3 Thinking, DeepSeek-R1 distills), split out into reasoning_content.",
+            "enum": ["", "harmony", "think_tags"],
             "default": ""
           },
           "whisper_options": {

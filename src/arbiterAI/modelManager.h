@@ -53,6 +53,8 @@ struct RuntimeOptions {
     std::optional<std::string> overrideTensor;  // -ot: tensor override pattern (e.g. "per_layer_token_embd.weight=CPU")
     std::optional<bool> vulkanNoHostVisibleVram; // GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM: skip BAR-mapped heap, force device-local only
     std::optional<bool> mmprojUseGpu;           // offload the multimodal projector to GPU (inverse of --no-mmproj-offload)
+    std::optional<int> imageMinTokens;          // --image-min-tokens: floor on tokens per image (dynamic-resolution vision models)
+    std::optional<int> imageMaxTokens;          // --image-max-tokens: ceiling on tokens per image
 
     /// Merge another set of options on top of this one (override only non-empty fields).
     void mergeFrom(const RuntimeOptions &other);

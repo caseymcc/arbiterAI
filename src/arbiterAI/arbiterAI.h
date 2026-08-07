@@ -107,7 +107,8 @@ enum class DownloadStatus
     Pending,        ///< Download is queued
     InProgress,     ///< Download is actively in progress
     Completed,      ///< Download completed successfully
-    Failed          ///< Download failed
+    Failed,         ///< Download failed
+    Cancelled       ///< Download was cancelled by the caller
 };
 
 /**
@@ -1088,6 +1089,13 @@ public:
      * @return ErrorCode::ModelDownloading, Success, ModelNotFound, InsufficientStorage
      */
     ErrorCode downloadModel(const std::string &model, const std::string &variant="");
+
+    /**
+     * @brief Cancel an in-flight model download
+     * @param model Model name
+     * @return Success if a download was cancelled, ModelNotFound if none was active
+     */
+    ErrorCode cancelDownload(const std::string &model);
 
     /**
      * @brief Set the maximum number of concurrent model downloads
