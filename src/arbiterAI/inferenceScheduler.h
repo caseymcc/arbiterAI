@@ -2,6 +2,7 @@
 #define _ARBITERAI_INFERENCESCHEDULER_H_
 
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/providers/llama.h"
 
 #include <string>
 #include <vector>
@@ -89,9 +90,14 @@ struct InferenceJob {
     std::chrono::steady_clock::time_point tokenizeStartTime;
     std::chrono::steady_clock::time_point inferenceStartTime;
 
-    /// Pre-tokenized prompt tokens (filled by tokenizer thread).
+    /// Pre-tokenized prompt tokens (filled by tokenizer thread).  For a
+    /// multimodal prompt these are the text-chunk tokens only.
     std::vector<int32_t> tokens;
     std::string formattedPrompt;
+
+    /// Tokenized multimodal prompt (image chunks), when the request carries
+    /// images.  Empty/invalid for text-only requests.
+    MultimodalPrompt multimodal;
 
     /// Result for non-streaming requests.
     std::string resultText;

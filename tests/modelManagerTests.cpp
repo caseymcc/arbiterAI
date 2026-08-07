@@ -802,4 +802,100 @@ TEST_F(ModelManagerTest, SplitVariantSerializationRoundTrip)
     EXPECT_EQ(outputJson["variants"][0]["download"]["filename"].get<std::string>(), "shard-00001-of-00003.gguf");
 }
 
+TEST_F(ModelManagerTest, VisionModelMmprojParsing)
+{
+    nlohmann::json modelJson={
+        {"model", "vision-model"},
+        {"provider", "llama"},
+        {"input_modalities", {"text", "image"}},
+        {"runtime_options", {{"mmproj_use_gpu", false}}},
+        {"variants", {{
+            {"quantization", "Q4_K_M"},
+            {"file_size_mb", 18847},
+            {"min_vram_mb", 20480},
+            {"download", {
+                {"url", "https://example.com/vision-Q4_K_M.gguf"},
+                {"sha256", "aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa1"},
+                {"filename", "vision-Q4_K_M.gguf"}
+            }},
+            {"mmproj", {
+                {"url", "https://example.com/mmproj-vision-Q8_0.gguf"},
+                {"sha256", "bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb2"},
+                {"filename", "mmproj-vision-Q8_0.gguf"},
+                {"file_size_mb", 737}
+            }}
+        }}}
+    };
+
+    ModelManager &mm=ModelManager::instance();
+    mm.initialize({"config1"});
+
+    std::string error;
+    ASSERT_TRUE(mm.addModelFromJson(modelJson, error))<<error;
+
+    auto info=mm.getModelInfo("vision-model");
+    ASSERT_TRUE(info.has_value());
+
+    EXPECT_TRUE(info->supportsImageInput());
+    ASSERT_TRUE(info->runtimeOptions.mmprojUseGpu.has_value());
+    EXPECT_FALSE(info->runtimeOptions.mmprojUseGpu.value());
+
+    ASSERT_EQ(info->variants.size(), 1u);
+    const ModelVariant &v=info->variants[0];
+
+    EXPECT_TRUE(v.hasMmproj());
+    EXPECT_EQ(v.getMmprojFilename(), "mmproj-vision-Q8_0.gguf");
+    EXPECT_EQ(v.mmprojFileSizeMb, 737);
+    EXPECT_EQ(v.totalFileSizeMb(), 18847+737);
+
+    // The projector must never be picked as the model load path, but must be
+    // part of the download set (trailing the model shards).
+    EXPECT_EQ(v.getPrimaryFilename(), "vision-Q4_K_M.gguf");
+
+    std::vector<VariantDownload> allFiles=v.getAllFiles();
+    ASSERT_EQ(allFiles.size(), 2u);
+    EXPECT_EQ(allFiles[0].filename, "vision-Q4_K_M.gguf");
+    EXPECT_EQ(allFiles[1].filename, "mmproj-vision-Q8_0.gguf");
+    EXPECT_EQ(allFiles[1].sha256, "bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb2");
+
+    // Round-trip through JSON (injected configs are persisted this way)
+    nlohmann::json outputJson=ModelManager::modelInfoToJson(info.value());
+    ASSERT_TRUE(outputJson.contains("input_modalities"));
+    EXPECT_EQ(outputJson["input_modalities"].size(), 2u);
+    ASSERT_TRUE(outputJson["variants"][0].contains("mmproj"));
+    EXPECT_EQ(outputJson["variants"][0]["mmproj"]["filename"].get<std::string>(), "mmproj-vision-Q8_0.gguf");
+    EXPECT_EQ(outputJson["variants"][0]["mmproj"]["file_size_mb"].get<int>(), 737);
+    ASSERT_TRUE(outputJson.contains("runtime_options"));
+    EXPECT_FALSE(outputJson["runtime_options"]["mmproj_use_gpu"].get<bool>());
+}
+
+TEST_F(ModelManagerTest, TextModelHasNoImageSupport)
+{
+    ModelManager &mm=ModelManager::instance();
+    mm.initialize({"config1"});
+
+    nlohmann::json modelJson={
+        {"model", "text-only-model"},
+        {"provider", "llama"},
+        {"variants", {{
+            {"quantization", "Q8_0"},
+            {"download", {
+                {"url", "https://example.com/text.gguf"},
+                {"sha256", "abc123def456abc123def456abc123def456abc123def456abc123def456abcd"},
+                {"filename", "text.gguf"}
+            }}
+        }}}
+    };
+
+    std::string error;
+    ASSERT_TRUE(mm.addModelFromJson(modelJson, error))<<error;
+
+    auto info=mm.getModelInfo("text-only-model");
+    ASSERT_TRUE(info.has_value());
+    EXPECT_FALSE(info->supportsImageInput());
+    EXPECT_TRUE(info->inputModalities.empty());
+    EXPECT_FALSE(info->variants[0].hasMmproj());
+    EXPECT_EQ(info->variants[0].getAllFiles().size(), 1u);
+}
+
 } // namespace arbiterAI

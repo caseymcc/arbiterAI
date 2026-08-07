@@ -77,6 +77,10 @@ find_package(nlohmann_json_schema_validator CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
 if(ARBITERAI_ENABLE_LLAMA)
     find_package(llama CONFIG REQUIRED)
+    # libmtmd (multimodal projector) ships with llama.cpp but is not part of the
+    # llama CMake export set, so locate the library and headers directly.
+    find_path(MTMD_INCLUDE_DIR NAMES mtmd.h REQUIRED)
+    find_library(MTMD_LIBRARY NAMES mtmd REQUIRED)
 endif()
 if(ARBITERAI_ENABLE_WHISPER)
     find_package(whisper CONFIG REQUIRED)
@@ -117,6 +121,8 @@ find_package(httplib CONFIG REQUIRED)
 set(arbiterai_src
     ./src/arbiterAI/arbiterAI.h
     ./src/arbiterAI/arbiterAI.cpp
+    ./src/arbiterAI/base64.h
+    ./src/arbiterAI/base64.cpp
     ./src/arbiterAI/chatClient.h
     ./src/arbiterAI/chatClient.cpp
     ./src/arbiterAI/cacheManager.h
@@ -230,6 +236,10 @@ if(ARBITERAI_ENABLE_STABLE_DIFFUSION)
     target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_STABLE_DIFFUSION=1)
 endif()
 
+if(ARBITERAI_ENABLE_LLAMA)
+    target_include_directories(arbiterai PRIVATE ${MTMD_INCLUDE_DIR})
+endif()
+
 if(ARBITERAI_ENABLE_VIBEVOICE)
     target_include_directories(arbiterai PRIVATE ${VIBEVOICE_INCLUDE_DIR})
     target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_VIBEVOICE=1)
@@ -248,6 +258,7 @@ target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
         nlohmann_json::nlohmann_json
+        $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:${MTMD_LIBRARY}>
         $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:llama>
         $<$<BOOL:${ARBITERAI_ENABLE_WHISPER}>:whisper>
         $<$<BOOL:${ARBITERAI_ENABLE_STABLE_DIFFUSION}>:stable-diffusion>
@@ -279,6 +290,7 @@ endif()
         tests/modelDownloaderTests.cpp
         tests/configDownloaderTests.cpp
         tests/arbiterAITests.cpp
+        tests/contentPartsTests.cpp
         tests/chatClientTests.cpp
         tests/providerTests.cpp
         tests/mockProviderTests.cpp

@@ -23,6 +23,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "arbiterAI/base64.h"
+
 namespace arbiterAI
 {
 
@@ -258,6 +260,17 @@ inline void from_json(const nlohmann::json &j, ToolCall &t)
  * - "tool": includes tool_call_id linking the result back to a specific tool call
  */
 
+/// A single element of an OpenAI multi-part `content` array.
+/// Text parts carry `text`; image parts carry the decoded image file bytes
+/// (PNG/JPEG/… as delivered, not a raw bitmap) plus the declared mime type.
+struct ContentPart
+{
+    std::string type;               ///< "text" or "image"
+    std::string text;               ///< type=="text"
+    std::vector<uint8_t> imageData; ///< type=="image": encoded image bytes
+    std::string mimeType;           ///< type=="image": e.g. "image/png"
+};
+
 /// Extract text from an OpenAI `content` field.
 /// The spec allows content as either a plain string or an array of content
 /// parts (e.g. [{"type":"text","text":"..."},{"type":"image_url",...}]).
@@ -293,14 +306,155 @@ inline std::string contentToString(const nlohmann::json &contentJson)
     return {};
 }
 
+/// Maximum decoded size accepted for a single inline image.
+constexpr size_t kMaxImagePartBytes=20*1024*1024;
+
+/// Parse an OpenAI `content` array into typed parts.
+/// Handles both content-part spellings for images:
+///   {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
+///   {"type":"input_image","image_url":"data:image/png;base64,..."}
+/// Only `data:` URIs are decoded — remote URLs are reported as an error rather
+/// than fetched, since fetching them server-side is an SSRF surface.
+/// Returns false and sets `error` on malformed or oversized image data.
+inline bool contentToParts(const nlohmann::json &contentJson,
+    std::vector<ContentPart> &parts, std::string &error)
+{
+    parts.clear();
+
+    if(!contentJson.is_array())
+    {
+        return true;
+    }
+
+    for(const nlohmann::json &part:contentJson)
+    {
+        if(part.is_string())
+        {
+            ContentPart textPart;
+            textPart.type="text";
+            textPart.text=part.get<std::string>();
+            parts.push_back(std::move(textPart));
+            continue;
+        }
+        if(!part.is_object()||!part.contains("type"))
+        {
+            continue;
+        }
+
+        std::string type=part.at("type").get<std::string>();
+
+        if(type=="text"&&part.contains("text"))
+        {
+            ContentPart textPart;
+            textPart.type="text";
+            textPart.text=part.at("text").get<std::string>();
+            parts.push_back(std::move(textPart));
+            continue;
+        }
+
+        if(type!="image_url"&&type!="input_image")
+        {
+            continue;
+        }
+
+        // image_url is an object for chat completions, a bare string for the
+        // Responses-API spelling.
+        std::string url;
+        if(part.contains("image_url"))
+        {
+            const nlohmann::json &imageUrl=part.at("image_url");
+            if(imageUrl.is_string())
+            {
+                url=imageUrl.get<std::string>();
+            }
+            else if(imageUrl.is_object()&&imageUrl.contains("url"))
+            {
+                url=imageUrl.at("url").get<std::string>();
+            }
+        }
+
+        if(url.empty())
+        {
+            error="image content part is missing an image_url";
+            return false;
+        }
+
+        if(url.compare(0, 5, "data:")!=0)
+        {
+            error="only data: image URLs are supported (remote image URLs are not fetched)";
+            return false;
+        }
+
+        size_t comma=url.find(',');
+        if(comma==std::string::npos)
+        {
+            error="malformed data: URL in image content part";
+            return false;
+        }
+
+        std::string header=url.substr(5, comma-5);
+        if(header.find("base64")==std::string::npos)
+        {
+            error="data: image URLs must be base64-encoded";
+            return false;
+        }
+
+        ContentPart imagePart;
+        imagePart.type="image";
+        imagePart.mimeType=header.substr(0, header.find(';'));
+
+        if(!base64Decode(url.substr(comma+1), imagePart.imageData))
+        {
+            error="failed to base64-decode image data";
+            return false;
+        }
+        if(imagePart.imageData.empty())
+        {
+            error="image content part decoded to zero bytes";
+            return false;
+        }
+        if(imagePart.imageData.size()>kMaxImagePartBytes)
+        {
+            error="image exceeds the maximum accepted size of "
+                +std::to_string(kMaxImagePartBytes/(1024*1024))+" MB";
+            return false;
+        }
+
+        parts.push_back(std::move(imagePart));
+    }
+
+    return true;
+}
+
 struct Message
 {
     std::string role;
-    std::string content;
+    std::string content;                ///< Flattened text of all text parts
+    std::vector<ContentPart> parts;     ///< Populated only when the message carries non-text content
     std::optional<std::string> toolCallId;
     std::optional<std::vector<ToolCall>> toolCalls;
     std::optional<std::string> name;
+
+    /// True when this message carries at least one image part.
+    bool hasImageParts() const
+    {
+        for(const ContentPart &part:parts)
+        {
+            if(part.type=="image") return true;
+        }
+        return false;
+    }
 };
+
+/// True when any message in the conversation carries an image part.
+inline bool hasImageContent(const std::vector<Message> &messages)
+{
+    for(const Message &m:messages)
+    {
+        if(m.hasImageParts()) return true;
+    }
+    return false;
+}
 
 inline void to_json(nlohmann::json &j, const Message &m)
 {

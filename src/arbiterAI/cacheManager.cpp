@@ -137,8 +137,32 @@ std::string CacheManager::generateKey(const CompletionRequest &request) const
         return "";
 
     if (EVP_DigestInit_ex(sha256, EVP_sha256(), nullptr) != 1 ||
-        EVP_DigestUpdate(sha256, serialized.c_str(), serialized.size()) != 1 ||
-        EVP_DigestFinal_ex(sha256, hash, nullptr) != 1)
+        EVP_DigestUpdate(sha256, serialized.c_str(), serialized.size()) != 1)
+    {
+        EVP_MD_CTX_free(sha256);
+        return "";
+    }
+
+    // Image parts are not serialized into the request JSON, so mix them into
+    // the digest explicitly — otherwise two requests with identical text but
+    // different images would share a cache entry.
+    for (const Message &message : request.messages)
+    {
+        for (const ContentPart &part : message.parts)
+        {
+            if (part.type != "image" || part.imageData.empty())
+                continue;
+
+            if (EVP_DigestUpdate(sha256, part.mimeType.c_str(), part.mimeType.size()) != 1 ||
+                EVP_DigestUpdate(sha256, part.imageData.data(), part.imageData.size()) != 1)
+            {
+                EVP_MD_CTX_free(sha256);
+                return "";
+            }
+        }
+    }
+
+    if (EVP_DigestFinal_ex(sha256, hash, nullptr) != 1)
     {
         EVP_MD_CTX_free(sha256);
         return "";

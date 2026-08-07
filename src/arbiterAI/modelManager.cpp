@@ -37,15 +37,28 @@ bool ModelInfo::isSchemaCompatible(const std::string &schemaVersion) const
 
 std::vector<VariantDownload> ModelVariant::getAllFiles() const
 {
+    std::vector<VariantDownload> all;
+
     if(!files.empty())
     {
-        return files;
+        all=files;
     }
-    if(!download.filename.empty())
+    else if(!download.filename.empty())
     {
-        return {download};
+        all.push_back(download);
     }
-    return {};
+
+    // The projector is downloaded with the model but is never the load path,
+    // so it always trails the model shards.
+    if(all.empty())
+    {
+        return all;
+    }
+    if(mmproj.has_value()&&!mmproj->filename.empty())
+    {
+        all.push_back(*mmproj);
+    }
+    return all;
 }
 
 std::string ModelVariant::getPrimaryFilename() const
@@ -57,9 +70,28 @@ std::string ModelVariant::getPrimaryFilename() const
     return download.filename;
 }
 
+std::string ModelVariant::getMmprojFilename() const
+{
+    if(mmproj.has_value())
+    {
+        return mmproj->filename;
+    }
+    return {};
+}
+
+bool ModelVariant::hasMmproj() const
+{
+    return mmproj.has_value()&&!mmproj->filename.empty();
+}
+
 bool ModelVariant::isSplit() const
 {
     return files.size()>1;
+}
+
+bool ModelInfo::supportsImageInput() const
+{
+    return std::find(inputModalities.begin(), inputModalities.end(), "image")!=inputModalities.end();
 }
 
 void RuntimeOptions::mergeFrom(const RuntimeOptions &other)
@@ -73,6 +105,7 @@ void RuntimeOptions::mergeFrom(const RuntimeOptions &other)
     if(other.nGpuLayers.has_value()) nGpuLayers=other.nGpuLayers;
     if(other.overrideTensor.has_value()) overrideTensor=other.overrideTensor;
     if(other.vulkanNoHostVisibleVram.has_value()) vulkanNoHostVisibleVram=other.vulkanNoHostVisibleVram;
+    if(other.mmprojUseGpu.has_value()) mmprojUseGpu=other.mmprojUseGpu;
 }
 
 ModelManager &ModelManager::instance()
@@ -366,16 +399,45 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
                     variant.files.push_back(vd);
                 }
             }
+            if(variantJson.contains("mmproj")&&variantJson["mmproj"].is_object())
+            {
+                auto &mp=variantJson["mmproj"];
+
+                VariantDownload proj;
+                if(mp.contains("url"))
+                {
+                    proj.url=mp["url"].get<std::string>();
+                }
+                if(mp.contains("sha256"))
+                {
+                    proj.sha256=mp["sha256"].get<std::string>();
+                }
+                if(mp.contains("filename"))
+                {
+                    proj.filename=mp["filename"].get<std::string>();
+                }
+                if(mp.contains("file_size_mb"))
+                {
+                    variant.mmprojFileSizeMb=mp["file_size_mb"].get<int>();
+                }
+                if(!proj.filename.empty())
+                {
+                    variant.mmproj=proj;
+                }
+            }
 
             // Skip CLIP/mmproj variants — these are multimodal projection
             // files, not standalone models.  Loading them as the main model
             // causes llama.cpp to fail with "CLIP cannot be used as main model".
+            // A variant that names its projector explicitly has already told us
+            // which file is which, so the filename guess doesn't apply.
             std::string primaryFile=variant.getPrimaryFilename();
             std::string primaryLower=primaryFile;
             std::transform(primaryLower.begin(), primaryLower.end(), primaryLower.begin(), ::tolower);
-            if(primaryLower.find("mmproj")!=std::string::npos||
+            if(!variant.hasMmproj()&&
+                (primaryLower.find("mmproj")!=std::string::npos||
                 primaryLower.find("clip-")!=std::string::npos||
-                primaryLower.find("vision-")!=std::string::npos)
+                primaryLower.find("vision-")!=std::string::npos))
             {
                 spdlog::debug("Skipping multimodal projection variant '{}' for model '{}' (file: {})",
                     variant.quantization, info.model, primaryFile);
@@ -407,6 +469,8 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
             info.runtimeOptions.nGpuLayers=ro["n_gpu_layers"].get<int>();
         if(ro.contains("override_tensor")&&ro["override_tensor"].is_string())
             info.runtimeOptions.overrideTensor=ro["override_tensor"].get<std::string>();
+        if(ro.contains("mmproj_use_gpu")&&ro["mmproj_use_gpu"].is_boolean())
+            info.runtimeOptions.mmprojUseGpu=ro["mmproj_use_gpu"].get<bool>();
     }
 
     // Backend priority (ordered preference for GPU compute backends)
@@ -437,6 +501,18 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
     if(modelJson.contains("api_format")&&modelJson["api_format"].is_string())
     {
         info.apiFormat=modelJson["api_format"].get<std::string>();
+    }
+
+    // Input modalities (accepted content types; absent = text only)
+    if(modelJson.contains("input_modalities")&&modelJson["input_modalities"].is_array())
+    {
+        for(const auto &im:modelJson["input_modalities"])
+        {
+            if(im.is_string())
+            {
+                info.inputModalities.push_back(im.get<std::string>());
+            }
+        }
     }
 
     if(modelJson.contains("whisper_options")&&modelJson["whisper_options"].is_object())
@@ -689,6 +765,8 @@ void ModelManager::mergeModelInfo(ModelInfo &existing, const ModelInfo &source, 
         existing.configVersion=source.configVersion;
     if(sourceJson.contains("api_format"))
         existing.apiFormat=source.apiFormat;
+    if(sourceJson.contains("input_modalities"))
+        existing.inputModalities=source.inputModalities;
     if(sourceJson.contains("whisper_options"))
         existing.whisperOptions=source.whisperOptions;
     if(sourceJson.contains("sd_options"))
@@ -1030,6 +1108,16 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
                 }
                 vj["files"]=filesArr;
             }
+            if(v.mmproj.has_value())
+            {
+                nlohmann::json mj;
+                mj["url"]=v.mmproj->url;
+                mj["sha256"]=v.mmproj->sha256;
+                mj["filename"]=v.mmproj->filename;
+                if(v.mmprojFileSizeMb>0)
+                    mj["file_size_mb"]=v.mmprojFileSizeMb;
+                vj["mmproj"]=mj;
+            }
             variants.push_back(vj);
         }
         j["variants"]=variants;
@@ -1054,6 +1142,8 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
             ro["n_gpu_layers"]=info.runtimeOptions.nGpuLayers.value();
         if(info.runtimeOptions.overrideTensor.has_value())
             ro["override_tensor"]=info.runtimeOptions.overrideTensor.value();
+        if(info.runtimeOptions.mmprojUseGpu.has_value())
+            ro["mmproj_use_gpu"]=info.runtimeOptions.mmprojUseGpu.value();
         if(!ro.empty())
             j["runtime_options"]=ro;
     }
@@ -1074,6 +1164,12 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
     if(!info.apiFormat.empty())
     {
         j["api_format"]=info.apiFormat;
+    }
+
+    // Input modalities
+    if(!info.inputModalities.empty())
+    {
+        j["input_modalities"]=info.inputModalities;
     }
 
     // Engine-specific option blocks (whisper / stable-diffusion / sherpa-onnx)

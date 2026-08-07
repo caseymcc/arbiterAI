@@ -4,6 +4,8 @@
 #include "arbiterAI/telemetryCollector.h"
 
 #include <llama.h>
+#include <mtmd.h>
+#include <mtmd-helper.h>
 #include <spdlog/spdlog.h>
 
 #include <chrono>
@@ -136,7 +138,7 @@ ErrorCode Llama::completion(const CompletionRequest &request,
     double promptTimeMs=0.0;
     double generationTimeMs=0.0;
 
-    ErrorCode code=runInference(llamaModel, llamaCtx, request, model,
+    ErrorCode code=runInferenceDispatch(llamaModel, llamaCtx, request, model,
         resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, nullptr);
 
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
@@ -238,7 +240,7 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     double promptTimeMs=0.0;
     double generationTimeMs=0.0;
 
-    ErrorCode code=runInference(llamaModel, llamaCtx, request, *modelInfo,
+    ErrorCode code=runInferenceDispatch(llamaModel, llamaCtx, request, *modelInfo,
         resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, callback);
 
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
@@ -738,6 +740,42 @@ static int prepareKvCache(llama_context *ctx, const CompletionRequest &request,
     return reused;
 }
 
+ErrorCode Llama::runInferenceDispatch(llama_model *model, llama_context *ctx,
+    const CompletionRequest &request, const ModelInfo &modelInfo,
+    std::string &result, int &promptTokens, int &completionTokens,
+    double &promptTimeMs, double &generationTimeMs,
+    std::function<void(const std::string &)> streamCallback)
+{
+    if(!hasImageContent(request.messages))
+    {
+        return runInference(model, ctx, request, modelInfo, result,
+            promptTokens, completionTokens, promptTimeMs, generationTimeMs, streamCallback);
+    }
+
+    mtmd_context *mtmdCtx=ModelRuntime::instance().getMtmdContext(request.model);
+    if(!mtmdCtx)
+    {
+        spdlog::error("[llama] request for '{}' carries images but no projector is loaded", request.model);
+        m_lastErrorDetail="model '"+request.model+"' does not accept image input";
+        return ErrorCode::InvalidRequest;
+    }
+
+    MultimodalPrompt multimodal;
+    std::vector<int32_t> textTokens;
+    std::string formattedPrompt;
+
+    ErrorCode tokenizeResult=tokenizeMultimodalPrompt(model, mtmdCtx, request, modelInfo,
+        multimodal, textTokens, formattedPrompt);
+    if(tokenizeResult!=ErrorCode::Success)
+    {
+        return tokenizeResult;
+    }
+
+    return runInferenceWithTokens(model, ctx, request, modelInfo, textTokens, result,
+        promptTokens, completionTokens, promptTimeMs, generationTimeMs,
+        streamCallback, nullptr, &multimodal);
+}
+
 ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     std::string &result, int &promptTokens, int &completionTokens,
@@ -997,6 +1035,166 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     return ErrorCode::Success;
 }
 
+MultimodalPrompt::~MultimodalPrompt()
+{
+    if(m_chunks)
+    {
+        mtmd_input_chunks_free(m_chunks);
+        m_chunks=nullptr;
+    }
+}
+
+void MultimodalPrompt::reset(mtmd_context *ctx, mtmd_input_chunks *chunks)
+{
+    if(m_chunks&&m_chunks!=chunks)
+    {
+        mtmd_input_chunks_free(m_chunks);
+    }
+    m_ctx=ctx;
+    m_chunks=chunks;
+}
+
+size_t MultimodalPrompt::tokenCount() const
+{
+    if(!m_chunks)
+    {
+        return 0;
+    }
+    return mtmd_helper_get_n_tokens(m_chunks);
+}
+
+ErrorCode Llama::tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmdCtx,
+    const CompletionRequest &request, const ModelInfo &modelInfo,
+    MultimodalPrompt &prompt, std::vector<int32_t> &textTokens,
+    std::string &formattedPrompt)
+{
+    if(!mtmdCtx)
+    {
+        m_lastErrorDetail="model '"+modelInfo.model+"' has no multimodal projector loaded";
+        return ErrorCode::InvalidRequest;
+    }
+    if(!mtmd_support_vision(mtmdCtx))
+    {
+        m_lastErrorDetail="the projector loaded for model '"+modelInfo.model+"' does not support image input";
+        return ErrorCode::InvalidRequest;
+    }
+
+    // Rewrite each message's content so image parts become media markers, in
+    // the same order the bitmaps are collected — mtmd_tokenize() matches the
+    // Nth marker to the Nth bitmap.
+    const char *marker=mtmd_default_marker();
+
+    std::vector<Message> markedMessages;
+    std::vector<const ContentPart *> images;
+    markedMessages.reserve(request.messages.size());
+
+    for(const Message &msg:request.messages)
+    {
+        Message marked=msg;
+
+        if(!msg.parts.empty())
+        {
+            std::string content;
+            for(const ContentPart &part:msg.parts)
+            {
+                if(part.type=="image")
+                {
+                    if(!content.empty()&&content.back()!='\n') content+='\n';
+                    content+=marker;
+                    content+='\n';
+                    images.push_back(&part);
+                }
+                else
+                {
+                    content+=part.text;
+                }
+            }
+            marked.content=content;
+        }
+        marked.parts.clear();
+        markedMessages.push_back(std::move(marked));
+    }
+
+    if(images.empty())
+    {
+        m_lastErrorDetail="multimodal tokenization requested but no image parts were present";
+        return ErrorCode::InvalidRequest;
+    }
+
+    formattedPrompt=applyTemplate(model, markedMessages);
+
+    // Decode the image files (png/jpeg/…) into bitmaps.
+    std::vector<mtmd_bitmap *> bitmaps;
+    bitmaps.reserve(images.size());
+
+    for(const ContentPart *image:images)
+    {
+        mtmd_bitmap *bitmap=mtmd_helper_bitmap_init_from_buf(mtmdCtx,
+            image->imageData.data(), image->imageData.size());
+        if(!bitmap)
+        {
+            for(mtmd_bitmap *b:bitmaps) mtmd_bitmap_free(b);
+            spdlog::error("[llama] failed to decode image ({} bytes, mime='{}')",
+                image->imageData.size(), image->mimeType);
+            m_lastErrorDetail="failed to decode an input image (mime='"+image->mimeType
+                +"', "+std::to_string(image->imageData.size())+" bytes) — unsupported or corrupt image data";
+            return ErrorCode::InvalidRequest;
+        }
+        bitmaps.push_back(bitmap);
+    }
+
+    mtmd_input_chunks *chunks=mtmd_input_chunks_init();
+
+    mtmd_input_text text;
+    text.text=formattedPrompt.c_str();
+    text.add_special=true;
+    // The prompt is a fully templated conversation, so its control tokens must
+    // tokenize as special tokens rather than literal text.
+    text.parse_special=true;
+
+    int32_t tokenizeResult=mtmd_tokenize(mtmdCtx, chunks, &text,
+        const_cast<const mtmd_bitmap **>(bitmaps.data()), bitmaps.size());
+
+    for(mtmd_bitmap *b:bitmaps)
+    {
+        mtmd_bitmap_free(b);
+    }
+
+    if(tokenizeResult!=0)
+    {
+        mtmd_input_chunks_free(chunks);
+        spdlog::error("[llama] mtmd_tokenize failed (result={})", tokenizeResult);
+        m_lastErrorDetail=tokenizeResult==1
+            ?"number of images does not match the number of media markers in the prompt"
+            :"failed to preprocess an input image for the vision encoder";
+        return ErrorCode::GenerationError;
+    }
+
+    prompt.reset(mtmdCtx, chunks);
+
+    // Collect the text-chunk tokens for the sampler; image chunks carry
+    // embeddings, not token ids, so they have nothing to contribute here.
+    textTokens.clear();
+    size_t chunkCount=mtmd_input_chunks_size(chunks);
+    for(size_t i=0; i<chunkCount; ++i)
+    {
+        const mtmd_input_chunk *chunk=mtmd_input_chunks_get(chunks, i);
+        if(mtmd_input_chunk_get_type(chunk)!=MTMD_INPUT_CHUNK_TYPE_TEXT)
+        {
+            continue;
+        }
+
+        size_t nTokens=0;
+        const llama_token *tokens=mtmd_input_chunk_get_tokens_text(chunk, &nTokens);
+        textTokens.insert(textTokens.end(), tokens, tokens+nTokens);
+    }
+
+    spdlog::info("[llama] multimodal prompt tokenized: {} chunks, {} images, {} total tokens ({} text)",
+        chunkCount, images.size(), prompt.tokenCount(), textTokens.size());
+
+    return ErrorCode::Success;
+}
+
 ErrorCode Llama::tokenizePrompt(llama_model *model,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     std::vector<int32_t> &tokens, std::string &formattedPrompt)
@@ -1038,21 +1236,61 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
     std::string &result, int &promptTokenCount, int &completionTokens,
     double &promptTimeMs, double &generationTimeMs,
     std::function<void(const std::string &)> streamCallback,
-    std::function<bool()> shouldAbort)
+    std::function<bool()> shouldAbort,
+    const MultimodalPrompt *multimodal)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
+    const bool multimodalPrompt=(multimodal!=nullptr&&multimodal->valid());
 
     int nTokens=static_cast<int>(promptTokens.size());
     promptTokenCount=nTokens;
 
     std::vector<int32_t> *kvRecord=ModelRuntime::instance().kvCacheTokens(request.model);
-    int reusedTokens=prepareKvCache(ctx, request, promptTokens, kvRecord);
 
     int nBatch=static_cast<int>(llama_n_batch(ctx));
     llama_batch batch=llama_batch_init(std::max(nBatch, 512), 0, 1);
 
     std::chrono::steady_clock::time_point promptStart=std::chrono::steady_clock::now();
+
+    // Position of the next token to decode.  For the text path this is simply
+    // the prompt length; the multimodal path gets it from mtmd (image chunks
+    // advance positions differently under M-RoPE).
+    int nCur=nTokens;
+
+    if(multimodalPrompt)
+    {
+        // Image chunks carry embeddings rather than token ids, so there is no
+        // token sequence to diff against the cache — always prefill fresh.
+        llama_memory_clear(llama_get_memory(ctx), true);
+        if(kvRecord)
+        {
+            kvRecord->clear();
+        }
+
+        promptTokenCount=static_cast<int>(multimodal->tokenCount());
+
+        llama_pos newNPast=0;
+        int32_t evalResult=mtmd_helper_eval_chunks(multimodal->context(), ctx,
+            multimodal->chunks(), 0, 0, nBatch, true, &newNPast);
+        if(evalResult!=0)
+        {
+            spdlog::error("[llama] mtmd_helper_eval_chunks failed (result={}, {} prompt tokens)",
+                evalResult, promptTokenCount);
+            m_lastErrorDetail="llama backend failed to process the multimodal prompt "
+                "(mtmd_helper_eval_chunks result="+std::to_string(evalResult)+", "
+                +std::to_string(promptTokenCount)+" prompt tokens) — the context may exceed "
+                "the model/hardware limit or the vision encoder errored";
+            llama_batch_free(batch);
+            return ErrorCode::GenerationError;
+        }
+
+        nCur=static_cast<int>(newNPast);
+    }
+
+    int reusedTokens=multimodalPrompt
+        ?nTokens
+        :prepareKvCache(ctx, request, promptTokens, kvRecord);
 
     for(int start=reusedTokens; start<nTokens; start+=nBatch)
     {
@@ -1105,7 +1343,6 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
         maxOutputTokens=std::min(minHarmonyTokens, modelInfo.maxOutputTokens>0?modelInfo.maxOutputTokens:131072);
     }
 
-    int nCur=nTokens;
     completionTokens=0;
     std::vector<int32_t> generatedInKv;
 
@@ -1253,8 +1490,10 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
     llama_batch_free(batch);
 
     // Record what now sits in the KV cache so the next cache_prompt request
-    // can reuse the common prefix
-    if(kvRecord)
+    // can reuse the common prefix.  A multimodal prompt has image embeddings in
+    // the cache that no token sequence describes, so it records nothing and the
+    // next request prefills from scratch.
+    if(kvRecord&&!multimodalPrompt)
     {
         *kvRecord=promptTokens;
         kvRecord->insert(kvRecord->end(), generatedInKv.begin(), generatedInKv.end());

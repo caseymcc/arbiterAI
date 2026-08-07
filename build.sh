@@ -84,6 +84,18 @@ if [ "$REBUILD_CMAKE" = true ]; then
     rm -rf "$BUILD_DIR"
 fi
 
+# --- Check for Ninja ---
+# Done before the configure block so incremental builds (build dir already
+# configured) still have a build command.
+if command -v ninja &> /dev/null; then
+    GENERATOR="Ninja"
+    BUILD_CMD="ninja"
+else
+    echo "Ninja not found. Falling back to Unix Makefiles."
+    GENERATOR="Unix Makefiles"
+    BUILD_CMD="make -j$(nproc)"
+fi
+
 # --- Configure CMake if build directory doesn't exist ---
 if [ ! -d "$BUILD_DIR" ] || [ ! -f "$BUILD_DIR/build.ninja" ]; then
     echo "--- Build directory not ready for Ninja. Configuring CMake for $BUILD_TYPE, $OS on $ARCH... ---"
@@ -107,16 +119,6 @@ if [ ! -d "$BUILD_DIR" ] || [ ! -f "$BUILD_DIR/build.ninja" ]; then
     # Assuming script is run from project root, so CMAKE_CURRENT_SOURCE_DIR . is correct.
     # We substitute /app with the current directory path.
     PROJECT_ROOT=$(pwd)
-
-    # --- Check for Ninja ---
-    if command -v ninja &> /dev/null; then
-        GENERATOR="Ninja"
-        BUILD_CMD="ninja"
-    else
-        echo "Ninja not found. Falling back to Unix Makefiles."
-        GENERATOR="Unix Makefiles"
-        BUILD_CMD="make -j$(nproc)"
-    fi
 
     CMAKE_ARGS=(
         "-G" "$GENERATOR"

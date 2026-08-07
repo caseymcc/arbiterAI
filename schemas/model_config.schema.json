@@ -45,6 +45,16 @@
             "enum": ["chat", "embedding", "transcription", "speech", "image"],
             "default": "chat"
           },
+          "input_modalities": {
+            "type": "array",
+            "description": "Content types this model accepts as input. Chat models default to text only; vision-language models add \"image\". Advertised on /v1/models and used to reject unsupported content.",
+            "items": {
+              "type": "string",
+              "enum": ["text", "image", "audio"]
+            },
+            "uniqueItems": true,
+            "default": ["text"]
+          },
           "api_base": {
             "type": "string",
             "description": "Custom API endpoint URL"
@@ -260,6 +270,32 @@
                     "required": ["url", "filename"]
                   },
                   "minItems": 1
+                },
+                "mmproj": {
+                  "type": "object",
+                  "description": "Multimodal projector (vision/audio encoder) GGUF paired with this variant. Downloaded alongside the model and loaded by libmtmd; required for models that declare \"image\" in input_modalities. When the projector is GPU-offloaded (runtime_options.mmproj_use_gpu, default true) its size should be included in min_vram_mb.",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri",
+                      "description": "Download URL"
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$",
+                      "description": "SHA256 checksum"
+                    },
+                    "filename": {
+                      "type": "string",
+                      "description": "Local filename for the downloaded projector"
+                    },
+                    "file_size_mb": {
+                      "type": "integer",
+                      "description": "Projector file size in MB",
+                      "minimum": 0
+                    }
+                  },
+                  "required": ["url", "filename"]
                 }
               }
             }
@@ -303,6 +339,10 @@
               "override_tensor": {
                 "type": "string",
                 "description": "Tensor override pattern (-ot) for routing tensors to CPU/GPU"
+              },
+              "mmproj_use_gpu": {
+                "type": "boolean",
+                "description": "Offload the multimodal projector to the GPU (inverse of --no-mmproj-offload). Set false to run the vision encoder on CPU when the GPU backend is unstable for it."
               }
             },
             "additionalProperties": false

@@ -52,6 +52,7 @@ struct RuntimeOptions {
     std::optional<int> nGpuLayers;              // -ngl: number of GPU layers (99=all)
     std::optional<std::string> overrideTensor;  // -ot: tensor override pattern (e.g. "per_layer_token_embd.weight=CPU")
     std::optional<bool> vulkanNoHostVisibleVram; // GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM: skip BAR-mapped heap, force device-local only
+    std::optional<bool> mmprojUseGpu;           // offload the multimodal projector to GPU (inverse of --no-mmproj-offload)
 
     /// Merge another set of options on top of this one (override only non-empty fields).
     void mergeFrom(const RuntimeOptions &other);
@@ -64,14 +65,26 @@ struct ModelVariant {
     int recommendedVramMb=0;
     VariantDownload download; // Primary / single-file download (backward compat)
     std::vector<VariantDownload> files; // All shard files (split GGUF). Empty = use download field.
+    std::optional<VariantDownload> mmproj; // Multimodal projector (vision/audio encoder) GGUF
+    int mmprojFileSizeMb=0;
 
-    /// Get the complete list of files to download for this variant.
+    /// Get the complete list of files to download for this variant, including
+    /// the multimodal projector when one is configured (always last).
     /// Returns files if non-empty, otherwise a 1-element vector from download (if non-empty).
     std::vector<VariantDownload> getAllFiles() const;
 
     /// Get the primary filename (first shard / single file) used as the llama.cpp load path.
-    /// Returns empty string if no download info is configured.
+    /// Never returns the projector.  Returns empty string if no download info is configured.
     std::string getPrimaryFilename() const;
+
+    /// Get the multimodal projector filename, or an empty string if this variant has none.
+    std::string getMmprojFilename() const;
+
+    /// Check whether this variant carries a multimodal projector.
+    bool hasMmproj() const;
+
+    /// On-disk size of everything this variant needs (model shards + projector).
+    int totalFileSizeMb() const { return fileSizeMb+mmprojFileSizeMb; }
 
     /// Check whether this variant is a split (multi-file) GGUF.
     bool isSplit() const;
@@ -114,6 +127,7 @@ struct ModelInfo
     std::string model;
     std::string provider;
     std::string mode{ "chat" };
+    std::vector<std::string> inputModalities;   // Accepted input content types; empty = text only
     std::string configVersion{ "1.1.0" }; // Current schema version
     std::string minSchemaVersion{ "1.0.0" }; // Minimum compatible schema version
     int ranking{ 50 }; // Default ranking (0-100)
@@ -142,6 +156,9 @@ struct ModelInfo
 
     bool isCompatible(const std::string &clientVersion) const;
     bool isSchemaCompatible(const std::string &schemaVersion) const;
+
+    /// True when the model declares "image" in input_modalities.
+    bool supportsImageInput() const;
 };
 
 /// GPU architecture backend configuration entry.

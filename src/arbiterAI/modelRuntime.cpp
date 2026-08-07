@@ -5,6 +5,7 @@
 #include "arbiterAI/storageManager.h"
 
 #include <llama.h>
+#include <mtmd.h>
 #include <ggml.h>
 #include <ggml-backend.h>
 #include <spdlog/spdlog.h>
@@ -522,14 +523,14 @@ ErrorCode ModelRuntime::loadModel(
                 if(anyMissing)
                 {
                     // Check storage quota for total missing file size
-                    int64_t totalDownloadBytes=static_cast<int64_t>(selectedVar->fileSizeMb)*1024*1024;
+                    int64_t totalDownloadBytes=static_cast<int64_t>(selectedVar->totalFileSizeMb())*1024*1024;
                     if(!StorageManager::instance().canDownload(totalDownloadBytes))
                     {
                         StorageManager::instance().runCleanup();
                         if(!StorageManager::instance().canDownload(totalDownloadBytes))
                         {
                             spdlog::error("Insufficient storage to download '{}' variant '{}' ({} MB)",
-                                model, selectedVariant, selectedVar->fileSizeMb);
+                                model, selectedVariant, selectedVar->totalFileSizeMb());
                             return ErrorCode::InsufficientStorage;
                         }
                     }
@@ -586,8 +587,13 @@ ErrorCode ModelRuntime::loadModel(
                 std::vector<std::string> effectiveBackendPriority=resolveBackendPriority(*modelInfo);
 
                 std::string filePath=m_modelsDir+primaryFilename;
+                std::string mmprojPath;
+                if(selectedVar->hasMmproj())
+                {
+                    mmprojPath=m_modelsDir+selectedVar->getMmprojFilename();
+                }
                 ErrorCode loadResult=loadLlamaModel(model, filePath, entry.contextSize, entry.gpuIndices,
-                    fit.maxContextSize, resolvedOptions, effectiveBackendPriority);
+                    fit.maxContextSize, resolvedOptions, effectiveBackendPriority, mmprojPath);
                 if(loadResult!=ErrorCode::Success)
                 {
                     m_models.erase(model);
@@ -704,14 +710,14 @@ ErrorCode ModelRuntime::downloadModel(
     }
 
     // Check storage quota
-    int64_t totalDownloadBytes=static_cast<int64_t>(selectedVar->fileSizeMb)*1024*1024;
+    int64_t totalDownloadBytes=static_cast<int64_t>(selectedVar->totalFileSizeMb())*1024*1024;
     if(!StorageManager::instance().canDownload(totalDownloadBytes))
     {
         StorageManager::instance().runCleanup();
         if(!StorageManager::instance().canDownload(totalDownloadBytes))
         {
             spdlog::error("Insufficient storage to download '{}' variant '{}' ({} MB)",
-                model, selectedVariant, selectedVar->fileSizeMb);
+                model, selectedVariant, selectedVar->totalFileSizeMb());
             return ErrorCode::InsufficientStorage;
         }
     }
@@ -1592,7 +1598,8 @@ ErrorCode ModelRuntime::loadLlamaModel(
     const std::vector<int> &gpuIndices,
     int maxHardwareContext,
     const RuntimeOptions &options,
-    const std::vector<std::string> &backendPriority)
+    const std::vector<std::string> &backendPriority,
+    const std::string &mmprojPath)
 {
     // Apply Vulkan environment variable overrides before backend init.
     // These are read by ggml-vulkan.cpp via getenv() during device initialization.
@@ -2057,9 +2064,46 @@ ErrorCode ModelRuntime::loadLlamaModel(
         std::string capturedLog=m_llamaLogCapture.str();
         endLlamaLogCapture();
 
+        // Load the multimodal projector (vision/audio encoder) when the variant
+        // ships one.  A missing or broken projector is fatal for the model: the
+        // config declares image input, so loading it text-only would silently
+        // answer image requests from the text alone.
+        mtmd_context *mtmdCtx=nullptr;
+        if(!mmprojPath.empty())
+        {
+            mtmd_context_params mparamsMtmd=mtmd_context_params_default();
+            mparamsMtmd.use_gpu=options.mmprojUseGpu.value_or(true);
+            mparamsMtmd.n_threads=static_cast<int>(std::thread::hardware_concurrency());
+            mparamsMtmd.print_timings=false;
+
+            mtmdCtx=mtmd_init_from_file(mmprojPath.c_str(), llamaModel, mparamsMtmd);
+            if(!mtmdCtx)
+            {
+                m_lastLoadError=LoadErrorDetail{};
+                m_lastLoadError.reason=LoadFailureReason::BackendError;
+                m_lastLoadError.summary="Failed to load multimodal projector: "+mmprojPath;
+                m_lastLoadError.suggestion="Verify the mmproj file downloaded correctly and matches this "
+                    "model. If the GPU backend is unstable for the vision encoder, set "
+                    "runtime_options.mmproj_use_gpu=false to run it on CPU.";
+                m_lastLoadError.action="redownload";
+                m_lastLoadError.recoverable=true;
+
+                spdlog::error("Failed to load multimodal projector for model '{}': {}", model, mmprojPath);
+                llama_free(llamaCtx);
+                llama_model_free(llamaModel);
+                return ErrorCode::ModelLoadError;
+            }
+
+            spdlog::info("Loaded multimodal projector for '{}' ({}, gpu={}, vision={}, audio={})",
+                model, mmprojPath, mparamsMtmd.use_gpu?"on":"off",
+                mtmd_support_vision(mtmdCtx)?"yes":"no",
+                mtmd_support_audio(mtmdCtx)?"yes":"no");
+        }
+
         LoadedModel &entry=m_models[model];
         entry.llamaModel=llamaModel;
         entry.llamaCtx=llamaCtx;
+        entry.mtmdCtx=mtmdCtx;
         entry.maxContextSize=nativeContext;
         entry.contextSize=static_cast<int>(llama_n_ctx(llamaCtx));
 
@@ -2090,6 +2134,11 @@ ErrorCode ModelRuntime::loadLlamaModel(
 
 void ModelRuntime::freeLlamaModel(LoadedModel &entry)
 {
+    if(entry.mtmdCtx)
+    {
+        mtmd_free(entry.mtmdCtx);
+        entry.mtmdCtx=nullptr;
+    }
     if(entry.llamaCtx)
     {
         llama_free(entry.llamaCtx);
@@ -2193,6 +2242,18 @@ llama_context *ModelRuntime::getLlamaContext(const std::string &model) const
     if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
     {
         return it->second.llamaCtx;
+    }
+    return nullptr;
+}
+
+mtmd_context *ModelRuntime::getMtmdContext(const std::string &model) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
+    {
+        return it->second.mtmdCtx;
     }
     return nullptr;
 }

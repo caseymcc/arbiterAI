@@ -126,7 +126,7 @@ ModelFit ModelFitCalculator::calculateModelFit(
             // Can't run even with all GPUs — check if CPU-only fallback is possible
             if(model.hardwareRequirements.has_value()&&
                 model.hardwareRequirements->minSystemRamMb>0&&
-                hw.freeRamMb>=variant.fileSizeMb)
+                hw.freeRamMb>=variant.totalFileSizeMb())
             {
                 // CPU-only fallback: can run but slowly, with base context
                 fit.canRun=true;

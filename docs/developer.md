@@ -164,10 +164,24 @@ enum class ErrorCode {
 
 ```cpp
 struct Message {
-    std::string role;       // "system", "user", "assistant", "tool"
-    std::string content;
+    std::string role;                   // "system", "user", "assistant", "tool"
+    std::string content;                // flattened text of all text parts
+    std::vector<ContentPart> parts;     // populated only for non-text content (images)
+};
+
+struct ContentPart {
+    std::string type;                   // "text" or "image"
+    std::string text;                   // type=="text"
+    std::vector<uint8_t> imageData;     // type=="image": encoded file bytes (PNG/JPEG/…)
+    std::string mimeType;               // type=="image"
 };
 ```
+
+`content` always holds the text, so every text-only provider is unaffected by multi-part content.
+`parts` is populated only when a message carries an image, and today only the llama provider consumes
+it (via libmtmd). `contentToParts()` in [`arbiterAI.h`](../src/arbiterAI/arbiterAI.h) parses an OpenAI
+`content` array into parts; `hasImageContent(messages)` reports whether a request needs the multimodal
+path.
 
 ### `ChatConfig` (defined in [`chatClient.h`](../src/arbiterAI/chatClient.h))
 
@@ -311,6 +325,7 @@ enum class DownloadStatus {
 | `model` | `std::string` | | Model identifier |
 | `provider` | `std::string` | | Provider type |
 | `mode` | `std::string` | `"chat"` | Operation mode |
+| `inputModalities` | `std::vector<std::string>` | empty | Accepted input types (`"text"`, `"image"`); empty = text only. `supportsImageInput()` tests for `"image"` |
 | `configVersion` | `std::string` | `"1.1.0"` | Schema version |
 | `minSchemaVersion` | `std::string` | `"1.0.0"` | Minimum compatible version |
 | `ranking` | `int` | `50` | Priority ranking (0-100) |
@@ -516,6 +531,35 @@ ai.completion(request, response);
 ### Model Configuration Files
 
 Models are defined in JSON files validated against [`schemas/model_config.schema.json`](../schemas/model_config.schema.json). See [`examples/model_config_v2.json`](../examples/model_config_v2.json) for an example.
+
+**Vision-language models.** A VLM is two GGUF files: the language model and a multimodal projector
+(`mmproj`, the vision encoder). Declare the modality at the model level and pair a projector with each
+variant:
+
+```json
+{
+  "model": "Qwen3-VL-32B-Thinking",
+  "provider": "llama",
+  "input_modalities": ["text", "image"],
+  "runtime_options": { "mmproj_use_gpu": true },
+  "variants": [{
+    "quantization": "Q4_K_M",
+    "file_size_mb": 18847,
+    "min_vram_mb": 20480,
+    "download": { "url": "...", "sha256": "...", "filename": "model-Q4_K_M.gguf" },
+    "mmproj":   { "url": "...", "sha256": "...", "filename": "mmproj-Q8_0.gguf", "file_size_mb": 737 }
+  }]
+}
+```
+
+- The projector is downloaded with the variant (`getAllFiles()` includes it, always last) but is never
+  the llama.cpp load path (`getPrimaryFilename()` never returns it). `ModelRuntime` loads it via
+  `mtmd_init_from_file()` and keeps it in `LoadedModel::mtmdCtx`.
+- `min_vram_mb` should include the projector when it is GPU-offloaded (the default).
+- `runtime_options.mmproj_use_gpu: false` runs the vision encoder on CPU — the fallback when a GPU
+  backend is unstable for it.
+- A model that declares `"image"` but whose selected variant has no `mmproj` will load, but image
+  requests fail with a clear error; a projector that fails to load fails the whole model load.
 
 ### Environment Variables
 

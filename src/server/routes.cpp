@@ -1625,7 +1625,25 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
             // content can be null for assistant messages with tool_calls
             // content can be a string or an array of content parts (OpenAI spec)
             if(msg.contains("content") && !msg.at("content").is_null())
+            {
                 m.content=contentToString(msg.at("content"));
+
+                std::string partsError;
+                if(!contentToParts(msg.at("content"), m.parts, partsError))
+                {
+                    res.status=400;
+                    res.set_content(errorJson(partsError, "invalid_request_error",
+                        "messages", "invalid_content").dump(), "application/json");
+                    return;
+                }
+
+                // Text-only content needs no parts representation; the flattened
+                // string is what every text provider consumes.
+                if(!m.hasImageParts())
+                {
+                    m.parts.clear();
+                }
+            }
 
             // tool_call_id for role="tool" messages
             if(msg.contains("tool_call_id"))
@@ -1659,6 +1677,22 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 m.name=msg.at("name").get<std::string>();
 
             arbiterRequest.messages.push_back(std::move(m));
+        }
+
+        // Reject images for models that don't declare image input, instead of
+        // silently answering from the text alone.
+        if(hasImageContent(arbiterRequest.messages))
+        {
+            std::optional<ModelInfo> imageModelInfo=ModelManager::instance().getModelInfo(baseName);
+            if(!imageModelInfo.has_value()||!imageModelInfo->supportsImageInput())
+            {
+                res.status=400;
+                res.set_content(errorJson(
+                    "Model '"+baseName+"' does not accept image input",
+                    "invalid_request_error", "messages", "unsupported_content").dump(),
+                    "application/json");
+                return;
+            }
         }
 
         if(requestJson.contains("temperature"))
@@ -2309,6 +2343,17 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
     }
 }
 
+/// Input modalities advertised for a model — defaults to text-only when the
+/// config doesn't declare any.
+nlohmann::json modelInputModalities(const ModelInfo &info)
+{
+    if(info.inputModalities.empty())
+    {
+        return nlohmann::json::array({"text"});
+    }
+    return info.inputModalities;
+}
+
 void handleListModelsV1(const httplib::Request &, httplib::Response &res)
 {
     // Return only currently loaded models (OpenAI-compatible: models ready for inference)
@@ -2335,7 +2380,9 @@ void handleListModelsV1(const httplib::Request &, httplib::Response &res)
             {"owned_by", "arbiterai"},
             {"permission", nlohmann::json::array()},
             {"context_length", contextLength},
-            {"max_completion_tokens", info.maxOutputTokens}
+            {"max_completion_tokens", info.maxOutputTokens},
+            {"input_modalities", modelInputModalities(info)},
+            {"capabilities", {{"vision", info.supportsImageInput()}}}
         };
         data.push_back(modelObj);
 
@@ -2410,7 +2457,9 @@ void handleGetModelV1(const httplib::Request &req, httplib::Response &res)
         {"owned_by", "arbiterai"},
         {"permission", nlohmann::json::array()},
         {"context_length", contextLength},
-        {"max_completion_tokens", info.maxOutputTokens}
+        {"max_completion_tokens", info.maxOutputTokens},
+        {"input_modalities", modelInputModalities(info)},
+        {"capabilities", {{"vision", info.supportsImageInput()}}}
     };
 
     res.set_content(response.dump(), "application/json");

@@ -402,11 +402,33 @@ void InferenceScheduler::tokenizerLoop()
 
         // Tokenize — this only reads llama_model/vocab (thread-safe, no context needed)
         Llama llamaProvider;
-        ErrorCode tokenizeResult=llamaProvider.tokenizePrompt(
-            llamaModel, job->request, *modelInfo, job->tokens, job->formattedPrompt);
+        ErrorCode tokenizeResult;
+
+        if(hasImageContent(job->request.messages))
+        {
+            mtmd_context *mtmdCtx=runtime.getMtmdContext(job->request.model);
+            if(!mtmdCtx)
+            {
+                spdlog::warn("[scheduler:tokenizer] job {} carries images but model '{}' has no projector loaded",
+                    job->id, job->request.model);
+                job->errorDetail="model '"+job->request.model+"' does not accept image input";
+                finishJob(job, ErrorCode::InvalidRequest);
+                continue;
+            }
+
+            tokenizeResult=llamaProvider.tokenizeMultimodalPrompt(
+                llamaModel, mtmdCtx, job->request, *modelInfo,
+                job->multimodal, job->tokens, job->formattedPrompt);
+        }
+        else
+        {
+            tokenizeResult=llamaProvider.tokenizePrompt(
+                llamaModel, job->request, *modelInfo, job->tokens, job->formattedPrompt);
+        }
 
         if(tokenizeResult!=ErrorCode::Success)
         {
+            job->errorDetail=llamaProvider.lastErrorDetail();
             finishJob(job, tokenizeResult);
             continue;
         }
@@ -558,7 +580,8 @@ void InferenceScheduler::acceleratorLoop(AcceleratorQueue &queue)
             job->tokens, job->resultText,
             job->promptTokens, completionTokens,
             job->promptTimeMs, job->generationTimeMs,
-            streamCallback, abortCheck);
+            streamCallback, abortCheck,
+            job->multimodal.valid()?&job->multimodal:nullptr);
 
         runtime.endInference(job->request.model);
         job->completionTokens.store(completionTokens);

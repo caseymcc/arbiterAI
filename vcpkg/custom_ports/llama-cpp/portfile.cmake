@@ -36,7 +36,13 @@ vcpkg_cmake_configure(
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
       -DLLAMA_BUILD_TESTS=OFF
       -DLLAMA_BUILD_EXAMPLES=OFF
-      -DLLAMA_BUILD_TOOLS=OFF
+      # libmtmd (multimodal projector / vision encoder) lives in tools/mtmd and is
+      # only configured when tools are built.  We need the mtmd library + headers
+      # for vision-language models; LLAMA_TOOLS_INSTALL=OFF keeps the tool
+      # binaries themselves out of the package.
+      -DLLAMA_BUILD_COMMON=ON
+      -DLLAMA_BUILD_TOOLS=ON
+      -DLLAMA_TOOLS_INSTALL=OFF
       -DLLAMA_BUILD_SERVER=OFF
       -DLLAMA_ALL_WARNINGS=OFF
       ${FEATURE_OPTIONS}

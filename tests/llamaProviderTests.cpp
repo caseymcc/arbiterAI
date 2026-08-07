@@ -8,6 +8,7 @@
 #include "arbiterAI/modelManager.h"
 
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <string>
 
@@ -475,6 +476,206 @@ TEST(KvPrefixReuse, KvCacheTokensRequiresLoadedModel)
 {
     ModelRuntime::reset();
     EXPECT_EQ(ModelRuntime::instance().kvCacheTokens("not-loaded"), nullptr);
+}
+
+// ─── Vision-language model tests ─────────────────────────────────────────
+//
+// These exercise the libmtmd path end to end (projector load → mtmd_tokenize →
+// chunked prefill → generation).  They need both GGUF files staged in /models;
+// fetch them with:
+//   huggingface-cli download Qwen/Qwen3-VL-2B-Instruct-GGUF \
+//       Qwen3VL-2B-Instruct-Q4_K_M.gguf mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf \
+//       --local-dir model_cache
+
+static const std::string VISION_MODEL_NAME="injected-qwen3vl-test";
+static const std::string VISION_MODEL_FILE="Qwen3VL-2B-Instruct-Q4_K_M.gguf";
+static const std::string VISION_MMPROJ_FILE="mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf";
+
+class LlamaVisionTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ModelRuntime::reset();
+        TelemetryCollector::reset();
+
+        ArbiterAI::instance().initialize({"tests/config"});
+
+        if(!std::filesystem::exists("/models/"+VISION_MODEL_FILE))
+        {
+            GTEST_SKIP() << "Vision model file not found at /models/" << VISION_MODEL_FILE;
+        }
+        if(!std::filesystem::exists("/models/"+VISION_MMPROJ_FILE))
+        {
+            GTEST_SKIP() << "Projector file not found at /models/" << VISION_MMPROJ_FILE;
+        }
+
+        std::string error;
+        ASSERT_TRUE(ModelManager::instance().addModelFromJson(buildVisionModelJson(), error))<<error;
+    }
+
+    void TearDown() override
+    {
+        ModelRuntime::instance().unloadModel(VISION_MODEL_NAME);
+        ModelRuntime::reset();
+        TelemetryCollector::reset();
+    }
+
+    nlohmann::json buildVisionModelJson() const
+    {
+        return nlohmann::json{
+            {"model", VISION_MODEL_NAME},
+            {"provider", "llama"},
+            {"ranking", 1},
+            {"version", "1.1.0"},
+            {"input_modalities", nlohmann::json::array({"text", "image"})},
+            {"context_window", 8192},
+            {"max_tokens", 2048},
+            {"max_output_tokens", 256},
+            {"hardware_requirements", {
+                {"min_system_ram_mb", 4096},
+                {"parameter_count", "2B"}
+            }},
+            {"context_scaling", {
+                {"base_context", 4096},
+                {"max_context", 32768},
+                {"vram_per_1k_context_mb", 32}
+            }},
+            {"variants", nlohmann::json::array({
+                {
+                    {"quantization", "Q4_K_M"},
+                    {"file_size_mb", 1056},
+                    {"min_vram_mb", 2048},
+                    {"recommended_vram_mb", 3072},
+                    {"download", {
+                        {"url", ""},
+                        {"sha256", ""},
+                        {"filename", VISION_MODEL_FILE}
+                    }},
+                    {"mmproj", {
+                        {"url", ""},
+                        {"sha256", ""},
+                        {"filename", VISION_MMPROJ_FILE},
+                        {"file_size_mb", 425}
+                    }}
+                }
+            })}
+        };
+    }
+
+    /// A 448x448 image split into a red left half and a blue right half, PNG-encoded.
+    static std::vector<uint8_t> makeTestImagePng()
+    {
+        static const std::string kPngBase64=
+            "iVBORw0KGgoAAAANSUhEUgAAAcAAAAHACAIAAAC6Ry8kAAAGyElEQVR42u3UMQ0AAAzDsPInvZHo0cOSEeRILoFZGjBNAwwU"
+            "DBQDBQMFA8VAwUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQMFAMFA8VAwUDBQDFQ"
+            "MFAMFAwUDBQDBQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUNAAAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQ"
+            "MFAMFAwUDBQDBQPFQMFAwUAxUDBQDBQMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQDBQMFA8VA"
+            "wUAxUDBQMFAMFAwUBMBAwUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQDBQMFA8VA"
+            "wUDBQDFQMFAMFAwUDBQDBQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQD"
+            "BQMFA8VAwUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAM"
+            "FAwUDBQDBQPFQMFAwUAxUDBQDBQMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQDBQMFA8VAwUAx"
+            "UDBQMFAMFAwUAwUDBQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQDBQMF"
+            "A8VAwUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQD1QADBQPFQMFAwUAxUDBQDBQM"
+            "FAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQDBQMFA8VAwUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAw"
+            "UDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQD1QADBQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VA"
+            "wUDBQDFQMFAMFAwUDBQDBQMFA8VAwUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQD"
+            "1QADBQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQDBQMFA8VAwUAxUDBQ"
+            "MFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQ0wEDBQDFQMFAwUAwUDBQDBQMFA8VAwUAxUDBQ"
+            "MFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQDBQPFQMFA"
+            "wUAxUDBQDBQMFAwUAwUDBQ0wUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQDBQPFQMFA"
+            "wUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQDBQMFA8VAwUBBAAwUDBQDBQMFA8VA"
+            "wUAxUDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQD"
+            "BQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQDBQMFA8VAwUAxUDBQMFAM"
+            "FAwUAwUDBQPFQMFAMVAwUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAMFAwUDBQDBQPFQMFAwUAx"
+            "UDBQMFAMFAwUAwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQMFAwUAwUDBQDBQMFA8VAwUAxUDBQMFAMFAwUDBQDBQPF"
+            "QMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAwUAwUDBQMFAMFA8VAwUDBQDFQMFAwUAwUDBQDBQMFA8VAwUAxUDBQMFAMFAwU"
+            "AwUDBQPFQMFAMVAwUDBQDBQMFAMFAwUDxUDBQDFQDTBQMFAMFAwUDBQDBQPFQMFAwUAxUDBQDBQMFAwUAwUDxUDBQMFAMVAw"
+            "UAwUDBQMFAMFA8VAwUDBQDFQMFAwUAwUDBQDBQMFA8VAwUAxUDBQMFAMFHoeCa0dxJXzMXgAAAAASUVORK5CYII=";
+
+        std::vector<uint8_t> png;
+        base64Decode(kPngBase64, png);
+        return png;
+    }
+};
+
+TEST_F(LlamaVisionTest, ProjectorLoadsWithModel)
+{
+    ErrorCode loadResult=ModelRuntime::instance().loadModel(VISION_MODEL_NAME, "Q4_K_M", 8192);
+    ASSERT_EQ(loadResult, ErrorCode::Success);
+
+    std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(VISION_MODEL_NAME);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, ModelState::Loaded);
+    EXPECT_NE(state->llamaModel, nullptr);
+    EXPECT_NE(state->llamaCtx, nullptr);
+    EXPECT_NE(state->mtmdCtx, nullptr)<<"multimodal projector was not loaded";
+    EXPECT_NE(ModelRuntime::instance().getMtmdContext(VISION_MODEL_NAME), nullptr);
+}
+
+TEST_F(LlamaVisionTest, DescribesAnImage)
+{
+    ASSERT_EQ(ModelRuntime::instance().loadModel(VISION_MODEL_NAME, "Q4_K_M", 8192), ErrorCode::Success);
+
+    std::vector<uint8_t> png=makeTestImagePng();
+    ASSERT_FALSE(png.empty());
+
+    ContentPart textPart;
+    textPart.type="text";
+    textPart.text="What colors are in this image? Answer in a few words.";
+
+    ContentPart imagePart;
+    imagePart.type="image";
+    imagePart.mimeType="image/png";
+    imagePart.imageData=png;
+
+    Message message;
+    message.role="user";
+    message.content=textPart.text;
+    message.parts={textPart, imagePart};
+
+    CompletionRequest request;
+    request.model=VISION_MODEL_NAME;
+    request.max_tokens=48;
+    request.temperature=0.0;
+    request.messages={message};
+
+    Llama provider;
+    CompletionResponse response;
+    std::optional<ModelInfo> info=ModelManager::instance().getModelInfo(VISION_MODEL_NAME);
+    ASSERT_TRUE(info.has_value());
+
+    ErrorCode result=provider.completion(request, *info, response);
+    ASSERT_EQ(result, ErrorCode::Success)<<provider.lastErrorDetail();
+
+    EXPECT_FALSE(response.text.empty());
+    // The image expands to far more tokens than the short text prompt.
+    EXPECT_GT(response.usage.prompt_tokens, 100);
+
+    // The image is half red, half blue — a model that actually saw it says so.
+    std::string lower=response.text;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    EXPECT_NE(lower.find("red"), std::string::npos)<<"response: "<<response.text;
+    EXPECT_NE(lower.find("blue"), std::string::npos)<<"response: "<<response.text;
+}
+
+TEST_F(LlamaVisionTest, TextOnlyRequestStillWorks)
+{
+    ASSERT_EQ(ModelRuntime::instance().loadModel(VISION_MODEL_NAME, "Q4_K_M", 8192), ErrorCode::Success);
+
+    CompletionRequest request;
+    request.model=VISION_MODEL_NAME;
+    request.max_tokens=32;
+    request.temperature=0.0;
+    request.messages={{"user", "What is 2+2? Answer with just the number."}};
+
+    Llama provider;
+    CompletionResponse response;
+    std::optional<ModelInfo> info=ModelManager::instance().getModelInfo(VISION_MODEL_NAME);
+    ASSERT_TRUE(info.has_value());
+
+    ASSERT_EQ(provider.completion(request, *info, response), ErrorCode::Success)
+        <<provider.lastErrorDetail();
+    EXPECT_FALSE(response.text.empty());
 }
 
 } // namespace arbiterAI

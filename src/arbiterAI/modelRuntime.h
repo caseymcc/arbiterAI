@@ -22,6 +22,7 @@
 // Forward declarations for llama.cpp types
 struct llama_model;
 struct llama_context;
+struct mtmd_context;
 
 namespace arbiterAI
 {
@@ -86,6 +87,7 @@ struct LoadedModel {
     bool pinned=false;
     llama_model *llamaModel=nullptr;
     llama_context *llamaCtx=nullptr;
+    mtmd_context *mtmdCtx=nullptr; // multimodal projector context (vision models), null otherwise
     RuntimeOptions activeOptions; // llama.cpp options active for this loaded model
     std::vector<int32_t> kvCacheTokens; // tokens currently in llamaCtx's KV cache (seq 0), for cache_prompt prefix reuse
 };
@@ -210,6 +212,10 @@ public:
     /// Returns nullptr if not loaded or not a local model.
     llama_context *getLlamaContext(const std::string &model) const;
 
+    /// Get the multimodal (libmtmd) context for a loaded local model.
+    /// Returns nullptr unless the model was loaded with a projector.
+    mtmd_context *getMtmdContext(const std::string &model) const;
+
     /// Access the KV-cache token record for a loaded model (nullptr if not
     /// loaded).  Mirrors the tokens decoded into the context's KV cache on
     /// sequence 0 so cache_prompt requests can reuse the common prefix.
@@ -270,6 +276,8 @@ private:
     /// @param options           Resolved runtime options to apply.
     /// @param backendPriority   Ordered backend preference (e.g. ["vulkan","rocm"]).
     ///                          Empty = use all available backends (default).
+    /// @param mmprojPath        Multimodal projector GGUF to load alongside the
+    ///                          model (empty = text-only model).
     ErrorCode loadLlamaModel(
         const std::string &model,
         const std::string &filePath,
@@ -277,7 +285,8 @@ private:
         const std::vector<int> &gpuIndices,
         int maxHardwareContext=0,
         const RuntimeOptions &options=RuntimeOptions{},
-        const std::vector<std::string> &backendPriority={});
+        const std::vector<std::string> &backendPriority={},
+        const std::string &mmprojPath="");
 
     /// Free llama.cpp resources for a model.
     void freeLlamaModel(LoadedModel &entry);

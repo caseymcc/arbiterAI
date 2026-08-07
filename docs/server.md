@@ -236,6 +236,36 @@ data: [DONE]
 
 If `stream_options.include_usage` is `true`, a final chunk with usage statistics is included before `[DONE]`.
 
+**Image input (vision models):**
+
+`content` may be an array of content parts. Text parts are concatenated; image parts are passed to the
+model's vision encoder:
+
+```json
+{
+  "model": "Qwen3-VL-32B-Thinking",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "What is in this image?"},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}}
+    ]}
+  ],
+  "max_tokens": 256
+}
+```
+
+- Both `{"type": "image_url", "image_url": {"url": "..."}}` and the Responses-API spelling
+  `{"type": "input_image", "image_url": "..."}` are accepted. `detail` is accepted and ignored.
+- Only `data:` URIs are decoded. Remote `http(s)` image URLs are **not** fetched (server-side fetching
+  of client-supplied URLs is an SSRF surface) and return `400 invalid_request_error`.
+- Maximum decoded size per image is 20 MB.
+- Sending an image to a model that does not declare `"image"` in `input_modalities` returns
+  `400 invalid_request_error` with code `unsupported_content`.
+- Image tokens count toward `usage.prompt_tokens`. A single image can be well over a thousand tokens on
+  models with dynamic resolution (e.g. Qwen3-VL).
+- Prompt-prefix KV reuse (`cache_prompt`) is disabled for requests carrying images; those prompts are
+  always prefilled from scratch.
+
 **Notes:**
 
 - `max_tokens` and `max_completion_tokens` are both accepted (OpenAI compatibility).
@@ -256,11 +286,17 @@ List all available models.
       "id": "gpt-4",
       "object": "model",
       "created": 1711000000,
-      "owned_by": "openai"
+      "owned_by": "openai",
+      "input_modalities": ["text"],
+      "capabilities": {"vision": false}
     }
   ]
 }
 ```
+
+`input_modalities` and `capabilities.vision` come from the model config's `input_modalities` field and
+let clients decide whether to offer image attachment. Models that don't declare it are advertised as
+`["text"]`.
 
 #### `GET /v1/models/:id`
 
@@ -273,7 +309,9 @@ Get information about a specific model.
   "id": "gpt-4",
   "object": "model",
   "created": 1711000000,
-  "owned_by": "openai"
+  "owned_by": "openai",
+  "input_modalities": ["text"],
+  "capabilities": {"vision": false}
 }
 ```
 
