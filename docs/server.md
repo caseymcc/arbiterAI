@@ -265,6 +265,24 @@ model's vision encoder:
   models with dynamic resolution (e.g. Qwen3-VL).
 - Prompt-prefix KV reuse (`cache_prompt`) is disabled for requests carrying images; those prompts are
   always prefilled from scratch.
+- `runtime_options.image_min_tokens` / `image_max_tokens` bound how many tokens an image expands to.
+  llama.cpp recommends a floor of 1024 for Qwen-VL grounding accuracy; raising the floor raises both
+  accuracy and prompt cost.
+
+**Reasoning models:**
+
+Models configured with `api_format: "think_tags"` (Qwen3 Thinking, DeepSeek-R1 distills) wrap their
+chain-of-thought in `<think>…</think>`. The server splits it out so `content` holds only the answer:
+
+```json
+{"message": {"role": "assistant",
+             "content": "The image has red on the left and blue on the right.",
+             "reasoning_content": "So, let's look at the image. It's split into..."}}
+```
+
+When streaming, reasoning arrives as `delta.reasoning_content` and the answer as `delta.content`, so a
+client can render or hide the thinking as it comes in. `api_format: "harmony"` (gpt-oss) splits its
+analysis channel the same way.
 
 **Notes:**
 
@@ -511,13 +529,37 @@ Unpin a model, allowing LRU eviction.
 
 #### `POST /api/models/:name/download`
 
-Initiate a model download. Query parameter `variant` selects the quantization variant.
+Initiate a model download. The quantization variant may be given as a query parameter
+(`?variant=Q4_K_M`) or in a JSON body (`{"variant": "Q4_K_M"}`); omitting it auto-selects the best
+fitting variant.
+
+Files of 64 MB or more are fetched over up to 8 ranged connections in parallel when the host supports
+range requests — hosts commonly throttle per connection, so this is several times faster than a single
+stream. The transfer falls back to one stream when ranges aren't supported.
 
 **Response (200):** `{"status": "already_available", "model": "..."}` — already downloaded.
 
 **Response (202):** `{"status": "downloading", "model": "..."}` — download started.
 
 **Response (507):** Insufficient storage. Same format as the load endpoint.
+
+#### `DELETE /api/models/:name/download`
+
+Cancel an in-flight download. The transfer aborts, the partial file is removed, and the model returns to
+`Unloaded`.
+
+**Response (200):**
+
+```json
+{"status": "cancelled", "model": "Qwen3-VL-32B-Thinking"}
+```
+
+**Response (404)** — no download is active for that model:
+
+```json
+{"error": {"message": "No active download for model 'x'", "type": "not_found_error",
+           "param": "model", "code": "no_active_download"}}
+```
 
 #### `GET /api/models/:name/download`
 
