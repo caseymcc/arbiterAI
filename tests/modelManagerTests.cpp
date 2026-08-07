@@ -808,6 +808,7 @@ TEST_F(ModelManagerTest, VisionModelMmprojParsing)
         {"model", "vision-model"},
         {"provider", "llama"},
         {"input_modalities", {"text", "image"}},
+        {"default_context", 65536},
         {"runtime_options", {{"mmproj_use_gpu", false}, {"image_min_tokens", 1024}, {"image_max_tokens", 4096}}},
         {"variants", {{
             {"quantization", "Q4_K_M"},
@@ -837,6 +838,7 @@ TEST_F(ModelManagerTest, VisionModelMmprojParsing)
     ASSERT_TRUE(info.has_value());
 
     EXPECT_TRUE(info->supportsImageInput());
+    EXPECT_EQ(info->defaultContext, 65536);
     ASSERT_TRUE(info->runtimeOptions.mmprojUseGpu.has_value());
     EXPECT_FALSE(info->runtimeOptions.mmprojUseGpu.value());
     ASSERT_TRUE(info->runtimeOptions.imageMinTokens.has_value());
@@ -866,6 +868,7 @@ TEST_F(ModelManagerTest, VisionModelMmprojParsing)
     nlohmann::json outputJson=ModelManager::modelInfoToJson(info.value());
     ASSERT_TRUE(outputJson.contains("input_modalities"));
     EXPECT_EQ(outputJson["input_modalities"].size(), 2u);
+    EXPECT_EQ(outputJson["default_context"].get<int>(), 65536);
     ASSERT_TRUE(outputJson["variants"][0].contains("mmproj"));
     EXPECT_EQ(outputJson["variants"][0]["mmproj"]["filename"].get<std::string>(), "mmproj-vision-Q8_0.gguf");
     EXPECT_EQ(outputJson["variants"][0]["mmproj"]["file_size_mb"].get<int>(), 737);

@@ -434,6 +434,15 @@ ErrorCode ModelRuntime::loadModel(
     // training context from GGUF metadata" — resolved in loadLlamaModel after
     // loading model weights.  For cloud models, fall back to the config value.
     int resolvedContext=contextSize;
+
+    // A config-declared default_context stands in for an unspecified request,
+    // so a load doesn't silently allocate the largest KV cache that fits.
+    if(resolvedContext<=0&&modelInfo->defaultContext>0)
+    {
+        resolvedContext=modelInfo->defaultContext;
+        spdlog::info("Using configured default context {} for model '{}'", resolvedContext, model);
+    }
+
     bool useNativeContext=(resolvedContext<=0&&modelInfo->provider=="llama");
 
     if(resolvedContext<=0&&!useNativeContext)

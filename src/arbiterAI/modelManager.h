@@ -141,6 +141,7 @@ struct ModelInfo
     std::optional<std::string> maxClientVersion;
     bool examplesAsSysMsg{ false };
     int contextWindow{ 4096 };
+    int defaultContext{ 0 };                    // Context to allocate when a load doesn't specify one (0 = auto-fit)
     int maxTokens{ 2048 };
     int maxInputTokens{ 3072 };
     int maxOutputTokens{ 1024 };

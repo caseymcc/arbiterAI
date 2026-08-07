@@ -119,6 +119,11 @@
             "description": "Context window size in tokens",
             "minimum": 0
           },
+          "default_context": {
+            "type": "integer",
+            "description": "Context size to allocate when a load request doesn't specify one. Without it, a load defaults to the largest context that fits available VRAM (capped by context_scaling.max_context), which can pin far more KV cache than a workload needs. An explicit context_size on the load request still overrides this, up to the hardware/model limit.",
+            "minimum": 0
+          },
           "max_tokens": {
             "type": "integer",
             "description": "Maximum tokens per completion",

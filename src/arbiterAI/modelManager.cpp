@@ -509,6 +509,12 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
         info.apiFormat=modelJson["api_format"].get<std::string>();
     }
 
+    // Preferred context when a load request doesn't specify one
+    if(modelJson.contains("default_context")&&modelJson["default_context"].is_number_integer())
+    {
+        info.defaultContext=modelJson["default_context"].get<int>();
+    }
+
     // Input modalities (accepted content types; absent = text only)
     if(modelJson.contains("input_modalities")&&modelJson["input_modalities"].is_array())
     {
@@ -773,6 +779,8 @@ void ModelManager::mergeModelInfo(ModelInfo &existing, const ModelInfo &source, 
         existing.apiFormat=source.apiFormat;
     if(sourceJson.contains("input_modalities"))
         existing.inputModalities=source.inputModalities;
+    if(sourceJson.contains("default_context"))
+        existing.defaultContext=source.defaultContext;
     if(sourceJson.contains("whisper_options"))
         existing.whisperOptions=source.whisperOptions;
     if(sourceJson.contains("sd_options"))
@@ -1180,6 +1188,11 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
     if(!info.inputModalities.empty())
     {
         j["input_modalities"]=info.inputModalities;
+    }
+
+    if(info.defaultContext>0)
+    {
+        j["default_context"]=info.defaultContext;
     }
 
     // Engine-specific option blocks (whisper / stable-diffusion / sherpa-onnx)
