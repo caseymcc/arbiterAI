@@ -1252,6 +1252,21 @@ ErrorCode Llama::tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmd
     if(chatPrompt)
     {
         *chatPrompt=applyChatFormat(request.model, request, modelInfo);
+        if(*chatPrompt)
+        {
+            // applyTemplate stops at the assistant turn header, but the template
+            // may pre-fill the start of the turn itself (Qwen3-VL opens
+            // `<think>`).  Append it so the model continues from where the
+            // parser expects, instead of re-emitting the opening tag.
+            const std::string &prefix=(*chatPrompt)->generationPrefix();
+            if(!prefix.empty()&&formattedPrompt.size()>=prefix.size()&&
+                formattedPrompt.compare(formattedPrompt.size()-prefix.size(), prefix.size(), prefix)!=0)
+            {
+                spdlog::debug("[llama] appending template generation prefix ({} bytes) to the multimodal prompt",
+                    prefix.size());
+                formattedPrompt+=prefix;
+            }
+        }
     }
 
     // Decode the image files (png/jpeg/…) into bitmaps.

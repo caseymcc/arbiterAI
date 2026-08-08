@@ -11,6 +11,7 @@ namespace arbiterAI
 
 struct ChatPrompt::Impl {
     common_chat_params params;
+    bool generationPrefixApplied=true;
     /// params.parser is the generated parser *source*; parsing needs it loaded
     /// into an arena.  Built once here rather than per streaming chunk.
     common_peg_arena arena;
@@ -113,6 +114,16 @@ const std::vector<std::string> &ChatPrompt::additionalStops() const
     return m_impl->params.additional_stops;
 }
 
+const std::string &ChatPrompt::generationPrefix() const
+{
+    return m_impl->params.generation_prompt;
+}
+
+void ChatPrompt::setGenerationPrefixApplied(bool applied)
+{
+    m_impl->generationPrefixApplied=applied;
+}
+
 ChatParseResult ChatPrompt::parse(const std::string &output, bool isPartial) const
 {
     ChatParseResult result;
@@ -125,6 +136,10 @@ ChatParseResult ChatPrompt::parse(const std::string &output, bool isPartial) con
         // streaming deltas, and is llama-server's own default.
         parserParams.reasoning_format=COMMON_REASONING_FORMAT_DEEPSEEK;
         parserParams.parser=m_impl->arena;
+        if(!m_impl->generationPrefixApplied)
+        {
+            parserParams.generation_prompt.clear();
+        }
 
         parsed=common_chat_parse(output, isPartial, parserParams);
     }

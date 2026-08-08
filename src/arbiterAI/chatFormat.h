@@ -53,6 +53,21 @@ public:
     /// Stop strings the template declares beyond the vocab's EOG tokens.
     const std::vector<std::string> &additionalStops() const;
 
+    /// Whether the prompt actually fed to the model included this template's
+    /// generation prefix.  Templates may pre-fill the start of the assistant
+    /// turn (Qwen3-VL opens `<think>` for the model to continue inside), and
+    /// parsing prepends that prefix to the output to reconstruct the full turn.
+    /// A caller that built its own prompt — the multimodal path renders media
+    /// markers itself — must clear this, or the model's own opening tag is
+    /// parsed as reasoning *text* rather than as the tag.
+    void setGenerationPrefixApplied(bool applied);
+
+    /// The pre-filled start of the assistant turn this template emits (Qwen3-VL
+    /// opens `<think>` for the model to continue inside).  A caller building its
+    /// own prompt must append this, or the model re-emits the opening tag and
+    /// the parser — which reconstructs the turn from this prefix — sees it twice.
+    const std::string &generationPrefix() const;
+
 private:
     friend class ChatFormat;
     ChatPrompt();
