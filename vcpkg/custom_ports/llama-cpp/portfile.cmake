@@ -70,6 +70,18 @@ endif()
 "
 )
 
+# llama.cpp installs libllama-common.a but none of its headers.  We need them
+# for common_chat (chat-template-driven format detection and response parsing),
+# so install them under a subdirectory: the names are far too generic
+# (common.h, chat.h, log.h) to sit in the include root next to other ports.
+# They are a private build-time dependency of arbiterAI; nothing that consumes
+# libarbiterai needs them.
+file(GLOB LLAMA_COMMON_HEADERS "${SOURCE_PATH}/common/*.h")
+file(INSTALL ${LLAMA_COMMON_HEADERS} DESTINATION "${CURRENT_PACKAGES_DIR}/include/llama-common")
+
+file(GLOB LLAMA_COMMON_JINJA_HEADERS "${SOURCE_PATH}/common/jinja/*.h")
+file(INSTALL ${LLAMA_COMMON_JINJA_HEADERS} DESTINATION "${CURRENT_PACKAGES_DIR}/include/llama-common/jinja")
+
 file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/tools/${PORT}")
 if(EXISTS "${CURRENT_PACKAGES_DIR}/bin/convert_hf_to_gguf.py")
     file(RENAME "${CURRENT_PACKAGES_DIR}/bin/convert_hf_to_gguf.py" "${CURRENT_PACKAGES_DIR}/tools/${PORT}/convert-hf-to-gguf.py")

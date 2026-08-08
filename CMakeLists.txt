@@ -81,6 +81,11 @@ if(ARBITERAI_ENABLE_LLAMA)
     # llama CMake export set, so locate the library and headers directly.
     find_path(MTMD_INCLUDE_DIR NAMES mtmd.h REQUIRED)
     find_library(MTMD_LIBRARY NAMES mtmd REQUIRED)
+    # llama.cpp's common utility library, used for chat-template-driven format
+    # detection and response parsing (common_chat_*).  Private to arbiterAI:
+    # these headers must not appear in any public arbiterAI header.
+    find_path(LLAMA_COMMON_INCLUDE_DIR NAMES chat.h PATH_SUFFIXES llama-common REQUIRED)
+    find_library(LLAMA_COMMON_LIBRARY NAMES llama-common REQUIRED)
 endif()
 if(ARBITERAI_ENABLE_WHISPER)
     find_package(whisper CONFIG REQUIRED)
@@ -163,6 +168,8 @@ set(arbiterai_src
 
 if(ARBITERAI_ENABLE_LLAMA)
     list(APPEND arbiterai_src
+        ./src/arbiterAI/chatFormat.h
+        ./src/arbiterAI/chatFormat.cpp
         ./src/arbiterAI/modelRuntime.h
         ./src/arbiterAI/modelRuntime.cpp
         ./src/arbiterAI/inferenceScheduler.h
@@ -208,6 +215,18 @@ if(ARBITERAI_ENABLE_SHERPA)
     )
 endif()
 
+if(ARBITERAI_ENABLE_LLAMA)
+    # llama.cpp compiles its generated build-info into an OBJECT library, whose
+    # objects never reach the installed libllama-common.a.  Supplying them from
+    # a separate archive keeps the definitions out of libarbiterai.a, which the
+    # linker has already passed by the time it needs them.
+    add_library(arbiterai_llama_buildinfo STATIC ./src/arbiterAI/llamaBuildInfo.cpp)
+    target_include_directories(arbiterai_llama_buildinfo PRIVATE
+        ${LLAMA_COMMON_INCLUDE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    set_property(TARGET arbiterai_llama_buildinfo PROPERTY POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # Add library
 add_library(arbiterai
     ${arbiterai_src}
@@ -239,7 +258,7 @@ if(ARBITERAI_ENABLE_STABLE_DIFFUSION)
 endif()
 
 if(ARBITERAI_ENABLE_LLAMA)
-    target_include_directories(arbiterai PRIVATE ${MTMD_INCLUDE_DIR})
+    target_include_directories(arbiterai PRIVATE ${MTMD_INCLUDE_DIR} ${LLAMA_COMMON_INCLUDE_DIR})
 endif()
 
 if(ARBITERAI_ENABLE_VIBEVOICE)
@@ -261,6 +280,10 @@ target_link_libraries(arbiterai
         cpr::cpr
         nlohmann_json::nlohmann_json
         $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:${MTMD_LIBRARY}>
+        $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:${LLAMA_COMMON_LIBRARY}>
+        # Must follow llama-common: it references these symbols, and a static
+        # archive only resolves against libraries listed after it.
+        $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:arbiterai_llama_buildinfo>
         $<$<BOOL:${ARBITERAI_ENABLE_LLAMA}>:llama>
         $<$<BOOL:${ARBITERAI_ENABLE_WHISPER}>:whisper>
         $<$<BOOL:${ARBITERAI_ENABLE_STABLE_DIFFUSION}>:stable-diffusion>
@@ -307,6 +330,7 @@ endif()
         target_sources(arbiterai_tests PRIVATE
             tests/modelRuntimeTests.cpp
             tests/llamaProviderTests.cpp
+            tests/chatFormatTests.cpp
             tests/inferenceSchedulerTests.cpp
         )
     endif()
