@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <variant>
@@ -422,6 +423,92 @@ ErrorCode Llama::getAvailableModels(std::vector<std::string> &models)
     return ErrorCode::Success;
 }
 
+std::string stripTokenStrings(const std::string &text,
+    const std::vector<std::string> &tokenStrings)
+{
+    std::string result=text;
+
+    for(const std::string &token:tokenStrings)
+    {
+        if(token.empty()) continue;
+
+        size_t pos=0;
+        while((pos=result.find(token, pos))!=std::string::npos)
+        {
+            result.erase(pos, token.size());
+        }
+    }
+    return result;
+}
+
+namespace
+{
+
+/// Text of every control token in a vocab.  Walking the vocab is not free, so
+/// the result is cached per vocab — vocabs live as long as their model.
+const std::vector<std::string> &controlTokenStrings(const llama_vocab *vocab)
+{
+    static std::mutex cacheMutex;
+    static std::map<const llama_vocab *, std::vector<std::string>> cache;
+
+    std::lock_guard<std::mutex> lock(cacheMutex);
+
+    auto it=cache.find(vocab);
+    if(it!=cache.end())
+    {
+        return it->second;
+    }
+
+    std::vector<std::string> strings;
+    int32_t count=llama_vocab_n_tokens(vocab);
+    for(int32_t token=0; token<count; ++token)
+    {
+        if((llama_vocab_get_attr(vocab, token)&LLAMA_TOKEN_ATTR_CONTROL)==0)
+        {
+            continue;
+        }
+
+        const char *text=llama_vocab_get_text(vocab, token);
+        if(text&&*text)
+        {
+            strings.push_back(text);
+        }
+    }
+
+    spdlog::debug("[llama] cached {} control token strings for vocab", strings.size());
+    return cache.emplace(vocab, std::move(strings)).first->second;
+}
+
+} // namespace
+
+std::vector<Message> Llama::sanitizeMessages(llama_model *model,
+    const std::vector<Message> &messages,
+    const std::vector<std::string> &extraMarkers) const
+{
+    const llama_vocab *vocab=llama_model_get_vocab(model);
+    std::vector<std::string> markers=controlTokenStrings(vocab);
+    markers.insert(markers.end(), extraMarkers.begin(), extraMarkers.end());
+
+    std::vector<Message> sanitized;
+    sanitized.reserve(messages.size());
+
+    for(const Message &message:messages)
+    {
+        Message copy=message;
+        copy.content=stripTokenStrings(copy.content, markers);
+
+        for(ContentPart &part:copy.parts)
+        {
+            if(part.type=="text")
+            {
+                part.text=stripTokenStrings(part.text, markers);
+            }
+        }
+        sanitized.push_back(std::move(copy));
+    }
+    return sanitized;
+}
+
 std::string Llama::applyTemplate(llama_model *model,
     const std::vector<Message> &messages) const
 {
@@ -785,27 +872,32 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
 
-    // Apply chat template to format messages properly
+    // Apply chat template to format messages properly.  Content is stripped of
+    // control-token markup first — see tokenizePrompt().
+    CompletionRequest sanitizedRequest=request;
+    sanitizedRequest.messages=sanitizeMessages(model, request.messages);
+
     std::string prompt;
     if(harmonyMode)
     {
-        prompt=formatHarmonyPrompt(request, modelInfo);
+        prompt=formatHarmonyPrompt(sanitizedRequest, modelInfo);
     }
     else
     {
-        prompt=applyTemplate(model, request.messages);
+        prompt=applyTemplate(model, sanitizedRequest.messages);
     }
 
-    // Tokenize the formatted prompt — use special token parsing for harmony
+    // Tokenize the formatted prompt with special-token parsing so the
+    // template's control tokens become real tokens.
     std::vector<llama_token> tokensList(prompt.size()+256);
     int nTokens=llama_tokenize(vocab, prompt.c_str(), prompt.length(),
-        tokensList.data(), tokensList.size(), true, harmonyMode);
+        tokensList.data(), tokensList.size(), true, true);
     if(nTokens<0)
     {
         // Buffer too small, resize and retry
         tokensList.resize(-nTokens);
         nTokens=llama_tokenize(vocab, prompt.c_str(), prompt.length(),
-            tokensList.data(), tokensList.size(), true, harmonyMode);
+            tokensList.data(), tokensList.size(), true, true);
         if(nTokens<0)
         {
             spdlog::error("Failed to tokenize prompt");
@@ -1084,11 +1176,16 @@ ErrorCode Llama::tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmd
     // Nth marker to the Nth bitmap.
     const char *marker=mtmd_default_marker();
 
+    // Strip control tokens and the media marker itself from user content: an
+    // injected marker would desync the marker/bitmap pairing mtmd_tokenize()
+    // relies on.
+    std::vector<Message> safeMessages=sanitizeMessages(model, request.messages, {marker});
+
     std::vector<Message> markedMessages;
     std::vector<const ContentPart *> images;
-    markedMessages.reserve(request.messages.size());
+    markedMessages.reserve(safeMessages.size());
 
-    for(const Message &msg:request.messages)
+    for(const Message &msg:safeMessages)
     {
         Message marked=msg;
 
@@ -1202,23 +1299,33 @@ ErrorCode Llama::tokenizePrompt(llama_model *model,
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
 
+    // Message content is stripped of control-token markup first, because the
+    // templated prompt below is tokenized with parse_special=true.
+    CompletionRequest sanitizedRequest=request;
+    sanitizedRequest.messages=sanitizeMessages(model, request.messages);
+
     if(harmonyMode)
     {
-        formattedPrompt=formatHarmonyPrompt(request, modelInfo);
+        formattedPrompt=formatHarmonyPrompt(sanitizedRequest, modelInfo);
     }
     else
     {
-        formattedPrompt=applyTemplate(model, request.messages);
+        formattedPrompt=applyTemplate(model, sanitizedRequest.messages);
     }
 
+    // parse_special=true: the chat template emits the model's own control
+    // tokens (<|im_start|>, <|im_end|>, …).  Tokenized as plain text they
+    // neither match what the model was trained on nor terminate generation,
+    // because the end-of-turn token the model then emits is text too and never
+    // matches llama_vocab_is_eog().
     tokens.resize(formattedPrompt.size()+256);
     int nTokens=llama_tokenize(vocab, formattedPrompt.c_str(), formattedPrompt.length(),
-        tokens.data(), tokens.size(), true, harmonyMode);
+        tokens.data(), tokens.size(), true, true);
     if(nTokens<0)
     {
         tokens.resize(-nTokens);
         nTokens=llama_tokenize(vocab, formattedPrompt.c_str(), formattedPrompt.length(),
-            tokens.data(), tokens.size(), true, harmonyMode);
+            tokens.data(), tokens.size(), true, true);
         if(nTokens<0)
         {
             spdlog::error("Failed to tokenize prompt");

@@ -48,6 +48,14 @@ private:
 int kvPrefixReuseLength(const std::vector<int32_t> &cachedTokens,
     const std::vector<int32_t> &promptTokens);
 
+/// Remove every occurrence of the given literal strings from text.
+/// Used to keep control-token markup out of message content: the templated
+/// prompt is tokenized with special-token parsing enabled, so a control token
+/// appearing inside user text would otherwise be tokenized as the real thing
+/// and let a caller forge turn boundaries.
+std::string stripTokenStrings(const std::string &text,
+    const std::vector<std::string> &tokenStrings);
+
 class Llama : public BaseProvider {
 public:
     Llama();
@@ -106,6 +114,13 @@ public:
         const MultimodalPrompt *multimodal=nullptr);
 
 private:
+    /// Copy messages with any of the model's control-token strings removed from
+    /// their content (see stripTokenStrings).  `extraMarkers` are additional
+    /// literals to strip, e.g. the mtmd media marker.
+    std::vector<Message> sanitizeMessages(llama_model *model,
+        const std::vector<Message> &messages,
+        const std::vector<std::string> &extraMarkers={}) const;
+
     /// Format messages into a prompt string using the model's chat template.
     std::string applyTemplate(llama_model *model,
         const std::vector<Message> &messages) const;

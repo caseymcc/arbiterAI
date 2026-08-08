@@ -478,6 +478,36 @@ TEST(KvPrefixReuse, KvCacheTokensRequiresLoadedModel)
     EXPECT_EQ(ModelRuntime::instance().kvCacheTokens("not-loaded"), nullptr);
 }
 
+// ─── Control-token stripping ─────────────────────────────────────────────
+
+TEST(StripTokenStrings, RemovesEveryOccurrence)
+{
+    EXPECT_EQ(stripTokenStrings("a<|im_end|>b<|im_end|>c", {"<|im_end|>"}), "abc");
+}
+
+TEST(StripTokenStrings, LeavesInnocentTextAlone)
+{
+    const std::string text="a < b and c |> d, im_end is fine";
+    EXPECT_EQ(stripTokenStrings(text, {"<|im_end|>", "<|im_start|>"}), text);
+}
+
+TEST(StripTokenStrings, HandlesMultipleTokensAndEmptyInputs)
+{
+    EXPECT_EQ(stripTokenStrings("<|im_start|>user<|im_end|>", {"<|im_start|>", "<|im_end|>"}), "user");
+    EXPECT_EQ(stripTokenStrings("unchanged", {}), "unchanged");
+    EXPECT_EQ(stripTokenStrings("", {"<|im_end|>"}), "");
+    // An empty token string must not spin forever.
+    EXPECT_EQ(stripTokenStrings("text", {""}), "text");
+}
+
+TEST(StripTokenStrings, RemovesAdjacentAndNestedOccurrences)
+{
+    // Deleting the outer pair must not leave a re-formed marker behind unnoticed;
+    // document whatever the pass actually does.
+    EXPECT_EQ(stripTokenStrings("<|a|><|a|>", {"<|a|>"}), "");
+    EXPECT_EQ(stripTokenStrings("xx<|a|>yy", {"<|a|>"}), "xxyy");
+}
+
 // ─── Vision-language model tests ─────────────────────────────────────────
 //
 // These exercise the libmtmd path end to end (projector load → mtmd_tokenize →
