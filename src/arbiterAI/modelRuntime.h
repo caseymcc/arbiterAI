@@ -5,6 +5,7 @@
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelFitCalculator.h"
 #include "arbiterAI/modelDownloader.h"
+#include "arbiterAI/chatFormat.h"
 
 #include <string>
 #include <vector>
@@ -88,6 +89,7 @@ struct LoadedModel {
     llama_model *llamaModel=nullptr;
     llama_context *llamaCtx=nullptr;
     mtmd_context *mtmdCtx=nullptr; // multimodal projector context (vision models), null otherwise
+    std::shared_ptr<ChatFormat> chatFormat; // response format derived from the model's chat template
     RuntimeOptions activeOptions; // llama.cpp options active for this loaded model
     std::vector<int32_t> kvCacheTokens; // tokens currently in llamaCtx's KV cache (seq 0), for cache_prompt prefix reuse
 };
@@ -221,6 +223,11 @@ public:
     /// Get the multimodal (libmtmd) context for a loaded local model.
     /// Returns nullptr unless the model was loaded with a projector.
     mtmd_context *getMtmdContext(const std::string &model) const;
+
+    /// Get the chat format derived from a loaded model's chat template.
+    /// Returns nullptr when the model ships no usable template, so callers
+    /// fall back to the built-in prompt/parse path.
+    std::shared_ptr<ChatFormat> getChatFormat(const std::string &model) const;
 
     /// Access the KV-cache token record for a loaded model (nullptr if not
     /// loaded).  Mirrors the tokens decoded into the context's KV cache on

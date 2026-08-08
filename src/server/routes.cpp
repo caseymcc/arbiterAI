@@ -1814,6 +1814,28 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                 HarmonyStreamParser harmonyParser;
                 ThinkTagStreamParser thinkParser;
 
+                // Template-derived streaming: common_chat re-parses the whole
+                // output each token (is_partial=true) and returns the message so
+                // far, so emit only what grew since the last chunk.
+                std::string rawSoFar;
+                std::string emittedContent;
+                std::string emittedReasoning;
+
+                auto deltaFrom=[](const std::string &now, std::string &alreadySent) -> std::string
+                {
+                    // A partial parse can revise earlier text (a tag turning out
+                    // to be something else); resend from scratch if it no longer
+                    // extends what the client already has.
+                    if(now.size()>=alreadySent.size()&&now.compare(0, alreadySent.size(), alreadySent)==0)
+                    {
+                        std::string delta=now.substr(alreadySent.size());
+                        alreadySent=now;
+                        return delta;
+                    }
+                    alreadySent=now;
+                    return now;
+                };
+
                 // Build one SSE delta chunk. Reasoning goes to reasoning_content
                 // (the DeepSeek convention) so clients can show or hide it.
                 auto makeDelta=[&](const std::string &content, const std::string &reasoning)
@@ -1890,7 +1912,15 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         // Emit token via SSE
                         std::string emitContent;
                         std::string emitReasoning;
-                        if(harmonyMode)
+                        if(job->chatPrompt)
+                        {
+                            rawSoFar+=token;
+                            ChatParseResult partial=job->chatPrompt->parse(rawSoFar, true);
+                            emitContent=deltaFrom(partial.content, emittedContent);
+                            emitReasoning=deltaFrom(partial.reasoningContent, emittedReasoning);
+                            if(emitContent.empty()&&emitReasoning.empty()) continue;
+                        }
+                        else if(harmonyMode)
                         {
                             emitContent=harmonyParser.feed(token);
                             if(emitContent.empty()) continue;
@@ -1914,7 +1944,20 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         }
                     }
 
-                    if(thinkTagMode)
+                    if(job->chatPrompt&&!rawSoFar.empty())
+                    {
+                        // Re-parse complete rather than partial: a trailing tag
+                        // can only be resolved once generation has stopped.
+                        ChatParseResult finalParse=job->chatPrompt->parse(rawSoFar, false);
+                        std::string tailContent=deltaFrom(finalParse.content, emittedContent);
+                        std::string tailReasoning=deltaFrom(finalParse.reasoningContent, emittedReasoning);
+                        if(!tailContent.empty()||!tailReasoning.empty())
+                        {
+                            std::string line="data: "+safeDump(makeDelta(tailContent, tailReasoning))+"\n\n";
+                            sink.write(line.c_str(), line.length());
+                        }
+                    }
+                    else if(thinkTagMode)
                     {
                         std::string tailContent, tailReasoning;
                         thinkParser.flush(tailContent, tailReasoning);
@@ -2170,7 +2213,18 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
 
                 std::string finishReason=arbiterResponse.finishReason.empty()?"stop":arbiterResponse.finishReason;
 
-                if(thinkTagMode&&!arbiterResponse.text.empty())
+                // Preferred: the parser the model's own chat template produced.
+                // api_format (harmony / think_tags) remains an explicit override.
+                if(job->chatPrompt&&!arbiterResponse.text.empty())
+                {
+                    ChatParseResult parsed=job->chatPrompt->parse(arbiterResponse.text, false);
+                    arbiterResponse.text=parsed.content;
+                    if(!parsed.reasoningContent.empty())
+                        arbiterResponse.reasoningContent=parsed.reasoningContent;
+                    if(!parsed.toolCalls.empty())
+                        arbiterResponse.toolCalls=parsed.toolCalls;
+                }
+                else if(thinkTagMode&&!arbiterResponse.text.empty())
                 {
                     ThinkTagParseResult parsed=parseThinkTags(arbiterResponse.text);
                     arbiterResponse.text=parsed.content;
@@ -2178,7 +2232,7 @@ void handleChatCompletions(const httplib::Request &req, httplib::Response &res)
                         arbiterResponse.reasoningContent=parsed.reasoningContent;
                 }
 
-                if(harmonyMode&&!arbiterResponse.text.empty())
+                if(harmonyMode&&!job->chatPrompt&&!arbiterResponse.text.empty())
                 {
                     HarmonyParseResult parsed=parseHarmonyFormat(arbiterResponse.text);
                     arbiterResponse.text=parsed.content;

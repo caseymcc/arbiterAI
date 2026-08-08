@@ -418,12 +418,14 @@ void InferenceScheduler::tokenizerLoop()
 
             tokenizeResult=llamaProvider.tokenizeMultimodalPrompt(
                 llamaModel, mtmdCtx, job->request, *modelInfo,
-                job->multimodal, job->tokens, job->formattedPrompt);
+                job->multimodal, job->tokens, job->formattedPrompt,
+                &job->chatPrompt);
         }
         else
         {
             tokenizeResult=llamaProvider.tokenizePrompt(
-                llamaModel, job->request, *modelInfo, job->tokens, job->formattedPrompt);
+                llamaModel, job->request, *modelInfo, job->tokens, job->formattedPrompt,
+                &job->chatPrompt);
         }
 
         if(tokenizeResult!=ErrorCode::Success)

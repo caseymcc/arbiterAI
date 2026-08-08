@@ -2,6 +2,7 @@
 #define _ARBITERAI_PROVIDERS_LLAMA_H_
 
 #include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/chatFormat.h"
 
 #include <vector>
 #include <string>
@@ -87,9 +88,13 @@ public:
 
     /// Tokenize the prompt outside of the inference mutex.
     /// Only reads llama_model/vocab (thread-safe without context lock).
+    /// @param chatPrompt  Receives the template-derived prompt and its response
+    ///                    parser when the model has a usable chat template and
+    ///                    no api_format override; null otherwise.
     ErrorCode tokenizePrompt(llama_model *model,
         const CompletionRequest &request, const ModelInfo &modelInfo,
-        std::vector<int32_t> &tokens, std::string &formattedPrompt);
+        std::vector<int32_t> &tokens, std::string &formattedPrompt,
+        std::shared_ptr<ChatPrompt> *chatPrompt=nullptr);
 
     /// Tokenize a prompt that carries images into libmtmd chunks.
     /// mtmd_tokenize() is thread-safe on a shared context, so this runs on the
@@ -99,7 +104,8 @@ public:
     ErrorCode tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmdCtx,
         const CompletionRequest &request, const ModelInfo &modelInfo,
         MultimodalPrompt &prompt, std::vector<int32_t> &textTokens,
-        std::string &formattedPrompt);
+        std::string &formattedPrompt,
+        std::shared_ptr<ChatPrompt> *chatPrompt=nullptr);
 
     /// Run inference with pre-tokenized prompt (requires inference lock held).
     /// When `multimodal` is non-null the prompt is prefilled from its chunks
@@ -114,6 +120,11 @@ public:
         const MultimodalPrompt *multimodal=nullptr);
 
 private:
+    /// Render a prompt through the model's template-derived chat format, or
+    /// null when an api_format override is set or the model has no template.
+    std::shared_ptr<ChatPrompt> applyChatFormat(const std::string &modelName,
+        const CompletionRequest &request, const ModelInfo &modelInfo) const;
+
     /// Copy messages with any of the model's control-token strings removed from
     /// their content (see stripTokenStrings).  `extraMarkers` are additional
     /// literals to strip, e.g. the mtmd media marker.

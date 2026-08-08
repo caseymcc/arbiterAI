@@ -6,6 +6,7 @@
 
 #include <llama.h>
 #include <mtmd.h>
+#include "arbiterAI/chatFormat.h"
 #include <ggml.h>
 #include <ggml-backend.h>
 #include <spdlog/spdlog.h>
@@ -2121,10 +2122,25 @@ ErrorCode ModelRuntime::loadLlamaModel(
                 mtmd_support_audio(mtmdCtx)?"yes":"no");
         }
 
+        // Derive the response format from the model's own chat template.  A
+        // model without a usable template simply gets none, and the caller
+        // falls back to the built-in prompt path.
+        std::shared_ptr<ChatFormat> chatFormat=ChatFormat::create(llamaModel);
+        if(chatFormat)
+        {
+            spdlog::info("Chat format for '{}' derived from its template (source: {})",
+                model, chatFormat->source().substr(0, 60));
+        }
+        else
+        {
+            spdlog::info("Model '{}' has no usable chat template; using the built-in prompt path", model);
+        }
+
         LoadedModel &entry=m_models[model];
         entry.llamaModel=llamaModel;
         entry.llamaCtx=llamaCtx;
         entry.mtmdCtx=mtmdCtx;
+        entry.chatFormat=std::move(chatFormat);
         entry.maxContextSize=nativeContext;
         entry.contextSize=static_cast<int>(llama_n_ctx(llamaCtx));
 
@@ -2155,6 +2171,9 @@ ErrorCode ModelRuntime::loadLlamaModel(
 
 void ModelRuntime::freeLlamaModel(LoadedModel &entry)
 {
+    // Drop before the model: the templates were built from it.
+    entry.chatFormat.reset();
+
     if(entry.mtmdCtx)
     {
         mtmd_free(entry.mtmdCtx);
@@ -2297,6 +2316,18 @@ mtmd_context *ModelRuntime::getMtmdContext(const std::string &model) const
     if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
     {
         return it->second.mtmdCtx;
+    }
+    return nullptr;
+}
+
+std::shared_ptr<ChatFormat> ModelRuntime::getChatFormat(const std::string &model) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&it->second.state==ModelState::Loaded)
+    {
+        return it->second.chatFormat;
     }
     return nullptr;
 }

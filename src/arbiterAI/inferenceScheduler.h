@@ -99,6 +99,10 @@ struct InferenceJob {
     /// images.  Empty/invalid for text-only requests.
     MultimodalPrompt multimodal;
 
+    /// Template-derived response parser for this request.  Null when the model
+    /// has an api_format override or ships no usable chat template.
+    std::shared_ptr<ChatPrompt> chatPrompt;
+
     /// Result for non-streaming requests.
     std::string resultText;
     int promptTokens=0;

@@ -481,6 +481,31 @@ const std::vector<std::string> &controlTokenStrings(const llama_vocab *vocab)
 
 } // namespace
 
+std::shared_ptr<ChatPrompt> Llama::applyChatFormat(const std::string &modelName,
+    const CompletionRequest &request, const ModelInfo &modelInfo) const
+{
+    // An explicit api_format wins: it exists precisely for models whose
+    // template is absent or produces the wrong thing.
+    if(!modelInfo.apiFormat.empty())
+    {
+        return nullptr;
+    }
+
+    std::shared_ptr<ChatFormat> format=ModelRuntime::instance().getChatFormat(modelName);
+    if(!format)
+    {
+        return nullptr;
+    }
+
+    std::vector<ToolDefinition> tools;
+    if(request.tools.has_value())
+    {
+        tools=request.tools.value();
+    }
+
+    return format->apply(request.messages, tools);
+}
+
 std::vector<Message> Llama::sanitizeMessages(llama_model *model,
     const std::vector<Message> &messages,
     const std::vector<std::string> &extraMarkers) const
@@ -1158,7 +1183,8 @@ size_t MultimodalPrompt::tokenCount() const
 ErrorCode Llama::tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmdCtx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     MultimodalPrompt &prompt, std::vector<int32_t> &textTokens,
-    std::string &formattedPrompt)
+    std::string &formattedPrompt,
+    std::shared_ptr<ChatPrompt> *chatPrompt)
 {
     if(!mtmdCtx)
     {
@@ -1219,6 +1245,14 @@ ErrorCode Llama::tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmd
     }
 
     formattedPrompt=applyTemplate(model, markedMessages);
+
+    // The prompt has to come from applyTemplate here — common_chat has no
+    // notion of our image parts and would drop the media markers mtmd needs.
+    // Its response parser is still the right one, so derive that separately.
+    if(chatPrompt)
+    {
+        *chatPrompt=applyChatFormat(request.model, request, modelInfo);
+    }
 
     // Decode the image files (png/jpeg/…) into bitmaps.
     std::vector<mtmd_bitmap *> bitmaps;
@@ -1294,7 +1328,8 @@ ErrorCode Llama::tokenizeMultimodalPrompt(llama_model *model, mtmd_context *mtmd
 
 ErrorCode Llama::tokenizePrompt(llama_model *model,
     const CompletionRequest &request, const ModelInfo &modelInfo,
-    std::vector<int32_t> &tokens, std::string &formattedPrompt)
+    std::vector<int32_t> &tokens, std::string &formattedPrompt,
+    std::shared_ptr<ChatPrompt> *chatPrompt)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
@@ -1304,7 +1339,16 @@ ErrorCode Llama::tokenizePrompt(llama_model *model,
     CompletionRequest sanitizedRequest=request;
     sanitizedRequest.messages=sanitizeMessages(model, request.messages);
 
-    if(harmonyMode)
+    // Preferred path: let the model's own chat template render the prompt and
+    // hand back the parser for its replies.  An api_format in the config is an
+    // explicit override for models whose template is missing or wrong.
+    std::shared_ptr<ChatPrompt> derived=applyChatFormat(request.model, sanitizedRequest, modelInfo);
+    if(derived)
+    {
+        formattedPrompt=derived->text();
+        if(chatPrompt) *chatPrompt=derived;
+    }
+    else if(harmonyMode)
     {
         formattedPrompt=formatHarmonyPrompt(sanitizedRequest, modelInfo);
     }
