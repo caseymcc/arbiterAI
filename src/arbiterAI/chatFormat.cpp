@@ -6,6 +6,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <iomanip>
+#include <random>
+#include <sstream>
+
 namespace arbiterAI
 {
 
@@ -83,6 +87,17 @@ std::vector<common_chat_tool> toCommonTools(const std::vector<ToolDefinition> &t
     return result;
 }
 
+/// Some formats carry no tool-call id of their own (harmony among them), but
+/// clients correlate a tool result to its call by id, so mint one.
+std::string generateToolCallId()
+{
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+
+    std::ostringstream out;
+    out<<"call_"<<std::hex<<std::setw(16)<<std::setfill('0')<<rng();
+    return out.str();
+}
+
 } // namespace
 
 // ── ChatPrompt ────────────────────────────────────────────────
@@ -157,7 +172,7 @@ ChatParseResult ChatPrompt::parse(const std::string &output, bool isPartial) con
     for(const common_chat_tool_call &call:parsed.tool_calls)
     {
         ToolCall converted;
-        converted.id=call.id;
+        converted.id=call.id.empty()?generateToolCallId():call.id;
         converted.name=call.name;
         try
         {

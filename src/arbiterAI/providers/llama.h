@@ -117,7 +117,8 @@ public:
         double &promptTimeMs, double &generationTimeMs,
         std::function<void(const std::string &)> streamCallback,
         std::function<bool()> shouldAbort=nullptr,
-        const MultimodalPrompt *multimodal=nullptr);
+        const MultimodalPrompt *multimodal=nullptr,
+        const ChatPrompt *chatPrompt=nullptr);
 
 private:
     /// Render a prompt through the model's template-derived chat format, or
@@ -146,14 +147,18 @@ private:
         const CompletionRequest &request, const ModelInfo &modelInfo,
         std::string &result, int &promptTokens, int &completionTokens,
         double &promptTimeMs, double &generationTimeMs,
-        std::function<void(const std::string &)> streamCallback);
+        std::function<void(const std::string &)> streamCallback,
+        std::shared_ptr<ChatPrompt> *chatPromptOut=nullptr);
 
     /// Run the inference loop (shared by completion and streaming).
+    /// @param chatPromptOut  Receives the template-derived parser, so the caller
+    ///                       can split the reply the same way the server does.
     ErrorCode runInference(llama_model *model, llama_context *ctx,
         const CompletionRequest &request, const ModelInfo &modelInfo,
         std::string &result, int &promptTokens, int &completionTokens,
         double &promptTimeMs, double &generationTimeMs,
-        std::function<void(const std::string &)> streamCallback);
+        std::function<void(const std::string &)> streamCallback,
+        std::shared_ptr<ChatPrompt> *chatPromptOut=nullptr);
 
     /// Detail for the most recent failure (see lastErrorDetail()).
     std::string m_lastErrorDetail;

@@ -583,7 +583,8 @@ void InferenceScheduler::acceleratorLoop(AcceleratorQueue &queue)
             job->promptTokens, completionTokens,
             job->promptTimeMs, job->generationTimeMs,
             streamCallback, abortCheck,
-            job->multimodal.valid()?&job->multimodal:nullptr);
+            job->multimodal.valid()?&job->multimodal:nullptr,
+            job->chatPrompt.get());
 
         runtime.endInference(job->request.model);
         job->completionTokens.store(completionTokens);

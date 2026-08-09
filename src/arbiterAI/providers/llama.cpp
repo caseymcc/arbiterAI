@@ -139,8 +139,10 @@ ErrorCode Llama::completion(const CompletionRequest &request,
     double promptTimeMs=0.0;
     double generationTimeMs=0.0;
 
+    std::shared_ptr<ChatPrompt> chatPrompt;
     ErrorCode code=runInferenceDispatch(llamaModel, llamaCtx, request, model,
-        resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, nullptr);
+        resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, nullptr,
+        &chatPrompt);
 
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
     double totalTimeMs=std::chrono::duration<double, std::milli>(endTime-startTime).count();
@@ -158,6 +160,16 @@ ErrorCode Llama::completion(const CompletionRequest &request,
         promptTokens, promptTimeMs, completionTokens, generationTimeMs, totalTimeMs);
 
     response.text=resultText;
+    if(chatPrompt&&!resultText.empty())
+    {
+        ChatParseResult parsed=chatPrompt->parse(resultText, false);
+        response.text=parsed.content;
+        response.reasoningContent=parsed.reasoningContent;
+        if(!parsed.toolCalls.empty())
+        {
+            response.toolCalls=parsed.toolCalls;
+        }
+    }
     response.provider="llama";
     response.model=request.model;
     response.usage.prompt_tokens=promptTokens;
@@ -856,12 +868,14 @@ ErrorCode Llama::runInferenceDispatch(llama_model *model, llama_context *ctx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     std::string &result, int &promptTokens, int &completionTokens,
     double &promptTimeMs, double &generationTimeMs,
-    std::function<void(const std::string &)> streamCallback)
+    std::function<void(const std::string &)> streamCallback,
+    std::shared_ptr<ChatPrompt> *chatPromptOut)
 {
     if(!hasImageContent(request.messages))
     {
         return runInference(model, ctx, request, modelInfo, result,
-            promptTokens, completionTokens, promptTimeMs, generationTimeMs, streamCallback);
+            promptTokens, completionTokens, promptTimeMs, generationTimeMs, streamCallback,
+            chatPromptOut);
     }
 
     mtmd_context *mtmdCtx=ModelRuntime::instance().getMtmdContext(request.model);
@@ -875,9 +889,11 @@ ErrorCode Llama::runInferenceDispatch(llama_model *model, llama_context *ctx,
     MultimodalPrompt multimodal;
     std::vector<int32_t> textTokens;
     std::string formattedPrompt;
+    std::shared_ptr<ChatPrompt> chatPrompt;
 
     ErrorCode tokenizeResult=tokenizeMultimodalPrompt(model, mtmdCtx, request, modelInfo,
-        multimodal, textTokens, formattedPrompt);
+        multimodal, textTokens, formattedPrompt, &chatPrompt);
+    if(chatPromptOut) *chatPromptOut=chatPrompt;
     if(tokenizeResult!=ErrorCode::Success)
     {
         return tokenizeResult;
@@ -885,14 +901,15 @@ ErrorCode Llama::runInferenceDispatch(llama_model *model, llama_context *ctx,
 
     return runInferenceWithTokens(model, ctx, request, modelInfo, textTokens, result,
         promptTokens, completionTokens, promptTimeMs, generationTimeMs,
-        streamCallback, nullptr, &multimodal);
+        streamCallback, nullptr, &multimodal, chatPrompt.get());
 }
 
 ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
     std::string &result, int &promptTokens, int &completionTokens,
     double &promptTimeMs, double &generationTimeMs,
-    std::function<void(const std::string &)> streamCallback)
+    std::function<void(const std::string &)> streamCallback,
+    std::shared_ptr<ChatPrompt> *chatPromptOut)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
@@ -902,8 +919,15 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     CompletionRequest sanitizedRequest=request;
     sanitizedRequest.messages=sanitizeMessages(model, request.messages);
 
+    std::shared_ptr<ChatPrompt> derived=applyChatFormat(request.model, sanitizedRequest, modelInfo);
+    if(chatPromptOut) *chatPromptOut=derived;
+
     std::string prompt;
-    if(harmonyMode)
+    if(derived)
+    {
+        prompt=derived->text();
+    }
+    else if(harmonyMode)
     {
         prompt=formatHarmonyPrompt(sanitizedRequest, modelInfo);
     }
@@ -985,10 +1009,12 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     // The client's max_tokens should apply to visible output, so we need extra headroom
     // for the analysis channel. Apply a multiplier to ensure the model can complete both
     // reasoning and the final response.
-    if(harmonyMode)
+    // See runInferenceWithTokens(): reasoning is not visible output, so it must
+    // not eat the client's max_tokens budget.
+    if(harmonyMode||(derived&&derived->supportsThinking()))
     {
-        int minHarmonyTokens=std::max(maxOutputTokens*8, 16384);
-        maxOutputTokens=std::min(minHarmonyTokens, modelInfo.maxOutputTokens>0?modelInfo.maxOutputTokens:131072);
+        int withHeadroom=std::max(maxOutputTokens*8, 16384);
+        maxOutputTokens=std::min(withHeadroom, modelInfo.maxOutputTokens>0?modelInfo.maxOutputTokens:131072);
     }
 
     int nCur=nTokens;
@@ -1403,7 +1429,8 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
     double &promptTimeMs, double &generationTimeMs,
     std::function<void(const std::string &)> streamCallback,
     std::function<bool()> shouldAbort,
-    const MultimodalPrompt *multimodal)
+    const MultimodalPrompt *multimodal,
+    const ChatPrompt *chatPrompt)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
@@ -1503,10 +1530,15 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
 
     int maxOutputTokens=request.max_tokens.value_or(modelInfo.maxOutputTokens);
 
-    if(harmonyMode)
+    // A reasoning model spends tokens on thinking the client never sees, so
+    // max_tokens has to bound the visible answer rather than the whole
+    // generation — otherwise the budget is exhausted mid-thought and the reply
+    // comes back empty.  Harmony was the original case; the chat template now
+    // tells us this for any reasoning model.
+    if(harmonyMode||(chatPrompt&&chatPrompt->supportsThinking()))
     {
-        int minHarmonyTokens=std::max(maxOutputTokens*8, 16384);
-        maxOutputTokens=std::min(minHarmonyTokens, modelInfo.maxOutputTokens>0?modelInfo.maxOutputTokens:131072);
+        int withHeadroom=std::max(maxOutputTokens*8, 16384);
+        maxOutputTokens=std::min(withHeadroom, modelInfo.maxOutputTokens>0?modelInfo.maxOutputTokens:131072);
     }
 
     completionTokens=0;
