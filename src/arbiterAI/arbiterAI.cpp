@@ -38,6 +38,9 @@
 #ifdef ARBITERAI_ENABLE_SHERPA
 #include "arbiterAI/providers/sherpaOnnx.h"
 #endif
+#ifdef ARBITERAI_ENABLE_ONNX_GENAI
+#include "arbiterAI/providers/onnxGenai.h"
+#endif
 
 #include <memory>
 
@@ -189,6 +192,12 @@ std::unique_ptr<BaseProvider> createProvider(const std::string &provider)
     else if(provider=="sherpa-onnx")
     {
         return std::make_unique<SherpaOnnx>();
+    }
+#endif
+#ifdef ARBITERAI_ENABLE_ONNX_GENAI
+    else if(provider=="onnx-genai")
+    {
+        return std::make_unique<OnnxGenai>();
     }
 #endif
     else if(provider=="openrouter")

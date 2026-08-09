@@ -30,7 +30,7 @@
           "provider": {
             "type": "string",
             "description": "Model provider/service",
-            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock", "whisper", "stable-diffusion", "vibevoice", "orpheus", "sherpa-onnx"]
+            "enum": ["anthropic", "llama", "openai", "deepseek", "openrouter", "mock", "whisper", "stable-diffusion", "vibevoice", "orpheus", "sherpa-onnx", "onnx-genai"]
           },
           "ranking": {
             "type": "integer",
@@ -426,6 +426,26 @@
               }
             },
             "additionalProperties": false
+          },
+          "onnx_options": {
+            "type": "object",
+            "description": "ONNX Runtime GenAI settings (provider: onnx-genai). execution_providers selects the accelerator at runtime — omit it to use whatever the model's genai_config.json specifies.",
+            "properties": {
+              "execution_providers": {
+                "type": "array",
+                "description": "Ordered execution providers, e.g. [\"VitisAI\"] for the Ryzen AI NPU or [\"CPU\"].",
+                "items": { "type": "string" }
+              },
+              "provider_options": {
+                "type": "object",
+                "description": "Per-provider key/value options, keyed by provider name."
+              },
+              "max_length": {
+                "type": "integer",
+                "description": "Hard cap on prompt + generated tokens.",
+                "minimum": 1
+              }
+            }
           },
           "sherpa_options": {
             "type": "object",

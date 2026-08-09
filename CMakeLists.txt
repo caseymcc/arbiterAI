@@ -14,11 +14,13 @@ option(ARBITERAI_ENABLE_STABLE_DIFFUSION "Enable local stable-diffusion.cpp imag
 option(ARBITERAI_ENABLE_VIBEVOICE "Enable local vibevoice.cpp text-to-speech support" ON)
 option(ARBITERAI_ENABLE_ORPHEUS "Enable local Orpheus TTS via a dlopen'd chatllm.cpp engine library" OFF)
 option(ARBITERAI_ENABLE_SHERPA "Enable local audio (STT / speaker embedding / audio tagging) via sherpa-onnx" ON)
+option(ARBITERAI_ENABLE_ONNX_GENAI "Enable local inference via ONNX Runtime GenAI (CPU/GPU now, Ryzen AI NPU when its execution provider is available)" OFF)
 
 # Map each enabled engine onto its vcpkg manifest feature (see vcpkg.json).
 # ARBITERAI_ENABLE_LLAMA has no entry: llama-cpp is a base dependency, not a feature.
 foreach(_pair "WHISPER:whisper" "STABLE_DIFFUSION:stable-diffusion"
-              "VIBEVOICE:vibevoice" "ORPHEUS:orpheus" "SHERPA:sherpa-onnx")
+              "VIBEVOICE:vibevoice" "ORPHEUS:orpheus" "SHERPA:sherpa-onnx"
+              "ONNX_GENAI:onnx-genai")
     string(REPLACE ":" ";" _pair "${_pair}")
     list(GET _pair 0 _opt)
     list(GET _pair 1 _feature)
@@ -116,6 +118,12 @@ if(ARBITERAI_ENABLE_SHERPA)
         list(APPEND SHERPA_ONNX_LIBS ${SHERPA_LIB_kissfft-float})
     endif()
 endif()
+if(ARBITERAI_ENABLE_ONNX_GENAI)
+    # Prebuilt release: a header plus one shared library that dlopen's its
+    # execution providers.  It must be deployed alongside the binary.
+    find_path(ONNX_GENAI_INCLUDE_DIR NAMES ort_genai.h REQUIRED)
+    find_library(ONNX_GENAI_LIBRARY NAMES onnxruntime-genai REQUIRED)
+endif()
 find_package(libgit2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -208,6 +216,13 @@ if(ARBITERAI_ENABLE_ORPHEUS)
     )
 endif()
 
+if(ARBITERAI_ENABLE_ONNX_GENAI)
+    list(APPEND arbiterai_src
+        ./src/arbiterAI/providers/onnxGenai.h
+        ./src/arbiterAI/providers/onnxGenai.cpp
+    )
+endif()
+
 if(ARBITERAI_ENABLE_SHERPA)
     list(APPEND arbiterai_src
         ./src/arbiterAI/providers/sherpaOnnx.h
@@ -275,6 +290,11 @@ if(ARBITERAI_ENABLE_SHERPA)
     target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_SHERPA=1)
 endif()
 
+if(ARBITERAI_ENABLE_ONNX_GENAI)
+    target_include_directories(arbiterai PRIVATE ${ONNX_GENAI_INCLUDE_DIR})
+    target_compile_definitions(arbiterai PUBLIC ARBITERAI_ENABLE_ONNX_GENAI=1)
+endif()
+
 target_link_libraries(arbiterai
     PUBLIC
         cpr::cpr
@@ -289,6 +309,7 @@ target_link_libraries(arbiterai
         $<$<BOOL:${ARBITERAI_ENABLE_STABLE_DIFFUSION}>:stable-diffusion>
         $<$<BOOL:${ARBITERAI_ENABLE_STABLE_DIFFUSION}>:ZLIB::ZLIB>
         $<$<BOOL:${ARBITERAI_ENABLE_VIBEVOICE}>:${VIBEVOICE_LIBRARY}>
+        $<$<BOOL:${ARBITERAI_ENABLE_ONNX_GENAI}>:${ONNX_GENAI_LIBRARY}>
         libgit2::libgit2package
     PRIVATE
         spdlog::spdlog

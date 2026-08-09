@@ -45,6 +45,12 @@
             "dependencies": [
                 "sherpa-onnx"
             ]
+        },
+        "onnx-genai": {
+            "description": "Local inference via ONNX Runtime GenAI (CPU/GPU today, Ryzen AI NPU when the execution provider is available)",
+            "dependencies": [
+                "onnxruntime-genai"
+            ]
         }
     }
 }

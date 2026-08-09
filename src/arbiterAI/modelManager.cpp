@@ -537,6 +537,11 @@ bool ModelManager::parseModelInfo(const nlohmann::json &modelJson, ModelInfo &in
         info.sdOptions=modelJson["sd_options"];
     }
 
+    if(modelJson.contains("onnx_options")&&modelJson["onnx_options"].is_object())
+    {
+        info.onnxOptions=modelJson["onnx_options"];
+    }
+
     if(modelJson.contains("sherpa_options")&&modelJson["sherpa_options"].is_object())
     {
         info.sherpaOptions=modelJson["sherpa_options"];
@@ -1202,6 +1207,8 @@ nlohmann::json ModelManager::modelInfoToJson(const ModelInfo &info)
         j["sd_options"]=info.sdOptions;
     if(info.sherpaOptions.is_object()&&!info.sherpaOptions.empty())
         j["sherpa_options"]=info.sherpaOptions;
+    if(info.onnxOptions.is_object()&&!info.onnxOptions.empty())
+        j["onnx_options"]=info.onnxOptions;
 
     return j;
 }

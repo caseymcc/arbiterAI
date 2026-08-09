@@ -1,0 +1,8 @@
+{
+    "name": "onnxruntime-genai",
+    "version": "0.15.2",
+    "description": "ONNX Runtime generate() API for running generative AI models, including on NPUs",
+    "homepage": "https://github.com/microsoft/onnxruntime-genai",
+    "license": "MIT",
+    "supports": "linux & x64"
+}
