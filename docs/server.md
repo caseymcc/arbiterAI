@@ -1256,6 +1256,14 @@ Open in a browser: `http://localhost:8080/dashboard`
 
 ---
 
+### Deploying an ONNX Runtime GenAI build
+
+Most engines link statically, but ONNX Runtime GenAI ships as a shared library (it dlopen's its
+execution providers), so `libonnxruntime-genai.so` must be present on the node or the service will not
+start. `push-server.sh` handles this automatically: it checks whether the binary actually links the
+library (`readelf -d`), and if so installs it to `/usr/local/lib` and runs `ldconfig` before starting
+the service. A build with `ARBITERAI_ENABLE_ONNX_GENAI=OFF` pushes nothing extra.
+
 ## 4. Configuration Persistence
 
 By default, model configs added via the injection API exist only in memory and are lost when the server restarts.
