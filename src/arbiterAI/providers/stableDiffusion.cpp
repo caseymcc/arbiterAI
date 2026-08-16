@@ -114,8 +114,13 @@ StableDiffusion::~StableDiffusion()
     {
         if(entry.second)
             free_sd_ctx(entry.second);
+
+        auto nameIt=m_contextModelNames.find(entry.first);
+        if(nameIt!=m_contextModelNames.end())
+            notifyModelReleased(nameIt->second);
     }
     m_contexts.clear();
+    m_contextModelNames.clear();
 }
 
 ErrorCode StableDiffusion::completion(const CompletionRequest &request,
@@ -142,7 +147,7 @@ std::string StableDiffusion::resolveModelPath(const ModelInfo &model)
     return resolveDownloadableModelFile(model);
 }
 
-sd_ctx_t *StableDiffusion::acquireContext(const std::string &modelPath)
+sd_ctx_t *StableDiffusion::acquireContext(const std::string &modelPath, const std::string &modelName)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -162,6 +167,8 @@ sd_ctx_t *StableDiffusion::acquireContext(const std::string &modelPath)
     }
 
     m_contexts.emplace(modelPath, ctx);
+    m_contextModelNames.emplace(modelPath, modelName);
+    notifyModelLoaded(modelName);
     return ctx;
 }
 
@@ -193,7 +200,7 @@ ErrorCode StableDiffusion::generateImage(const ImageGenerationRequest &request,
         }
     }
 
-    sd_ctx_t *ctx=acquireContext(modelPath);
+    sd_ctx_t *ctx=acquireContext(modelPath, model.model);
     if(!ctx)
         return ErrorCode::ModelLoadError;
 

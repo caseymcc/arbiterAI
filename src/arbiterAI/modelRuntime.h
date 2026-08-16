@@ -74,6 +74,15 @@ struct LoadedModel {
     std::string modelName;
     std::string variant;
     ModelState state=ModelState::Unloaded;
+    /// Provider that owns this model ("llama", "sherpa-onnx", "whisper", …).
+    std::string provider;
+    /// Modality from the model config ("chat", "transcription", "speech", …).
+    std::string mode;
+    /// True when the model lives inside a provider's own cache rather than in
+    /// ModelRuntime.  Speech, transcription and image engines load lazily on
+    /// first use and hold their own handles; these entries exist so they are
+    /// visible to the dashboard and telemetry, and carry no llama handles.
+    bool providerManaged=false;
     int vramUsageMb=0;
     int ramUsageMb=0;
     int estimatedVramUsageMb=0;
@@ -123,6 +132,22 @@ public:
     ErrorCode downloadModel(
         const std::string &model,
         const std::string &variant="");
+
+    /// Record that a provider has loaded a model into its own cache.
+    /// Speech/transcription/image engines load lazily on first use, so without
+    /// this they never appear in the loaded-model list the dashboard, the
+    /// telemetry snapshot and /api/models/loaded are built from.
+    /// Ignored when a ModelRuntime-managed entry of the same name is already
+    /// loaded, so it can never mask a real llama entry.
+    /// @param ramMb  Approximate resident size, 0 when unknown.
+    void registerProviderModel(const std::string &model,
+        const std::string &provider,
+        const std::string &mode,
+        int ramMb=0);
+
+    /// Drop a provider-managed entry (its provider has freed the model).
+    /// Does nothing when the entry is not provider-managed.
+    void unregisterProviderModel(const std::string &model);
 
     /// Cancel an in-flight download for a model.  The transfer aborts, the
     /// partial file is removed, and the model returns to Unloaded.

@@ -55,7 +55,10 @@ private:
 
     /// Get (loading on first use) a whisper context for the given model file.
     /// Returns nullptr on load failure. Thread-safe.
-    whisper_context *acquireContext(const std::string &modelPath);
+    /// @param modelName  Config model name, used to report the load (the cache
+    ///                    itself is keyed by path, since two configs can point
+    ///                    at the same file).
+    whisper_context *acquireContext(const std::string &modelPath, const std::string &modelName);
 
     /// Decode raw audio file bytes into 16 kHz mono f32 PCM samples.
     /// Only uncompressed 16-bit PCM WAV at 16 kHz mono is supported for now.
@@ -65,6 +68,8 @@ private:
     std::mutex m_mutex;              ///< Guards the context cache
     std::mutex m_inferenceMutex;     ///< Serializes whisper_full (not reentrant on a shared ctx) — v1 limitation
     std::map<std::string, whisper_context *> m_contexts;
+    /// Cache path -> config model name, for reporting releases.
+    std::map<std::string, std::string> m_contextModelNames;
 };
 
 } // namespace arbiterAI

@@ -177,6 +177,19 @@ public:
      */
     std::string getProviderName() const { return m_provider; }
 
+protected:
+    /// Report that this provider has loaded a model into its own cache, so it
+    /// shows up in the loaded-model list (dashboard, telemetry,
+    /// /api/models/loaded).  Engines that load lazily on first use — speech,
+    /// transcription, image — are otherwise invisible there.
+    /// @param ramMb  Approximate resident size, 0 when unknown.
+    void notifyModelLoaded(const std::string &model, int ramMb=0) const;
+
+    /// Counterpart to notifyModelLoaded(), called when the model is freed.
+    void notifyModelReleased(const std::string &model) const;
+
+public:
+
     /**
      * @brief Set the API endpoint URL for this provider
      * @param url The endpoint URL

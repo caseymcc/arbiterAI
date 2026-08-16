@@ -48,11 +48,15 @@ private:
 
     /// Get (loading on first use) an sd context for the given model file.
     /// Returns nullptr on load failure. Thread-safe.
-    sd_ctx_t *acquireContext(const std::string &modelPath);
+    /// @param modelName  Config model name, used to report the load (the cache
+    ///                    is keyed by path, since configs can share a file).
+    sd_ctx_t *acquireContext(const std::string &modelPath, const std::string &modelName);
 
     std::mutex m_mutex;              ///< Guards the context cache
     std::mutex m_inferenceMutex;     ///< Serializes generation (v1 limitation)
     std::map<std::string, sd_ctx_t *> m_contexts;
+    /// Cache path -> config model name, for reporting releases.
+    std::map<std::string, std::string> m_contextModelNames;
 };
 
 } // namespace arbiterAI

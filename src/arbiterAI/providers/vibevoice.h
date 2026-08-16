@@ -50,6 +50,7 @@ private:
 
     std::mutex m_mutex;                 ///< Serializes the global vv_capi_* engine
     std::string m_loadedModel;          ///< Path of the currently loaded TTS model ("" = none)
+    std::string m_loadedModelName;      ///< Config name of that model, for the loaded-model registry
     std::atomic<uint64_t> m_tempCounter{ 0 }; ///< Unique-name counter for temp WAV files
 };
 

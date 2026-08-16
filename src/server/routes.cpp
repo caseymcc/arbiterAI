@@ -890,6 +890,21 @@ nlohmann::json loadedModelToJson(const LoadedModel &m)
         {"cpu_mapped_buffer_mb", m.cpuMappedBufferMb}
     };
 
+    if(!m.provider.empty())
+    {
+        j["provider"]=m.provider;
+    }
+    if(!m.mode.empty())
+    {
+        j["mode"]=m.mode;
+    }
+    if(m.providerManaged)
+    {
+        // Held in the provider's own cache: no VRAM figures, and it cannot be
+        // unloaded through the model-management endpoints.
+        j["provider_managed"]=true;
+    }
+
     if(!m.perGpuVramMb.empty())
     {
         nlohmann::json perGpuJson=nlohmann::json::object();

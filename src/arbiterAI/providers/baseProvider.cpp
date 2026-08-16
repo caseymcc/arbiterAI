@@ -1,4 +1,7 @@
 #include "arbiterAI/providers/baseProvider.h"
+#ifdef ARBITERAI_ENABLE_LLAMA
+#include "arbiterAI/modelRuntime.h"
+#endif
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelDownloader.h"
 #include "arbiterAI/storageManager.h"
@@ -221,6 +224,33 @@ ErrorCode BaseProvider::streamingCompletion(const CompletionRequest &request,
 {
     // Default: ignore waitCallback, delegate to standard streaming
     return streamingCompletion(request, callback);
+}
+
+void BaseProvider::notifyModelLoaded(const std::string &model, int ramMb) const
+{
+#ifdef ARBITERAI_ENABLE_LLAMA
+    // ModelRuntime holds the loaded-model registry, and it is only built with
+    // the llama runtime.  Without it there is no such list to appear in.
+    std::string mode;
+    std::optional<ModelInfo> info=ModelManager::instance().getModelInfo(model);
+    if(info)
+    {
+        mode=info->mode;
+    }
+    ModelRuntime::instance().registerProviderModel(model, m_provider, mode, ramMb);
+#else
+    (void)model;
+    (void)ramMb;
+#endif
+}
+
+void BaseProvider::notifyModelReleased(const std::string &model) const
+{
+#ifdef ARBITERAI_ENABLE_LLAMA
+    ModelRuntime::instance().unregisterProviderModel(model);
+#else
+    (void)model;
+#endif
 }
 
 } // namespace arbiterAI

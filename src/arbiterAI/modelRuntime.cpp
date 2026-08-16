@@ -895,6 +895,16 @@ ErrorCode ModelRuntime::unloadModel(const std::string &model)
 
     LoadedModel &entry=it->second;
 
+    if(entry.providerManaged)
+    {
+        // The model lives in its provider's cache, not here, so there is
+        // nothing for ModelRuntime to free.  Reporting success would claim the
+        // memory was released when it was not.
+        spdlog::warn("Model '{}' is held by the '{}' provider and cannot be unloaded through ModelRuntime",
+            model, entry.provider);
+        return ErrorCode::NotImplemented;
+    }
+
     if(entry.state==ModelState::Unloaded)
     {
         return ErrorCode::Success;
@@ -2284,6 +2294,48 @@ llama_context *ModelRuntime::getLlamaContext(const std::string &model) const
         return it->second.llamaCtx;
     }
     return nullptr;
+}
+
+void ModelRuntime::registerProviderModel(const std::string &model,
+    const std::string &provider,
+    const std::string &mode,
+    int ramMb)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it!=m_models.end()&&!it->second.providerManaged)
+    {
+        // A ModelRuntime-managed entry owns this name; never shadow it.
+        return;
+    }
+
+    LoadedModel &entry=m_models[model];
+    entry.modelName=model;
+    entry.provider=provider;
+    entry.mode=mode;
+    entry.providerManaged=true;
+    entry.state=ModelState::Loaded;
+    entry.ramUsageMb=ramMb;
+    entry.lastUsed=std::chrono::steady_clock::now();
+
+    spdlog::info("Provider '{}' loaded model '{}' (mode={}{})",
+        provider, model, mode.empty()?"unknown":mode,
+        ramMb>0?fmt::format(", ~{}MB RAM", ramMb):"");
+}
+
+void ModelRuntime::unregisterProviderModel(const std::string &model)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it==m_models.end()||!it->second.providerManaged)
+    {
+        return;
+    }
+
+    spdlog::info("Provider model '{}' released", model);
+    m_models.erase(it);
 }
 
 ErrorCode ModelRuntime::cancelDownload(const std::string &model)

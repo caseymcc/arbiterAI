@@ -20,7 +20,9 @@ VibeVoice::~VibeVoice()
     if(!m_loadedModel.empty())
     {
         vv_capi_unload();
+        notifyModelReleased(m_loadedModelName);
         m_loadedModel.clear();
+        m_loadedModelName.clear();
     }
 }
 
@@ -80,8 +82,13 @@ ErrorCode VibeVoice::synthesizeSpeech(const SpeechRequest &request,
 
     if(m_loadedModel!=ttsModel)
     {
+        // Only one TTS model is resident at a time, so a swap releases the old.
         if(!m_loadedModel.empty())
+        {
             vv_capi_unload();
+            notifyModelReleased(m_loadedModelName);
+            m_loadedModelName.clear();
+        }
         int rc=vv_capi_load(ttsModel.c_str(), nullptr, tokenizer.c_str(), voicePath.c_str(), 0);
         if(rc!=0)
         {
@@ -90,6 +97,8 @@ ErrorCode VibeVoice::synthesizeSpeech(const SpeechRequest &request,
             return ErrorCode::ModelLoadError;
         }
         m_loadedModel=ttsModel;
+        m_loadedModelName=model.model;
+        notifyModelLoaded(model.model);
     }
 
     fs::path tmpWav=fs::temp_directory_path()

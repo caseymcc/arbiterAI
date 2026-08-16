@@ -123,13 +123,22 @@ SherpaOnnx::~SherpaOnnx()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     for(auto &e:m_recognizers)
+    {
         if(e.second) SherpaOnnxDestroyOfflineRecognizer(e.second);
+        notifyModelReleased(e.first);
+    }
     m_recognizers.clear();
     for(auto &e:m_embedders)
+    {
         if(e.second) SherpaOnnxDestroySpeakerEmbeddingExtractor(e.second);
+        notifyModelReleased(e.first);
+    }
     m_embedders.clear();
     for(auto &e:m_taggers)
+    {
         if(e.second) SherpaOnnxDestroyAudioTagging(e.second);
+        notifyModelReleased(e.first);
+    }
     m_taggers.clear();
 }
 
@@ -246,6 +255,7 @@ const SherpaOnnxOfflineRecognizer *SherpaOnnx::acquireRecognizer(const ModelInfo
         return nullptr;
     }
     m_recognizers.emplace(model.model, rec);
+    notifyModelLoaded(model.model);
     return rec;
 }
 
@@ -380,6 +390,7 @@ const SherpaOnnxSpeakerEmbeddingExtractor *SherpaOnnx::acquireEmbedder(const Mod
         return nullptr;
     }
     m_embedders.emplace(model.model, ex);
+    notifyModelLoaded(model.model);
     return ex;
 }
 
@@ -480,6 +491,7 @@ const SherpaOnnxAudioTagging *SherpaOnnx::acquireTagger(const ModelInfo &model)
         return nullptr;
     }
     m_taggers.emplace(model.model, tg);
+    notifyModelLoaded(model.model);
     return tg;
 }
 

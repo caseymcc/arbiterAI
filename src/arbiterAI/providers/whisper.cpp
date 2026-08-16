@@ -36,8 +36,13 @@ Whisper::~Whisper()
     {
         if(entry.second)
             whisper_free(entry.second);
+
+        auto nameIt=m_contextModelNames.find(entry.first);
+        if(nameIt!=m_contextModelNames.end())
+            notifyModelReleased(nameIt->second);
     }
     m_contexts.clear();
+    m_contextModelNames.clear();
 }
 
 ErrorCode Whisper::completion(const CompletionRequest &request,
@@ -65,7 +70,7 @@ std::string Whisper::resolveModelPath(const ModelInfo &model)
     return resolveDownloadableModelFile(model);
 }
 
-whisper_context *Whisper::acquireContext(const std::string &modelPath)
+whisper_context *Whisper::acquireContext(const std::string &modelPath, const std::string &modelName)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -82,6 +87,8 @@ whisper_context *Whisper::acquireContext(const std::string &modelPath)
     }
 
     m_contexts.emplace(modelPath, ctx);
+    m_contextModelNames.emplace(modelPath, modelName);
+    notifyModelLoaded(modelName);
     return ctx;
 }
 
@@ -205,7 +212,7 @@ ErrorCode Whisper::transcribe(const AudioTranscriptionRequest &request,
         return decodeResult;
     }
 
-    whisper_context *ctx=acquireContext(modelPath);
+    whisper_context *ctx=acquireContext(modelPath, model.model);
     if(!ctx)
         return ErrorCode::ModelLoadError;
 

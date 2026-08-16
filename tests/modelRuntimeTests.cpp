@@ -4,6 +4,7 @@
 #include "arbiterAI/storageManager.h"
 #include <gtest/gtest.h>
 #include <fstream>
+#include <algorithm>
 #include <filesystem>
 
 namespace arbiterAI
@@ -750,6 +751,80 @@ TEST_F(ModelRuntimeTest, ResetClearsDownloadState)
     EXPECT_EQ(rt.getMaxConcurrentDownloads(), 2);
 
     std::filesystem::remove_all("rt_test_models");
+}
+
+
+// ─── Provider-managed models ─────────────────────────────────────────────
+//
+// Speech/transcription/image engines load lazily into their own caches, so
+// without registration they never appear in the loaded-model list that the
+// dashboard, telemetry and /api/models/loaded are built from.
+
+TEST(ProviderManagedModels, AppearInModelStates)
+{
+    ModelRuntime::reset();
+    ModelRuntime &runtime=ModelRuntime::instance();
+
+    runtime.registerProviderModel("some-stt", "sherpa-onnx", "transcription", 512);
+
+    std::vector<LoadedModel> states=runtime.getModelStates();
+    auto it=std::find_if(states.begin(), states.end(),
+        [](const LoadedModel &m) { return m.modelName=="some-stt"; });
+
+    ASSERT_NE(it, states.end())<<"a provider-loaded model must show up in the loaded list";
+    EXPECT_EQ(it->state, ModelState::Loaded);
+    EXPECT_EQ(it->provider, "sherpa-onnx");
+    EXPECT_EQ(it->mode, "transcription");
+    EXPECT_TRUE(it->providerManaged);
+    EXPECT_EQ(it->ramUsageMb, 512);
+
+    // No llama handles: it lives in the provider, not here.
+    EXPECT_EQ(it->llamaModel, nullptr);
+    EXPECT_EQ(it->llamaCtx, nullptr);
+
+    ModelRuntime::reset();
+}
+
+TEST(ProviderManagedModels, UnregisterRemovesTheEntry)
+{
+    ModelRuntime::reset();
+    ModelRuntime &runtime=ModelRuntime::instance();
+
+    runtime.registerProviderModel("some-tts", "vibevoice", "speech");
+    ASSERT_TRUE(runtime.getModelState("some-tts").has_value());
+
+    runtime.unregisterProviderModel("some-tts");
+    EXPECT_FALSE(runtime.getModelState("some-tts").has_value());
+
+    ModelRuntime::reset();
+}
+
+TEST(ProviderManagedModels, CannotBeUnloadedThroughModelRuntime)
+{
+    ModelRuntime::reset();
+    ModelRuntime &runtime=ModelRuntime::instance();
+
+    runtime.registerProviderModel("some-stt", "sherpa-onnx", "transcription");
+
+    // Claiming success would say the memory was freed when the provider still
+    // holds it.
+    EXPECT_EQ(runtime.unloadModel("some-stt"), ErrorCode::NotImplemented);
+    EXPECT_TRUE(runtime.getModelState("some-stt").has_value());
+
+    ModelRuntime::reset();
+}
+
+TEST(ProviderManagedModels, UnregisterLeavesRuntimeManagedEntriesAlone)
+{
+    ModelRuntime::reset();
+    ModelRuntime &runtime=ModelRuntime::instance();
+
+    // A name unknown to the registry, and one that is not provider-managed,
+    // must both be no-ops rather than erasing something real.
+    runtime.unregisterProviderModel("never-registered");
+    EXPECT_FALSE(runtime.getModelState("never-registered").has_value());
+
+    ModelRuntime::reset();
 }
 
 } // namespace arbiterAI
