@@ -70,6 +70,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fdiagnostics-color=always")
 option(BUILD_TESTING "Build the tests" ON)
 
+include(cmake/webDashboard.cmake)
+
 # Find dependencies
 find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
