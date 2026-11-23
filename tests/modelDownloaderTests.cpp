@@ -39,16 +39,14 @@ protected:
             svr->listen("localhost", 1234);
         });
 
-        {
-            //dummy request to ensure server is running
-            httplib::Client cli("localhost", 1234);
-            cli.Get("/dummy_model.bin"); 
-        }
+        // listen() runs on the thread: until it is up, stop() in TearDown would
+        // do nothing and the join would wait forever
+        svr->wait_until_ready();
     }
 
     void TearDown() override
     {
-        if (svr && svr->is_running())
+        if (svr)
         {
             svr->stop();
         }
