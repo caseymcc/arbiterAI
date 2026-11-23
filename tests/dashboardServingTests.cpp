@@ -117,6 +117,20 @@ TEST_F(DashboardServingTest, ShellIsServedAtNext)
     EXPECT_EQ(result->body, bytes(shell->data, shell->size));
 }
 
+TEST_F(DashboardServingTest, ShellIsServedAtEachTabPath)
+{
+    const arbiterAI::server::DashboardAsset *shell=findAsset("shell.html");
+    ASSERT_NE(shell, nullptr);
+
+    for(const char *path:{"/dashboard/next/storage", "/dashboard/next/config", "/dashboard/next/logs"})
+    {
+        httplib::Result result=get(path);
+        ASSERT_TRUE(result)<<path;
+        EXPECT_EQ(result->status, 200)<<path;
+        EXPECT_EQ(result->body, bytes(shell->data, shell->size))<<path;
+    }
+}
+
 TEST_F(DashboardServingTest, AssetsHaveTheirMimeTypes)
 {
     httplib::Result wasm=get("/dashboard/app.wasm");

@@ -27,7 +27,8 @@ void serveDashboardAsset(const httplib::Request &req, httplib::Response &res, co
 /// in a build without it.
 void handleDashboardShell(const httplib::Request &req, httplib::Response &res);
 
-/// The web dashboard's routes: the page at /dashboard/next and its files at
+/// The web dashboard's routes: the page at /dashboard/next (and its tabs'
+/// /dashboard/next/storage, config and logs) and its files at
 /// /dashboard/app.js, app.wasm and app.data.
 void registerDashboardRoutes(httplib::Server &server);
 

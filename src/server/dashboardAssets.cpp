@@ -172,7 +172,7 @@ void handleDashboardShell(const httplib::Request &req, httplib::Response &res)
 
 void registerDashboardRoutes(httplib::Server &server)
 {
-    server.Get("/dashboard/next", handleDashboardShell);
+    server.Get(R"(/dashboard/next(?:/(?:storage|config|logs))?)", handleDashboardShell);
     server.Get(R"(/dashboard/(app\.(?:js|wasm|data)))", [](const httplib::Request &req, httplib::Response &res)
     {
         serveDashboardAsset(req, res, req.matches[1].str());

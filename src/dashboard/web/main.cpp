@@ -1,6 +1,8 @@
 #include "app/dashboardApp.h"
+#include "web/fetchDataSource.h"
 
 #include <gweni/app/window.h>
+#include <gweni/platforms/platform.h>
 
 int main()
 {
@@ -12,7 +14,12 @@ int main()
     auto *window=new gweni::app::Window(options);
     if(!window->ok())
         return 1;
-    new arbiterAI::dashboard::DashboardApp(window->canvas());
+
+    auto *data=new arbiterAI::dashboard::FetchDataSource();
+    auto *app=new arbiterAI::dashboard::DashboardApp(window->canvas(), *data, gweni::platform::currentUrl(),
+        [](const std::string &path) { gweni::platform::pushUrl(path); });
+    gweni::platform::setUrlChangedHandler([app](const gweni::String &url) { app->navigate(url); });
+
     window->run();
     return 0;
 }
