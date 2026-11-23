@@ -84,7 +84,7 @@ EXIT_CODE="$(docker inspect -f '{{.State.ExitCode}}' "${ID}-run")"
 docker logs "${ID}-run" 2>&1 | tail -5
 [ "$EXIT_CODE" = "0" ] || fail "docker stop: exit code ${EXIT_CODE}, expected 0"
 [ "$STOP_SECONDS" -lt 10 ] || fail "docker stop took ${STOP_SECONDS} s"
-docker logs "${ID}-run" 2>&1 | grep -q "shutdown complete" || fail "no 'shutdown complete' in the logs"
+docker logs "${ID}-run" 2>&1 | grep "shutdown complete" >/dev/null || fail "no 'shutdown complete' in the logs"
 echo "stopped cleanly in ${STOP_SECONDS} s"
 
 echo "== 4. a server crash restarts the container"
@@ -103,7 +103,7 @@ for _ in $(seq 60); do
 done
 [ "$RESTARTS" -ge 1 ] || { docker logs "${ID}-crash" | tail -20; fail "container was not restarted after SIGSEGV"; }
 waitForHealth || fail "server did not come back after the restart"
-docker logs "${ID}-crash" 2>&1 | grep -q "FATAL SIGNAL" || fail "no crash log line before the restart"
+docker logs "${ID}-crash" 2>&1 | grep "FATAL SIGNAL" >/dev/null || fail "no crash log line before the restart"
 echo "restarted ${RESTARTS} time(s) after SIGSEGV"
 
 echo "image ${IMAGE}: all checks passed"

@@ -250,7 +250,7 @@ host with systemd or Docker.
    OLD=$(systemctl show -p MainPID --value arbiterai-server)
    kill -SEGV "$OLD"
    sleep 8
-   journalctl -u arbiterai-server -n 30 | grep "FATAL SIGNAL"
+   journalctl -u arbiterai-server -n 200 | grep "FATAL SIGNAL"
    systemctl show arbiterai-server -p MainPID -p NRestarts       # a new MainPID, NRestarts=1
    curl -s localhost:8080/health
    ```
