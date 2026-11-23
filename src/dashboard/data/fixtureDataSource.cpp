@@ -60,8 +60,20 @@ void FixtureDataSource::answer(const std::string &method, const std::string &pat
     Response response=reply==m_replies.end()
         ?makeResponse(404, nlohmann::json{{"error", "no fixture for "+method+" "+path}}.dump())
         :makeResponse(reply->second.status, reply->second.body);
-    if(handler)
+    if(m_held)
+        m_waiting.emplace_back(handler, response);
+    else if(handler)
         handler(response);
+}
+
+void FixtureDataSource::answerHeld(size_t index)
+{
+    if(index>=m_waiting.size())
+        return;
+    std::pair<ResponseHandler, Response> waiting=m_waiting[index];
+    m_waiting.erase(m_waiting.begin()+static_cast<std::ptrdiff_t>(index));
+    if(waiting.first)
+        waiting.first(waiting.second);
 }
 
 }//namespace dashboard

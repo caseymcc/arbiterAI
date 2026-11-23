@@ -30,6 +30,8 @@ struct StartupModel {
     nlohmann::json runtimeOptions=nlohmann::json::object();
     std::vector<int> devices;
     std::string apiFormat;
+    /// the panel's handle for the entry while it is edited; not saved
+    uint64_t id=0;
 
     nlohmann::json toJson() const;
     static StartupModel fromJson(const nlohmann::json &json);
@@ -95,6 +97,8 @@ public:
         gweni::controls::Button *remove=nullptr;
         gweni::controls::ComboBox *model=nullptr;
         gweni::controls::HorizontalSlider *context=nullptr;
+        /// the slider's max: the option's, lowered to what the devices hold
+        int maxContext=0;
         gweni::controls::Label *contextLabel=nullptr;
         gweni::controls::Label *fit=nullptr;
         std::vector<gweni::controls::CheckBoxWithLabel *> devices;
@@ -123,9 +127,17 @@ private:
     double devicesVram(const StartupModel &entry) const;
     void renderModels();
     void renderEntryContext(size_t index);
+    /// the entry's context max, lowering its saved value to what its devices
+    /// hold; the placeholder max (no option yet) lowers nothing
+    int limitContext(size_t index);
+    void setSliderRange(size_t index);
     void renderGpus();
     void layoutContent();
-    void setStatus(size_t index, const std::string &text, const gweni::Color &color);
+    /// the entry's index now, or m_models.size() once it is removed
+    size_t indexOf(uint64_t id) const;
+    void setStatus(uint64_t id, const std::string &text, const gweni::Color &color);
+    void setSaving(uint64_t id, bool saving);
+    void addEntry(StartupModel entry);
     void saveAll(std::function<void(bool ok, const std::string &error)> done);
 
     DataSource &m_data;
@@ -141,6 +153,15 @@ private:
 
     std::vector<StartupModel> m_models;
     std::vector<Entry> m_entries;
+    /// each entry's status line and whether a save is in flight, kept by id
+    /// across re-renders
+    struct EntryStatus {
+        std::string text;
+        gweni::Color color;
+        bool saving=false;
+    };
+    std::map<uint64_t, EntryStatus> m_statuses;
+    uint64_t m_nextId=1;
     std::vector<nlohmann::json> m_options;
     /// each accelerator's options, as its reply gave them
     std::map<std::string, nlohmann::json> m_optionReplies;
@@ -150,6 +171,7 @@ private:
     int m_gpuCardHeight=0;
     bool m_loaded=false;
     bool m_loading=false;
+    bool m_settingSlider=false;
 };
 
 }//namespace dashboard

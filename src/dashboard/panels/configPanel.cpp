@@ -166,6 +166,8 @@ ConfigPanel::ConfigPanel(gweni::controls::Base *page, DataSource &data):
     m_add->setText("+ Add Model");
     m_add->setDock(gweni::DockPosition::Right);
     fixWidth(m_add, 110);
+    // until the config arrives, which would replace what was added
+    m_add->setDisabled(true);
     m_add->onPressCaller.addCallback(m_add, [this](gweni::event::Handler &, gweni::event::Info)
     {
         addModel();
@@ -225,13 +227,31 @@ void ConfigPanel::updateConfig(const nlohmann::json &config)
     if(!config.is_object())
         return;
     m_loaded=true;
+    m_add->setDisabled(false);
     m_models.clear();
+    m_statuses.clear();
     if(config.contains("startup_models") && config["startup_models"].is_array())
     {
         for(const nlohmann::json &entry:config["startup_models"])
-            m_models.push_back(StartupModel::fromJson(entry));
+            addEntry(StartupModel::fromJson(entry));
     }
     renderModels();
+}
+
+void ConfigPanel::addEntry(StartupModel entry)
+{
+    entry.id=m_nextId++;
+    m_models.push_back(std::move(entry));
+}
+
+size_t ConfigPanel::indexOf(uint64_t id) const
+{
+    for(size_t i=0; i<m_models.size(); ++i)
+    {
+        if(m_models[i].id==id)
+            return i;
+    }
+    return m_models.size();
 }
 
 void ConfigPanel::updateHardware(const nlohmann::json &hardware)
@@ -295,7 +315,7 @@ double ConfigPanel::devicesVram(const StartupModel &entry) const
 
 void ConfigPanel::addModel()
 {
-    m_models.push_back(StartupModel());
+    addEntry(StartupModel());
     renderModels();
 }
 
@@ -304,6 +324,7 @@ void ConfigPanel::removeModel(size_t index)
     if(index>=m_models.size())
         return;
     const std::string name=m_models[index].model;
+    m_statuses.erase(m_models[index].id);
     m_models.erase(m_models.begin()+static_cast<std::ptrdiff_t>(index));
     renderModels();
 
@@ -351,34 +372,34 @@ void ConfigPanel::saveAndLoad(size_t index)
     if(index>=m_models.size())
         return;
     const StartupModel entry=m_models[index];
+    // by id: a removal or a re-render may move the entry before the replies come
+    const uint64_t id=entry.id;
     if(entry.model.empty())
     {
-        setStatus(index, "Select a model first.", palette::bad);
+        setStatus(id, "Select a model first.", palette::bad);
         return;
     }
 
-    if(index<m_entries.size())
-        m_entries[index].save->setDisabled(true);
-    setStatus(index, "Saving config...", palette::muted);
+    setSaving(id, true);
+    setStatus(id, "Saving config...", palette::muted);
 
-    auto finish=[this, index](const std::string &text, const gweni::Color &color)
+    auto finish=[this, id](const std::string &text, const gweni::Color &color)
     {
-        setStatus(index, text, color);
-        if(index<m_entries.size())
-            m_entries[index].save->setDisabled(false);
+        setStatus(id, text, color);
+        setSaving(id, false);
     };
 
     // the catalog's api_format first (its outcome is not checked, as before)
-    m_data.putJson("/api/models/config", {{"model", entry.model}, {"api_format", entry.apiFormat}}, [this, entry, index, finish](const Response &)
+    m_data.putJson("/api/models/config", {{"model", entry.model}, {"api_format", entry.apiFormat}}, [this, entry, id, finish](const Response &)
     {
-        saveAll([this, entry, index, finish](bool ok, const std::string &error)
+        saveAll([this, entry, id, finish](bool ok, const std::string &error)
         {
             if(!ok)
             {
                 finish("Failed to save config: "+error, palette::bad);
                 return;
             }
-            setStatus(index, "Loading model...", palette::muted);
+            setStatus(id, "Loading model...", palette::muted);
             const nlohmann::json body={{"variant", entry.variant}, {"context_size", entry.contextSize},
                 {"runtime_options", entry.runtimeOptions}, {"devices", entry.devices}};
             m_data.postJson("/api/models/"+urlEncode(entry.model)+"/load", body, [finish](const Response &response)
@@ -436,6 +457,8 @@ void ConfigPanel::setDevice(size_t index, int gpu, bool on)
     }
     if(index<m_entries.size())
         m_entries[index].noDevices->setHidden(!devices.empty());
+    // fewer devices may hold less, as the old page re-clamped on a toggle
+    setSliderRange(index);
     renderEntryContext(index);
 }
 
@@ -460,12 +483,62 @@ void ConfigPanel::setRuntimeOption(size_t index, const std::string &option, cons
         options[option]=value;
 }
 
-void ConfigPanel::setStatus(size_t index, const std::string &text, const gweni::Color &color)
+void ConfigPanel::setStatus(uint64_t id, const std::string &text, const gweni::Color &color)
 {
-    if(index>=m_entries.size())
+    const size_t index=indexOf(id);
+    if(index>=m_models.size())
         return;
-    m_entries[index].status->setText(text);
-    m_entries[index].status->setTextColor(color);
+    EntryStatus &status=m_statuses[id];
+    status.text=text;
+    status.color=color;
+    if(index<m_entries.size())
+    {
+        m_entries[index].status->setText(text);
+        m_entries[index].status->setTextColor(color);
+    }
+}
+
+void ConfigPanel::setSaving(uint64_t id, bool saving)
+{
+    const size_t index=indexOf(id);
+    if(index>=m_models.size())
+        return;
+    m_statuses[id].saving=saving;
+    if(index<m_entries.size())
+        m_entries[index].save->setDisabled(saving);
+}
+
+int ConfigPanel::limitContext(size_t index)
+{
+    StartupModel &entry=m_models[index];
+    const nlohmann::json *option=findOption(entry.model, entry.variant);
+    int maxContext=option && number(*option, "max_context_size")>0?static_cast<int>(number(*option, "max_context_size")):131072;
+    if(option)
+    {
+        const ContextFit fit=contextFit(*option, devicesVram(entry));
+        if(fit.tight>0 && fit.tight<maxContext)
+        {
+            maxContext=std::max(fit.tight, 1024);
+            if(entry.contextSize>maxContext)
+                entry.contextSize=maxContext;
+        }
+    }
+    return maxContext;
+}
+
+void ConfigPanel::setSliderRange(size_t index)
+{
+    if(index>=m_entries.size() || index>=m_models.size())
+        return;
+    Entry &view=m_entries[index];
+    view.maxContext=limitContext(index);
+    // a new range moves the value, which is not an edit
+    m_settingSlider=true;
+    view.context->setRange(0.0f, static_cast<float>(view.maxContext));
+    view.context->setNotchCount(view.maxContext/1024);
+    view.context->setClampToNotches(true);
+    view.context->setFloatValue(static_cast<float>(std::min(m_models[index].contextSize, view.maxContext)), false);
+    m_settingSlider=false;
 }
 
 void ConfigPanel::renderEntryContext(size_t index)
@@ -579,28 +652,13 @@ void ConfigPanel::renderModels()
         view.context=view.box->newChild<gweni::controls::HorizontalSlider>();
         view.context->setDock(gweni::DockPosition::Top);
         view.context->setHeight(RowHeight);
-        const nlohmann::json *option=findOption(entry.model, entry.variant);
-        int maxContext=option&&number(*option, "max_context_size")>0?static_cast<int>(number(*option, "max_context_size")):131072;
-        // the placeholder max (no option yet) only bounds the slider; what
-        // the devices hold also lowers the saved value, as the old page did
-        if(option)
-        {
-            const ContextFit fit=contextFit(*option, devicesVram(entry));
-            if(fit.tight>0 && fit.tight<maxContext)
-            {
-                maxContext=std::max(fit.tight, 1024);
-                if(entry.contextSize>maxContext)
-                    m_models[i].contextSize=maxContext;
-            }
-        }
-        view.context->setRange(0.0f, static_cast<float>(maxContext));
-        view.context->setNotchCount(maxContext/1024);
-        view.context->setClampToNotches(true);
-        view.context->setFloatValue(static_cast<float>(std::min(entry.contextSize, maxContext)), false);
         view.context->onValueChanged.addCallback(view.context, [this, i](gweni::event::Handler &, gweni::event::Info)
         {
+            if(m_settingSlider)
+                return;
+            // a max that is not whole 1K steps: the last notch rounds past it
             const float value=m_entries[i].context->getFloatValue();
-            setContextSize(i, static_cast<int>(std::lround(value/1024.0f))*1024);
+            setContextSize(i, std::min(static_cast<int>(std::lround(value/1024.0f))*1024, m_entries[i].maxContext));
         });
         view.fit=addLine(view.box, "", LabelHeight);
         height+=LabelHeight+RowHeight+LabelHeight;
@@ -626,6 +684,12 @@ void ConfigPanel::renderModels()
         view.noDevices->setHidden(!entry.devices.empty());
         height+=LabelHeight;
 
+        // none saved: the option's, shown and saved, as the old page did
+        if(entry.apiFormat.empty())
+        {
+            if(const nlohmann::json *option=findOption(entry.model, entry.variant))
+                m_models[i].apiFormat=text(*option, "api_format");
+        }
         view.apiFormat=addChoice(view.box, "API Format", {{"Standard (OpenAI)", ""}, {"Harmony (auto-convert to OpenAI)", "harmony"}}, entry.apiFormat);
         view.apiFormat->onSelection.addCallback(view.apiFormat, [this, i](gweni::event::Handler &, gweni::event::Info)
         {
@@ -655,7 +719,15 @@ void ConfigPanel::renderModels()
 
         view.box->setHeight(height+16);
         listHeight+=height+16+10;
+        auto status=m_statuses.find(entry.id);
+        if(status!=m_statuses.end())
+        {
+            view.status->setText(status->second.text);
+            view.status->setTextColor(status->second.color);
+            view.save->setDisabled(status->second.saving);
+        }
         m_entries.push_back(view);
+        setSliderRange(i);
         renderEntryContext(i);
     }
 

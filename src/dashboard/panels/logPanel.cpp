@@ -3,6 +3,7 @@
 
 #include <gweni/platforms/platform.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <ctime>
@@ -202,13 +203,18 @@ void LogPanel::updateLogs(const nlohmann::json &logs)
 
     if(entries.empty())
         return;
-    m_lastEpoch=static_cast<int64_t>(number(entries.back(), "epoch_ms"));
-    m_atLastEpoch=0;
+    // a reply older than one already shown (two polls in flight) moves nothing back
+    const int64_t lastEpoch=static_cast<int64_t>(number(entries.back(), "epoch_ms"));
+    if(lastEpoch<shownEpoch)
+        return;
+    size_t atLastEpoch=0;
     for(const nlohmann::json &entry:entries)
     {
-        if(static_cast<int64_t>(number(entry, "epoch_ms"))==m_lastEpoch)
-            ++m_atLastEpoch;
+        if(static_cast<int64_t>(number(entry, "epoch_ms"))==lastEpoch)
+            ++atLastEpoch;
     }
+    m_atLastEpoch=lastEpoch==shownEpoch?std::max(m_atLastEpoch, atLastEpoch):atLastEpoch;
+    m_lastEpoch=lastEpoch;
 }
 
 void LogPanel::copySelection()

@@ -65,19 +65,6 @@ std::vector<std::string> headerItems(const std::string &value)
     return items;
 }
 
-const DashboardAsset *findAsset(const std::string &name)
-{
-    size_t count=0;
-    const DashboardAsset *assets=dashboardAssets(count);
-
-    for(size_t i=0; i<count; ++i)
-    {
-        if(name==assets[i].name)
-            return &assets[i];
-    }
-    return nullptr;
-}
-
 } // namespace
 
 bool acceptsGzip(const std::string &acceptEncoding)
@@ -119,7 +106,7 @@ bool etagMatches(const std::string &ifNoneMatch, const std::string &etag)
 
 void serveDashboardAsset(const httplib::Request &req, httplib::Response &res, const std::string &name)
 {
-    const DashboardAsset *asset=findAsset(name);
+    const DashboardAsset *asset=findDashboardAsset(name.c_str());
 
     if(!asset)
     {
@@ -162,7 +149,7 @@ void serveDashboardAsset(const httplib::Request &req, httplib::Response &res, co
 
 void handleDashboardShell(const httplib::Request &req, httplib::Response &res)
 {
-    if(!findAsset("shell.html"))
+    if(!findDashboardAsset("shell.html"))
     {
         res.set_content(NOT_BUILT_HTML, "text/html; charset=utf-8");
         return;

@@ -11,19 +11,6 @@
 namespace
 {
 
-const arbiterAI::server::DashboardAsset *findAsset(const std::string &name)
-{
-    size_t count=0;
-    const arbiterAI::server::DashboardAsset *assets=arbiterAI::server::dashboardAssets(count);
-
-    for(size_t i=0; i<count; ++i)
-    {
-        if(name==assets[i].name)
-            return &assets[i];
-    }
-    return nullptr;
-}
-
 std::string bytes(const unsigned char *data, size_t size)
 {
     return std::string(reinterpret_cast<const char *>(data), size);
@@ -106,7 +93,7 @@ TEST(DashboardAssetHandler, UnknownAssetIsNotFound)
 
 TEST_F(DashboardServingTest, ShellIsServedAtDashboard)
 {
-    const arbiterAI::server::DashboardAsset *shell=findAsset("shell.html");
+    const arbiterAI::server::DashboardAsset *shell=arbiterAI::server::findDashboardAsset("shell.html");
     ASSERT_NE(shell, nullptr);
 
     httplib::Result result=get("/dashboard");
@@ -119,7 +106,7 @@ TEST_F(DashboardServingTest, ShellIsServedAtDashboard)
 
 TEST_F(DashboardServingTest, ShellIsServedAtEachTabPath)
 {
-    const arbiterAI::server::DashboardAsset *shell=findAsset("shell.html");
+    const arbiterAI::server::DashboardAsset *shell=arbiterAI::server::findDashboardAsset("shell.html");
     ASSERT_NE(shell, nullptr);
 
     for(const char *path:{"/dashboard/storage", "/dashboard/config", "/dashboard/logs", "/dashboard/"})
@@ -161,7 +148,7 @@ TEST_F(DashboardServingTest, BrowserAcceptEncodingGetsTheGzipCopyOnce)
 {
     for(const char *name:{"shell.html", "app.js", "app.wasm"})
     {
-        const arbiterAI::server::DashboardAsset *asset=findAsset(name);
+        const arbiterAI::server::DashboardAsset *asset=arbiterAI::server::findDashboardAsset(name);
         ASSERT_NE(asset, nullptr)<<name;
 
         std::string path=std::string(name)=="shell.html"?"/dashboard":std::string("/dashboard/")+name;
@@ -177,7 +164,7 @@ TEST_F(DashboardServingTest, BrowserAcceptEncodingGetsTheGzipCopyOnce)
 
 TEST_F(DashboardServingTest, RawWhenGzipIsNotAccepted)
 {
-    const arbiterAI::server::DashboardAsset *js=findAsset("app.js");
+    const arbiterAI::server::DashboardAsset *js=arbiterAI::server::findDashboardAsset("app.js");
     ASSERT_NE(js, nullptr);
 
     for(const char *acceptEncoding:{"br", "gzip;q=0"})
@@ -194,7 +181,7 @@ TEST_F(DashboardServingTest, EtagAndNoCacheOnEveryAsset)
 {
     for(const char *name:{"app.js", "app.wasm", "app.data"})
     {
-        const arbiterAI::server::DashboardAsset *asset=findAsset(name);
+        const arbiterAI::server::DashboardAsset *asset=arbiterAI::server::findDashboardAsset(name);
         ASSERT_NE(asset, nullptr)<<name;
 
         httplib::Result result=get(std::string("/dashboard/")+name);
@@ -207,7 +194,7 @@ TEST_F(DashboardServingTest, EtagAndNoCacheOnEveryAsset)
 
 TEST_F(DashboardServingTest, MatchingIfNoneMatchGets304)
 {
-    const arbiterAI::server::DashboardAsset *wasm=findAsset("app.wasm");
+    const arbiterAI::server::DashboardAsset *wasm=arbiterAI::server::findDashboardAsset("app.wasm");
     ASSERT_NE(wasm, nullptr);
 
     httplib::Result cached=get("/dashboard/app.wasm", {{"If-None-Match", wasm->etag}, {"Accept-Encoding", "gzip"}});

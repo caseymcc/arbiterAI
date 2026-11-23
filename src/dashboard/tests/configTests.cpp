@@ -352,3 +352,84 @@ TEST_F(ConfigTest, RepliesThatAreNotObjectsAreIgnored)
     EXPECT_EQ(config().options().size(), 4u);
     EXPECT_EQ(config().models().size(), 2u);
 }
+
+TEST_F(ConfigTest, NoSavedApiFormatShowsAndSavesTheOptionsOwn)
+{
+    nlohmann::json saved=loadFixture("serverConfig.json");
+    saved["startup_models"][0]["api_format"]="";
+    m_data.setJson("/api/server/config", saved);
+    start("/dashboard/config");
+
+    // gpt-oss-120b's option says harmony; qwen3-8b's says nothing
+    EXPECT_EQ(selected(config().entries()[0].apiFormat), "harmony");
+    EXPECT_EQ(config().configBody()["startup_models"][0]["api_format"], "harmony");
+    EXPECT_EQ(config().configBody()["startup_models"][1]["api_format"], "");
+}
+
+TEST_F(ConfigTest, TheSliderEndStaysWithinAMaxBetweenNotches)
+{
+    nlohmann::json vulkan=loadFixture("startupOptionsVulkan.json");
+    vulkan["options"][2]["max_context_size"]=40500;
+    m_data.setJson("/api/server/startup-options?accelerator=vulkan", vulkan);
+    start("/dashboard/config");
+
+    config().entries()[1].context->setFloatValue(40500.0f, true);
+    frames(2);
+    EXPECT_EQ(config().models()[1].contextSize, 40500);
+}
+
+TEST_F(ConfigTest, ADeviceToggledOffLowersTheContextToWhatTheRestHold)
+{
+    // 24 GB holds 68K of this model, 120 GB more than its 128K max
+    nlohmann::json saved=loadFixture("serverConfig.json");
+    saved["startup_models"][0]["context_size"]=131072;
+    m_data.setJson("/api/server/config", saved);
+    nlohmann::json vulkan=loadFixture("startupOptionsVulkan.json");
+    vulkan["options"][0]["base_memory_mb"]=16384;
+    m_data.setJson("/api/server/startup-options?accelerator=vulkan", vulkan);
+    start("/dashboard/config");
+    ASSERT_EQ(config().models()[0].contextSize, 131072);
+
+    config().setDevice(0, 1, true);
+    config().setDevice(0, 0, false);
+    EXPECT_EQ(config().models()[0].contextSize, 69632);
+    EXPECT_EQ(config().entries()[0].maxContext, 69632);
+    EXPECT_FLOAT_EQ(config().entries()[0].context->getFloatValue(), 69632.0f);
+}
+
+TEST_F(ConfigTest, AddModelWaitsForTheConfig)
+{
+    // what was added before the config arrives would be replaced by it
+    m_data.setFailure("/api/server/config", 0, "");
+    start("/dashboard/config");
+    EXPECT_TRUE(config().addButton()->isDisabled());
+
+    m_data.setJson("/api/server/config", loadFixture("serverConfig.json"));
+    frames(125);
+    ASSERT_TRUE(config().loaded());
+    EXPECT_FALSE(config().addButton()->isDisabled());
+}
+
+TEST_F(ConfigTest, SaveAndLoadStatusFollowsItsEntryWhenAnEarlierOneIsRemoved)
+{
+    ok("/api/models/config", "PUT");
+    ok("/api/server/config", "PUT");
+    ok("/api/models/qwen3-8b/load", "POST", {{"status", "loaded"}});
+    ok("/api/models/gpt-oss-120b/unload", "POST");
+    start("/dashboard/config");
+
+    m_data.hold(true);
+    config().saveAndLoad(1);
+    config().removeModel(0);
+    frames(2);
+    ASSERT_EQ(config().entries().size(), 1u);
+    EXPECT_EQ(config().entries()[0].status->getText(), "Saving config...");
+    EXPECT_TRUE(config().entries()[0].save->isDisabled());
+
+    m_data.hold(false);
+    while(m_data.heldCount()>0)
+        m_data.answerHeld(0);
+    EXPECT_EQ(m_data.count("/api/models/qwen3-8b/load", "POST"), 1u);
+    EXPECT_EQ(config().entries()[0].status->getText(), "Model loaded successfully.");
+    EXPECT_FALSE(config().entries()[0].save->isDisabled());
+}

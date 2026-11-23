@@ -33,6 +33,12 @@ public:
     /// how many requests were made for \p path with \p method
     size_t count(const std::string &path, const std::string &method="GET") const;
 
+    /// while held, the replies (as they are when asked) wait until answerHeld()
+    void hold(bool held) { m_held=held; }
+    size_t heldCount() const { return m_waiting.size(); }
+    /// delivers the waiting reply \p index (in the order asked) and drops it
+    void answerHeld(size_t index);
+
     void getJson(const std::string &path, ResponseHandler handler) override;
     void postJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler) override;
     void putJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler) override;
@@ -48,6 +54,8 @@ private:
 
     std::map<std::string, Reply> m_replies;
     std::vector<Request> m_requests;
+    bool m_held=false;
+    std::vector<std::pair<ResponseHandler, Response>> m_waiting;
 };
 
 }//namespace dashboard

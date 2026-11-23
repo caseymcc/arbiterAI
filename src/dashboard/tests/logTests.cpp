@@ -142,3 +142,26 @@ TEST_F(LogTest, CopyWithNothingSelectedSaysHow)
     EXPECT_EQ(gweni::platform::getClipboardText(), "untouched");
     EXPECT_EQ(lastToast(), "Select log lines to copy first (click, Shift+click, Ctrl+A).");
 }
+
+TEST_F(LogTest, AnOlderReplyAfterANewerOneAddsNoDuplicates)
+{
+    start("/dashboard/logs");
+    ASSERT_EQ(rows().size(), 8u);
+
+    // two polls in flight, answered newest first
+    m_data.hold(true);
+    logs().poll();
+    nlohmann::json logsJson=loadFixture("logs.json");
+    const int64_t last=logsJson["logs"].back()["epoch_ms"].get<int64_t>();
+    logsJson["logs"].push_back({{"epoch_ms", last+10}, {"level", "info"}, {"message", "later"}});
+    m_data.setJson(Path, logsJson);
+    logs().poll();
+    ASSERT_EQ(m_data.heldCount(), 2u);
+    m_data.answerHeld(1);
+    m_data.answerHeld(0);
+    m_data.hold(false);
+    EXPECT_EQ(rows().size(), 9u);
+
+    logs().poll();
+    EXPECT_EQ(rows().size(), 9u);
+}
