@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace
@@ -443,6 +444,21 @@ TEST_F(SeedTest, FailedVersionIsNotSeededAgain)
     EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::KeptFailed)<<result.message;
     EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.0.0");
     EXPECT_FALSE(fs::exists(m_volume/"update-state.json"));
+}
+
+TEST_F(SeedTest, NewerImageThatCannotBeCopiedKeepsTheVolumeRunning)
+{
+    makeInstall(m_volume, "1.0.0");
+    // fs::copy refuses a FIFO, as it would fail on a full volume
+    ASSERT_EQ(mkfifo((m_image/"share"/"fifo").c_str(), 0600), 0);
+
+    arbiterAI::server::SeedResult result=seed();
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::KeptOnError)<<result.message;
+    EXPECT_EQ(result.message.rfind("kept v1.0.0, cannot install v1.1.0: ", 0), 0u)<<result.message;
+    EXPECT_EQ(readFile(m_volume/"bin"/"arbiterAI-server"), "binary 1.0.0");
+    EXPECT_FALSE(fs::exists(m_volume/".update"));
+    EXPECT_FALSE(fs::exists(m_volume/"update-state.json"));
+    EXPECT_FALSE(arbiterAI::server::hasPrevious(m_volume));
 }
 
 TEST_F(SeedTest, PendingRollbackIsDoneFirstAndNotUndone)

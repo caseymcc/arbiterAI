@@ -316,6 +316,30 @@ TEST_F(DashboardTest, AnInstallThatGoesQuietReloadsIntoTheNewVersion)
     EXPECT_EQ(reloads, 1)<<"never reloaded into the new version's dashboard";
 }
 
+TEST_F(DashboardTest, AnApplyWhoseRestartFallsBetweenTwoPollsStillReloads)
+{
+    int reloads=0;
+    m_data.setJson("/api/update", loadFixture("updateCanApply.json"));
+    m_data.setJson("/api/update/apply", loadFixture("updateInProgress.json"), "POST");
+    m_app=std::make_unique<DashboardApp>(m_headless->canvas(), m_data, "/dashboard", nullptr,
+        []() { return FixtureNow; }, [&reloads]() { reloads++; });
+    frames(2);
+    click(m_app->updates().updateButton());
+    ASSERT_NE(m_app->updates().confirmDialog(), nullptr);
+    m_data.setJson("/api/update", loadFixture("updateInProgress.json"));
+    m_app->updates().confirmDialog()->close(gweni::dialogs::Result::Ok);
+    frames(120);
+    ASSERT_EQ(m_data.count("/api/update/apply", "POST"), 1u);
+    ASSERT_TRUE(m_app->updates().active());
+    // an idle server drains at once and execs in about 1 s: the next poll (every 2 s) is the new process
+    nlohmann::json version=loadFixture("version.json");
+    version["version"]="0.1.16";
+    m_data.setJson("/api/version", version);
+    m_data.setJson("/api/update", loadFixture("updateAfter.json"));
+    frames(120*5);
+    EXPECT_EQ(reloads, 1)<<"never reloaded into the new version's dashboard";
+}
+
 TEST_F(DashboardTest, AfterAnUpdateTheStripSaysFromWhatAndOffersRollback)
 {
     nlohmann::json version=loadFixture("version.json");

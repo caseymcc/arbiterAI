@@ -523,12 +523,13 @@ ProbationResult runStartupProbation(const fs::path &root, const std::string &ver
 
 bool markHealthy(const fs::path &root, const std::string &version)
 {
+    // the HealthTimer and the stop handler may both get here: one records it
+    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
     std::string error;
     std::optional<UpdateState> state=readUpdateState(root, error);
     if(!state || state->to != version)
         return false;
 
-    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
     UpdateHistory history=readUpdateHistory(root);
     history.lastError.clear();
     history.prevVersion=state->from;
@@ -570,6 +571,19 @@ bool copyInstall(const fs::path &image, const fs::path &root, fs::path &seed, st
         return false;
     }
     return true;
+}
+
+/// A newer image that could not be installed (a full volume, say) leaves
+/// the volume's own install, which still starts.
+SeedResult keptOnError(const fs::path &root, SeedResult result, const std::string &error)
+{
+    result.message="cannot install v"+result.imageVersion+": "+error;
+    if(fs::exists(installedBinaryPath(root)) && installedVersion(root) == result.volumeVersion)
+    {
+        result.outcome=SeedOutcome::KeptOnError;
+        result.message="kept v"+result.volumeVersion+", "+result.message;
+    }
+    return result;
 }
 
 } // anonymous namespace
@@ -640,10 +654,7 @@ SeedResult seedInstall(const fs::path &image, const fs::path &root)
     }
 
     if(!copyInstall(image, root, seed, error))
-    {
-        result.message=error;
-        return result;
-    }
+        return keptOnError(root, result, error);
 
     UpdateState state;
     state.from=result.volumeVersion;
@@ -657,10 +668,7 @@ SeedResult seedInstall(const fs::path &image, const fs::path &root)
     }
     removeTree(root/".update", error);
     if(!swapped)
-    {
-        result.message="cannot install v"+result.imageVersion+": "+error;
-        return result;
-    }
+        return keptOnError(root, result, error);
 
     result.outcome=SeedOutcome::Updated;
     result.message="updated v"+result.volumeVersion+" to v"+result.imageVersion+" (v"+result.volumeVersion+" kept as .prev)";

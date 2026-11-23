@@ -26,6 +26,9 @@ nlohmann::json withApplyStatus(nlohmann::json status)
     UpdateApplier *applier=g_updateApplier.load();
     if(applier)
         status.update(applier->statusJson());
+    // a rollback is refused (403) for the same reasons as apply
+    if(status.value("can_apply", false) == false)
+        status["rollback_available"]=false;
     AutoUpdater *autoUpdater=g_autoUpdater.load();
     status["auto"]=autoUpdater
         ?autoUpdater->statusJson()

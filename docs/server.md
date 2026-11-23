@@ -222,7 +222,8 @@ server, each of which restarts it when it crashes:
   `arbiterAI-server --seed /opt/arbiterAI` before every start. `--seed <root>` first rolls back a
   version that crashed during its probation, then copies the image into an empty root, or swaps a
   newer image in (with `bin.prev` and a probation of its own) unless that version is in `failed`,
-  and otherwise leaves the root alone. So an update from the dashboard survives a new container,
+  and otherwise leaves the root alone. A newer image that cannot be copied in (a full volume, say)
+  leaves the root's own version running (`Seed: kept vA, cannot install vB: …` on stderr). So an update from the dashboard survives a new container,
   `docker compose pull` of a newer image still updates, and an older image never downgrades.
 
 The install steps are in the tarball's README ([`packaging/server/README.md`](../packaging/server/README.md)):

@@ -106,14 +106,17 @@ void UpdateControls::update(const nlohmann::json &status)
     const std::string latest=text(m_status, "latest", "?");
 
     const std::string started=text(m_status, "started_at");
-    if(!m_restarting)
+    // the baseline is the process from before the install or rollback: an
+    // idle server can restart between two polls, so no poll may see it go
+    const bool wasActive=active();
+    if(!wasActive && m_status.contains("current"))
     {
         m_versionBefore=current;
         m_startedBefore=started;
     }
     if(state=="restarting" || state=="rolling_back")
         m_restarting=true;
-    else if(m_restarting && state=="idle")
+    else if(wasActive && state=="idle")
     {
         // the restart keeps the PID: a new process shows by its start time
         if(started!=m_startedBefore || current!=m_versionBefore)
@@ -125,12 +128,10 @@ void UpdateControls::update(const nlohmann::json &status)
             }
             return;
         }
-        // the same process is idle again: the rollback failed, its error follows
+        // the same process is idle again: the install or rollback failed, its error follows
         m_restarting=false;
         m_installing=false;
     }
-    if(m_installing && state=="idle")
-        m_installing=false;
 
     const bool busy=known && state!="idle";
     m_busy=busy;

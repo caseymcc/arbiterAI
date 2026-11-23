@@ -145,6 +145,7 @@ enum class SeedOutcome
     Updated,   ///< the image is newer: swapped in with .prev, in probation
     Kept,      ///< the volume has the same or a newer version
     KeptFailed,///< the image's version failed on this volume before
+    KeptOnError,///< the image is newer but could not be installed; the volume's version still runs
     Failed     ///< nothing could be done; see message
 };
 

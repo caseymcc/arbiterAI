@@ -541,4 +541,33 @@ TEST_F(UpdateApplierTest, RollbackRouteWithoutPrevIs409)
     EXPECT_EQ(nlohmann::json::parse(res.body)["error"]["code"], "no_previous");
 }
 
+TEST_F(UpdateApplierTest, RollbackIsNotOfferedWhenApplyIsBlocked)
+{
+    std::string message;
+    ASSERT_EQ(applier().apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    m_applier->wait();
+
+    arbiterAI::server::UpdateManager manager(std::make_unique<ListSource>(nlohmann::json::array()), "1.1.0");
+    arbiterAI::server::setUpdateManager(&manager);
+    arbiterAI::server::ApplyContext context;
+    context.root=m_root;
+    context.cwd=m_cwd;
+    context.allowApply=false;
+    arbiterAI::server::setApplyContext(context, std::make_shared<FakeEnvironment>());
+    arbiterAI::server::setUpdateApplier(&applier("1.1.0"));
+    ASSERT_TRUE(m_applier->statusJson()["rollback_available"].get<bool>());
+
+    httplib::Request get;
+    httplib::Response status;
+    arbiterAI::server::handleGetUpdate(get, status);
+    nlohmann::json body=nlohmann::json::parse(status.body);
+    EXPECT_EQ(body["can_apply"], false);
+    EXPECT_EQ(body["rollback_available"], false)<<"the Rollback button would answer 403";
+
+    httplib::Request req;
+    httplib::Response res;
+    arbiterAI::server::handleRollbackUpdate(req, res);
+    EXPECT_EQ(res.status, 403);
+}
+
 } // anonymous namespace

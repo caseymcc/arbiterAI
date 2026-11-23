@@ -333,33 +333,36 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe 
 
 void UpdateApplier::runRollback(std::string previous)
 {
-    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
-    const UpdateHistory before=readUpdateHistory(m_config.root);
-    UpdateHistory history=before;
-    // Skipped by auto-update from now on, like a version that failed to start.
-    history.addFailed(m_config.currentVersion);
-    history.prevVersion.clear();
-    history.lastError.clear();
-    // the update that is undone, as a crash rollback records it
-    history.updates.push_back({previous, m_config.currentVersion, "rolled_back", nowUtc(), std::string()});
-
-    // Written before the swap: a crash between the two must not lose the
-    // failed mark, or --seed would install this version again.
-    std::string error;
-    if(!writeUpdateHistory(m_config.root, history, error))
-        spdlog::warn("Update: {}", error);
-    if(!swapBack(m_config.root, error))
     {
-        history=before;
-        history.lastError="rolling back to v"+previous+" failed: "+error;
-        std::string writeError;
-        if(!writeUpdateHistory(m_config.root, history, writeError))
-            spdlog::warn("Update: {}", writeError);
-        finishFailed(history.lastError);
-        return;
+        // not held over the restart: the drain must not wait on it
+        std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
+        const UpdateHistory before=readUpdateHistory(m_config.root);
+        UpdateHistory history=before;
+        // Skipped by auto-update from now on, like a version that failed to start.
+        history.addFailed(m_config.currentVersion);
+        history.prevVersion.clear();
+        history.lastError.clear();
+        // the update that is undone, as a crash rollback records it
+        history.updates.push_back({previous, m_config.currentVersion, "rolled_back", nowUtc(), std::string()});
+
+        // Written before the swap: a crash between the two must not lose the
+        // failed mark, or --seed would install this version again.
+        std::string error;
+        if(!writeUpdateHistory(m_config.root, history, error))
+            spdlog::warn("Update: {}", error);
+        if(!swapBack(m_config.root, error))
+        {
+            history=before;
+            history.lastError="rolling back to v"+previous+" failed: "+error;
+            std::string writeError;
+            if(!writeUpdateHistory(m_config.root, history, writeError))
+                spdlog::warn("Update: {}", writeError);
+            finishFailed(history.lastError);
+            return;
+        }
+        if(!removeUpdateState(m_config.root, error))
+            spdlog::warn("Update: {}", error);
     }
-    if(!removeUpdateState(m_config.root, error))
-        spdlog::warn("Update: {}", error);
 
     spdlog::info("Update: rolled back to v{}, restarting", previous);
     setState("restarting", std::nullopt);

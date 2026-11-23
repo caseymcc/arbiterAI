@@ -704,7 +704,10 @@ int main(int argc, char *argv[])
             std::cerr<<"Seed failed: "<<seed.message<<"\n";
             return 1;
         }
-        std::cout<<"Seed: "<<seed.message<<"\n";
+        if(seed.outcome==arbiterAI::server::SeedOutcome::KeptOnError)
+            std::cerr<<"Seed: "<<seed.message<<"\n";
+        else
+            std::cout<<"Seed: "<<seed.message<<"\n";
         return 0;
     }
 
