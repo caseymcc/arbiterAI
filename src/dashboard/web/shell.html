@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArbiterAI Dashboard</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; background: #1a1b26; color: #c0caf5; font: 14px sans-serif; }
+  #canvas-container { position: absolute; inset: 0; }
+  canvas { display: block; outline: none; touch-action: none; }
+  #status { position: absolute; top: 45%; width: 100%; text-align: center; }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+<canvas id="canvas" width="64" height="64" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+</div>
+<div id="status">Loading dashboard&hellip;</div>
+<script>
+  var statusEl=document.getElementById('status');
+  if(!document.createElement('canvas').getContext('webgl2'))
+    statusEl.textContent='The dashboard needs WebGL 2, which this browser does not provide.';
+  var Module={
+    canvas: document.getElementById('canvas'),
+    locateFile: function(path) { return '/dashboard/'+path; },
+    onRuntimeInitialized: function() { statusEl.remove(); },
+    onAbort: function(what) { statusEl.textContent='The dashboard stopped: '+what; }
+  };
+</script>
+<script async src="/dashboard/app.js"></script>
+</body>
+</html>

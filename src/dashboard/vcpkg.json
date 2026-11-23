@@ -1,0 +1,18 @@
+{
+    "name": "arbiterai-dashboard",
+    "version": "0.1.0",
+    "builtin-baseline": "f33cc491c85a7d643c5ab6da1667c1458e6d7abf",
+    "dependencies": [
+        {
+            "name": "gweni",
+            "features": [
+                "app"
+            ]
+        },
+        "nlohmann-json",
+        {
+            "name": "gtest",
+            "platform": "!emscripten"
+        }
+    ]
+}

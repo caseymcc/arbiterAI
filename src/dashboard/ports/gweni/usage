@@ -1,0 +1,11 @@
+gweni provides CMake targets:
+
+    find_package(gweni CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE gweni::gweni)
+    # the textured skin's files where RelativeToExecutablePaths("resources") finds them
+    gweni_add_resources(main)
+
+On the web (wasm32-emscripten) the app sets its own stack and heap; the
+layout and render walks recurse once per tree level:
+
+    target_link_options(main PRIVATE -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=4MB)
