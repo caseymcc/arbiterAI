@@ -1,0 +1,36 @@
+# systemd unit for arbiterAI-server installed from the release tarball.
+# Install steps: see the "Running under systemd" section of the README.
+
+[Unit]
+Description=ArbiterAI server (OpenAI-compatible LLM server)
+Documentation=https://github.com/caseymcc/arbiterAI/blob/main/docs/server.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/opt/arbiterAI/bin/arbiterAI-server -c /etc/arbiterAI/server.json
+
+# The server clones arbiterAI_config into its working directory and resolves
+# relative config paths against it; systemd's default would be /.
+StateDirectory=arbiterAI
+WorkingDirectory=/var/lib/arbiterAI
+
+User=arbiterai
+# GPU access: /dev/dri/* belongs to video/render.
+SupplementaryGroups=video render
+
+# Optional API keys, e.g. OPENAI_API_KEY=... (the "-" makes the file optional).
+EnvironmentFile=-/etc/arbiterAI/server.env
+
+# Declares the restart policy below to the server's self-update.
+Environment=ARBITERAI_SUPERVISOR=systemd
+Restart=on-failure
+RestartSec=5
+
+# SIGTERM starts a drain of up to updates.drain_timeout_s (default 60 s);
+# give it longer before systemd falls back to SIGKILL.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

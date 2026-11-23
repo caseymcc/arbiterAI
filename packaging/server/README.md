@@ -10,6 +10,8 @@ dashboard. This archive is a release build for Linux x86-64.
 bin/arbiterAI-server                          the server
 share/arbiterAI/install.json                  install marker: version, asset name, platform
 share/arbiterAI/schemas/model_config.schema.json
+share/arbiterAI/systemd/arbiterai-server.service   systemd unit (see "Running under systemd")
+share/arbiterAI/examples/server.systemd.json  example config for the systemd unit
 README.md
 LICENSE
 ```
@@ -109,6 +111,65 @@ Things to know before you run it as a service:
 - **Stopping.** On `SIGTERM` or `SIGINT` the server answers new requests with `503`, gives running
   requests, inference jobs and downloads up to `updates.drain_timeout_s` seconds, unloads its models,
   logs `shutdown complete` and exits `0`. A second signal exits at once.
+
+## Running under systemd
+
+The unit in `share/arbiterAI/systemd/arbiterai-server.service` runs
+`/opt/arbiterAI/bin/arbiterAI-server -c /etc/arbiterAI/server.json` as the `arbiterai` user in
+`/var/lib/arbiterAI`, restarts it when it crashes (`Restart=on-failure`) and gives a stop up to
+120 s, longer than the server's drain. On Ubuntu 24.04+ / Debian 13+, as root:
+
+1. Install the runtime libraries and create the service user:
+
+   ```bash
+   apt install libvulkan1 libgomp1
+   useradd --system --home-dir /var/lib/arbiterAI --shell /usr/sbin/nologin arbiterai
+   ```
+
+2. Unpack the release into `/opt/arbiterAI`. Keep this path for every version: updates replace its
+   contents, they never rename it.
+
+   ```bash
+   mkdir -p /opt/arbiterAI
+   tar -xzf arbiterAI-server-vX.Y.Z-linux-x64.tar.gz --strip-components=1 -C /opt/arbiterAI
+   ```
+
+3. Give the install directory to the service user; self-update writes there.
+
+   ```bash
+   chown -R arbiterai:arbiterai /opt/arbiterAI
+   ```
+
+4. Write the config file, writable by the service user (the dashboard's config page saves into it).
+   The example keeps every writable path (`models_dir`, `override_path`, `injected_config_dir`)
+   under `/var/lib/arbiterAI`, never inside `/opt/arbiterAI`:
+
+   ```bash
+   mkdir -p /etc/arbiterAI
+   install -m 0644 -o arbiterai -g arbiterai \
+       /opt/arbiterAI/share/arbiterAI/examples/server.systemd.json /etc/arbiterAI/server.json
+   ```
+
+   API keys go in `/etc/arbiterAI/server.env` (one `NAME=value` per line, see [API keys](#api-keys));
+   systemd reads it as root, so it can be `chmod 600` and owned by root.
+
+5. Install and start the unit:
+
+   ```bash
+   cp /opt/arbiterAI/share/arbiterAI/systemd/arbiterai-server.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now arbiterai-server
+   ```
+
+Logs go to the journal: `journalctl -u arbiterai-server -f`. `systemctl stop arbiterai-server`
+drains and logs `shutdown complete`. The unit adds the user to the `video` and `render` groups for GPU
+access; on a system without a `render` group, remove it from `SupplementaryGroups`, or the unit will
+not start.
+
+The first start clones `arbiterAI_config` into `/var/lib/arbiterAI`. Until then, a self-test of the
+config (`sudo -u arbiterai sh -c 'cd /var/lib/arbiterAI && /opt/arbiterAI/bin/arbiterAI-server
+--self-test -c /etc/arbiterAI/server.json'`) finds no model configs and fails, because the self-test
+never fetches.
 
 ## API keys
 

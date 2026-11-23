@@ -65,6 +65,10 @@ cat > "${STAGE}/share/arbiterAI/install.json" <<EOF
 }
 EOF
 
+mkdir -p "${STAGE}/share/arbiterAI/systemd" "${STAGE}/share/arbiterAI/examples"
+cp "${PACKAGING_DIR}/systemd/arbiterai-server.service" "${STAGE}/share/arbiterAI/systemd/"
+cp "${PACKAGING_DIR}/examples/"*.json "${STAGE}/share/arbiterAI/examples/"
+
 cp "${PACKAGING_DIR}/README.md" "${STAGE}/README.md"
 cp "${REPO_ROOT}/LICENSE" "${STAGE}/LICENSE"
 

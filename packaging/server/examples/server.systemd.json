@@ -1,0 +1,27 @@
+{
+    "host": "0.0.0.0",
+    "port": 8080,
+
+    "model_config_paths": ["/var/lib/arbiterAI/config"],
+    "models_dir": "/var/lib/arbiterAI/models",
+    "override_path": "/var/lib/arbiterAI/model_overrides.json",
+    "injected_config_dir": "/var/lib/arbiterAI/injected",
+
+    "max_concurrent_downloads": 2,
+
+    "storage": {
+        "limit": "0",
+        "cleanup_enabled": true,
+        "cleanup_max_age_days": 30,
+        "cleanup_interval_hours": 24
+    },
+
+    "logging": {
+        "level": "info",
+        "directory": ""
+    },
+
+    "updates": {
+        "drain_timeout_s": 60
+    }
+}
