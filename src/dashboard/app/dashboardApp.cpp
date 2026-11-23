@@ -294,9 +294,16 @@ void DashboardApp::pollUpdate()
 {
     m_data.getJson("/api/update", [this](const Response &response)
     {
-        const nlohmann::json status=response.ok && response.json.is_object()?response.json:nlohmann::json::object();
-        m_updates->update(status);
-        m_config->updates().updateStatus(status);
+        if(response.ok && response.json.is_object())
+        {
+            m_updates->update(response.json);
+            m_config->updates().updateStatus(response.json);
+        }
+        else
+        {
+            m_updates->unreachable();
+            m_config->updates().updateStatus(nlohmann::json::object());
+        }
 
         // a server without the check (404) or one that failed keeps the plain header
         if(!response.ok || !response.json.is_object() || !flag(response.json, "update_available"))

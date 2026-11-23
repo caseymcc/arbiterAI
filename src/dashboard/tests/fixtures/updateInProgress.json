@@ -17,6 +17,7 @@
     "rollback_available": false,
     "rollback_version": null,
     "drain_timeout_s": 60,
+    "started_at": "2026-11-23T09:00:00.000Z",
     "auto": {
         "enabled": true,
         "status": "installing v0.1.16",

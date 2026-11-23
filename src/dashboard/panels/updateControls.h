@@ -34,6 +34,10 @@ public:
 
     /// a /api/update reply; an empty object (a server without it) shows nothing
     void update(const nlohmann::json &status);
+    /// /api/update failed: no news. While an install or a rollback runs,
+    /// that is the server restarting; the page reloads only once a reply
+    /// shows the new process.
+    void unreachable();
 
     /// an install or a rollback is running or restarting: /api/update and
     /// /api/version are asked for on every poll
@@ -78,6 +82,8 @@ private:
     nlohmann::json m_status=nlohmann::json::object();
     /// the version that was running when the restart began
     std::string m_versionBefore;
+    /// and when that process started (started_at)
+    std::string m_startedBefore;
     bool m_installing=false;
     /// the server reports an install or a rollback in progress
     bool m_busy=false;

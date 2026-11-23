@@ -130,19 +130,42 @@ void UpdateSettings::updateStatus(const nlohmann::json &status)
     m_auto->setText(line);
 }
 
+namespace
+{
+
+/// a whole number of hours or minutes; an empty field is none, not 0
+bool wholeNumber(const std::string &text, int &value)
+{
+    if(text.empty() || text.size()>6 || text.find_first_not_of("0123456789") != std::string::npos)
+        return false;
+    value=std::stoi(text);
+    return true;
+}
+
+}//namespace
+
 nlohmann::json UpdateSettings::body() const
 {
+    int delay=0;
+    int idle=0;
     return {
         {"auto_apply", m_autoApply->checkBox()->isChecked()},
         {"auto_apply_scope", selectedName(m_scope)},
-        {"auto_apply_delay_hours", std::atoi(m_delay->getText().c_str())},
+        {"auto_apply_delay_hours", wholeNumber(m_delay->getText(), delay)?nlohmann::json(delay):nlohmann::json(nullptr)},
         {"auto_apply_window", m_window->getText()},
-        {"idle_minutes", std::atoi(m_idle->getText().c_str())}
+        {"idle_minutes", wholeNumber(m_idle->getText(), idle)?nlohmann::json(idle):nlohmann::json(nullptr)}
     };
 }
 
 void UpdateSettings::save()
 {
+    int value=0;
+    if(!wholeNumber(m_delay->getText(), value) || !wholeNumber(m_idle->getText(), value))
+    {
+        m_message->setText("The delay and the idle time must be whole numbers");
+        m_message->setTextColor(palette::bad);
+        return;
+    }
     m_message->setText("Saving...");
     m_message->setTextColor(palette::muted);
     m_data.putJson("/api/server/config", {{"updates", body()}}, [this](const Response &response)

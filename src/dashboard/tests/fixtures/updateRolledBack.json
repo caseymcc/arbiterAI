@@ -17,6 +17,7 @@
     "rollback_available": false,
     "rollback_version": null,
     "drain_timeout_s": 60,
+    "started_at": "2026-11-23T09:05:00.000Z",
     "auto": {
         "enabled": true,
         "status": "skipping v0.1.16: it failed here before (install it from the dashboard to try again)",

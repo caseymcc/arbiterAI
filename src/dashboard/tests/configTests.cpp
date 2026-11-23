@@ -486,3 +486,19 @@ TEST_F(DashboardTest, SavingTheUpdatesCardPutsThePolicy)
     EXPECT_FALSE(body["updates"].contains("allow_apply"));
     EXPECT_EQ(updates.message(), "Saved; auto-update uses it at its next check");
 }
+
+TEST_F(DashboardTest, AnEmptyIdleFieldIsNotSavedAsZero)
+{
+    m_data.setJson("/api/update", loadFixture("updateCanApply.json"));
+    m_data.setJson("/api/server/config", loadFixture("serverConfig.json"), "PUT");
+    start("/dashboard/config");
+    arbiterAI::dashboard::UpdateSettings &updates=m_app->config().updates();
+
+    updates.idle()->setText("");
+    m_app->config().scroll()->scrollToBottom();
+    frames(4);
+    click(updates.saveButton());
+
+    EXPECT_EQ(m_data.count("/api/server/config", "PUT"), 0u);
+    EXPECT_EQ(updates.message(), "The delay and the idle time must be whole numbers");
+}

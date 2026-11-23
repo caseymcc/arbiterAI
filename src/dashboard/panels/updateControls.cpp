@@ -22,6 +22,8 @@ std::string stageText(const std::string &state)
         return "unpacking";
     if(state=="self_testing")
         return "testing the new version";
+    if(state=="waiting_idle")
+        return "waiting for running work to finish";
     if(state=="installing")
         return "installing";
     return state;
@@ -103,21 +105,29 @@ void UpdateControls::update(const nlohmann::json &status)
     const std::string current=text(m_status, "current");
     const std::string latest=text(m_status, "latest", "?");
 
-    if(state=="restarting" || state=="rolling_back")
+    const std::string started=text(m_status, "started_at");
+    if(!m_restarting)
     {
-        if(!m_restarting)
-            m_versionBefore=current;
-        m_restarting=true;
+        m_versionBefore=current;
+        m_startedBefore=started;
     }
+    if(state=="restarting" || state=="rolling_back")
+        m_restarting=true;
     else if(m_restarting && state=="idle")
     {
-        // only a new process is idle again: the old one stays restarting
-        if(!m_reloaded && m_reload)
+        // the restart keeps the PID: a new process shows by its start time
+        if(started!=m_startedBefore || current!=m_versionBefore)
         {
-            m_reloaded=true;
-            m_reload();
+            if(!m_reloaded && m_reload)
+            {
+                m_reloaded=true;
+                m_reload();
+            }
+            return;
         }
-        return;
+        // the same process is idle again: the rollback failed, its error follows
+        m_restarting=false;
+        m_installing=false;
     }
     if(m_installing && state=="idle")
         m_installing=false;
@@ -165,6 +175,24 @@ void UpdateControls::update(const nlohmann::json &status)
         showStrip("Updated from v"+previous, palette::good, "");
     else
         showStrip("", palette::muted, "");
+}
+
+void UpdateControls::unreachable()
+{
+    if(!active())
+    {
+        update(nlohmann::json::object());
+        return;
+    }
+    // an accepted install or rollback that stops answering is restarting:
+    // the drain refuses every request (503), then the port closes for the exec
+    m_restarting=true;
+    m_busy=true;
+    m_updateButton->setHidden(true);
+    m_rollbackButton->setHidden(true);
+    m_progressLabel->setText("Restarting the server...");
+    m_progressLabel->sizeToContents();
+    m_progressLabel->setHidden(false);
 }
 
 void UpdateControls::showStrip(const std::string &line, const gweni::Color &color, const std::string &detail)

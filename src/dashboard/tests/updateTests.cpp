@@ -227,6 +227,95 @@ TEST_F(DashboardTest, ARestartIntoTheSameVersionReloadsOnceTheServerIsBack)
     EXPECT_EQ(reloads, 1);
 }
 
+TEST_F(DashboardTest, ARollbackDoesNotReloadWhileTheServerIsDrainingOrDown)
+{
+    int reloads=0;
+    nlohmann::json version=loadFixture("version.json");
+    version["version"]="0.1.16";
+    m_data.setJson("/api/version", version);
+    m_data.setJson("/api/update", loadFixture("updateAfter.json"));
+    nlohmann::json rolling=loadFixture("updateAfter.json");
+    rolling["state"]="rolling_back";
+    m_data.setJson("/api/update/rollback", rolling, "POST");
+    m_app=std::make_unique<DashboardApp>(m_headless->canvas(), m_data, "/dashboard", nullptr,
+        []() { return FixtureNow; }, [&reloads]() { reloads++; });
+    frames(2);
+    click(m_app->updates().rollbackButton());
+    ASSERT_NE(m_app->updates().confirmDialog(), nullptr);
+    // the old server reports the rollback until its drain refuses requests
+    m_data.setJson("/api/update", rolling);
+    m_app->updates().confirmDialog()->close(gweni::dialogs::Result::Ok);
+    frames(2);
+    ASSERT_EQ(m_data.count("/api/update/rollback", "POST"), 1u);
+    // the old server drains: every request is refused with 503
+    for(const char *path:{"/api/update", "/api/version", "/api/stats"})
+        m_data.setFailure(path, 503, "Server is shutting down");
+    frames(120);
+    EXPECT_EQ(reloads, 0)<<"reloaded while the server was draining (503)";
+    // then it execs: the port is closed
+    for(const char *path:{"/api/update", "/api/version", "/api/stats"})
+        m_data.setFailure(path, 0, "unreachable");
+    frames(120);
+    EXPECT_EQ(reloads, 0)<<"reloaded while the server was down";
+    // the old version is up again
+    m_data.setJson("/api/version", loadFixture("version.json"));
+    m_data.setJson("/api/update", loadFixture("updateCanApply.json"));
+    m_data.setJson("/api/stats", loadFixture("stats.json"));
+    frames(120*2);
+    EXPECT_EQ(reloads, 1);
+}
+
+TEST_F(DashboardTest, AFailedRollbackShowsItsErrorWithoutReloading)
+{
+    int reloads=0;
+    m_data.setJson("/api/update", loadFixture("updateAfter.json"));
+    nlohmann::json rolling=loadFixture("updateAfter.json");
+    rolling["state"]="rolling_back";
+    m_data.setJson("/api/update/rollback", rolling, "POST");
+    m_app=std::make_unique<DashboardApp>(m_headless->canvas(), m_data, "/dashboard", nullptr,
+        []() { return FixtureNow; }, [&reloads]() { reloads++; });
+    frames(2);
+    click(m_app->updates().rollbackButton());
+    ASSERT_NE(m_app->updates().confirmDialog(), nullptr);
+    m_data.setJson("/api/update", rolling);
+    m_app->updates().confirmDialog()->close(gweni::dialogs::Result::Ok);
+    frames(2);
+
+    // the swap failed: the same process is idle again, with the error
+    nlohmann::json failed=loadFixture("updateAfter.json");
+    failed["update_error"]="rolling back to v0.1.15 failed: cannot move bin.prev";
+    m_data.setJson("/api/update", failed);
+    frames(120*2);
+    EXPECT_EQ(reloads, 0);
+    EXPECT_FALSE(m_app->updates().active());
+    EXPECT_EQ(m_app->updates().stripText(), "Last update: rolling back to v0.1.15 failed: cannot move bin.prev");
+}
+
+TEST_F(DashboardTest, AnInstallThatGoesQuietReloadsIntoTheNewVersion)
+{
+    int reloads=0;
+    m_data.setJson("/api/update", loadFixture("updateInProgress.json"));
+    m_app=std::make_unique<DashboardApp>(m_headless->canvas(), m_data, "/dashboard", nullptr,
+        []() { return FixtureNow; }, [&reloads]() { reloads++; });
+    frames(2);
+    ASSERT_TRUE(m_app->updates().active());
+    // "installing"/"restarting" last microseconds before the drain: the next poll gets a 503
+    for(const char *path:{"/api/update", "/api/version", "/api/stats"})
+        m_data.setFailure(path, 503, "Server is shutting down");
+    frames(120);
+    for(const char *path:{"/api/update", "/api/version", "/api/stats"})
+        m_data.setFailure(path, 0, "unreachable");
+    frames(120);
+    // the new version is up
+    nlohmann::json version=loadFixture("version.json");
+    version["version"]="0.1.16";
+    m_data.setJson("/api/version", version);
+    m_data.setJson("/api/update", loadFixture("updateAfter.json"));
+    m_data.setJson("/api/stats", loadFixture("stats.json"));
+    frames(120*20);
+    EXPECT_EQ(reloads, 1)<<"never reloaded into the new version's dashboard";
+}
+
 TEST_F(DashboardTest, AfterAnUpdateTheStripSaysFromWhatAndOffersRollback)
 {
     nlohmann::json version=loadFixture("version.json");

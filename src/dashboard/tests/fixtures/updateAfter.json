@@ -17,6 +17,7 @@
     "rollback_available": true,
     "rollback_version": "0.1.15",
     "drain_timeout_s": 60,
+    "started_at": "2026-11-23T09:05:00.000Z",
     "auto": {
         "enabled": true,
         "status": "up to date",
