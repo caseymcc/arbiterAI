@@ -47,7 +47,15 @@ std::string nowUtc()
 std::string outputTail(const std::string &output)
 {
     const size_t tail=600;
-    std::string text=output.size()>tail?"..."+output.substr(output.size()-tail):output;
+    std::string text=output;
+    if(output.size()>tail)
+    {
+        // start on a whole UTF-8 character, not inside one
+        size_t start=output.size()-tail;
+        while(start<output.size() && (static_cast<unsigned char>(output[start]) & 0xC0) == 0x80)
+            start++;
+        text="..."+output.substr(start);
+    }
     while(!text.empty() && (text.back() == '\n' || text.back() == '\r'))
         text.pop_back();
     return text;
@@ -66,6 +74,7 @@ std::string describeEnd(const ProcessResult &result)
 
 void recordFailure(const StageRequest &request, const std::string &error, bool releaseAtFault)
 {
+    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
     UpdateHistory history=readUpdateHistory(request.root);
     history.lastError=error;
     if(releaseAtFault)
@@ -216,7 +225,12 @@ ProcessResult runProcess(const std::vector<std::string> &argv, const fs::path &c
         if(done == pid)
             break;
         if(done<0 && errno != EINTR)
-            break;
+        {
+            // the child's end is unknown: never report it as a success
+            result.exitCode=-1;
+            result.output+=std::string("\nwaitpid failed: ")+std::strerror(errno);
+            return result;
+        }
         if(std::chrono::steady_clock::now()>=deadline)
         {
             result.timedOut=true;
@@ -389,7 +403,14 @@ StageResult stageRelease(const StageRequest &request, Downloader &downloader, co
     ProcessResult tar=runProcess({"tar", "-xzf", archive.string(), "-C", unpackDir.string(), "--no-same-owner"},
         fs::path(), std::chrono::minutes(5));
     if(!tar.started || tar.timedOut || tar.signal != 0 || tar.exitCode != 0)
-        return fail(StageStep::Unpacking, "tar "+describeEnd(tar)+": "+outputTail(tar.output), true);
+    {
+        // The digest matched, so only an archive tar reads and rejects is the
+        // release's fault; not starting tar or a full disk is this host's.
+        const bool diskFull=tar.output.find("No space left on device") != std::string::npos
+            || tar.output.find("Disk quota exceeded") != std::string::npos;
+        const bool releaseAtFault=tar.started && !tar.timedOut && tar.signal == 0 && !diskFull;
+        return fail(StageStep::Unpacking, "tar "+describeEnd(tar)+": "+outputTail(tar.output), releaseAtFault);
+    }
     fs::remove(archive, ec);
 
     fs::path staged=unpackDir/("arbiterAI-server-v"+request.version+"-linux-x64");

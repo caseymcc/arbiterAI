@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -28,6 +29,9 @@ struct ApplierConfig {
     std::filesystem::path cwd;
     std::chrono::milliseconds selfTestTimeout=std::chrono::minutes(2);
     int drainTimeoutSeconds=60;///< reported for the dashboard's confirm dialog
+    /// an automatic apply waits this long after staging for the server to be idle
+    std::chrono::milliseconds idleWaitTimeout=std::chrono::minutes(10);
+    std::chrono::milliseconds idlePollInterval=std::chrono::seconds(1);
 };
 
 /// Installs the latest release (POST /api/update/apply) or goes back to
@@ -40,6 +44,8 @@ public:
     using ModelsSnapshot=std::function<nlohmann::json()>;
     /// Drains the server and restarts it from <root>/bin; called on the worker thread.
     using RestartRequest=std::function<void()>;
+    /// What keeps the server busy ("2 HTTP request(s)"); empty when idle.
+    using BusyProbe=std::function<std::string()>;
 
     enum class Start
     {
@@ -55,7 +61,11 @@ public:
     ~UpdateApplier();
 
     /// Stages \p version, which must be \p latest, then swaps it in and restarts.
-    Start apply(const std::string &version, const std::optional<ReleaseInfo> &latest, const ApplyCheck &check, std::string &message);
+    /// With \p waitForIdle (auto-update) the swap and drain wait until it
+    /// reports nothing busy, so work that came in during staging is not cut
+    /// off; still busy after idleWaitTimeout, the update is put off.
+    Start apply(const std::string &version, const std::optional<ReleaseInfo> &latest, const ApplyCheck &check, std::string &message,
+        BusyProbe waitForIdle=nullptr);
 
     /// Swaps bin.prev and share.prev back and restarts.
     Start rollback(const ApplyCheck &check, std::string &message);
@@ -70,7 +80,9 @@ public:
     void wait();
 
 private:
-    void runApply(std::string version, ReleaseAsset asset);
+    void runApply(std::string version, ReleaseAsset asset, BusyProbe waitForIdle);
+    /// false when still busy at the timeout or stopping
+    bool waitUntilIdle(const BusyProbe &busy, std::string &reason);
     void runRollback(std::string previous);
     void setState(const std::string &state, std::optional<double> progress);
     void finishFailed(const std::string &error);
@@ -84,6 +96,8 @@ private:
     bool m_busy=false;
     std::string m_state="idle";
     std::optional<double> m_progress;
+    bool m_stopping=false;
+    std::condition_variable m_wake;
     std::thread m_worker;
 };
 

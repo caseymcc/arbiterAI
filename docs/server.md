@@ -319,8 +319,9 @@ at once instead of at its next daily check. Each check below says what to look f
    journalctl -u arbiterai-server -n 300 | grep -E "Update:|Restarting as"
    ```
    The dashboard page reloads by itself and shows "Updated from vA" under the header.
-2. A crash during probation, the first 60 s after the restart, is rolled back. Roll back by hand
-   first (step 3), or install B again: the manual button still offers it.
+2. A crash during probation, the first 60 s after the restart, is rolled back. Do step 3 first:
+   apply only installs a version newer than the running one, so B can be installed again only once
+   A runs (the button still offers B then, though auto-update skips it).
    ```bash
    curl -s -X POST localhost:8080/api/update/apply -d '{"version":"B"}'
    until [ "$(curl -s localhost:8080/api/version | jq -r .version)" = B ]; do sleep 1; done
@@ -1419,6 +1420,7 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
   "rollback_available": true,
   "rollback_version": "0.1.15",
   "drain_timeout_s": 60,
+  "started_at": "2026-11-23T09:14:02.117Z",
   "auto": {
     "enabled": true,
     "status": "waiting for the window 02:00-04:00 (local time)",
@@ -1438,13 +1440,14 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
 | `can_apply` | The server can install the latest release itself. Only when every one of these holds: it runs from a release tarball's install (`share/arbiterAI/install.json` next to `bin/`), `updates.allow_apply` is on, the install root is writable, in a container the install root is a mount point (a volume), and neither the working directory nor a path the config names (`--config`, `model_config_paths`, `models_dir`, `override_path`, `injected_config_dir`, `logging.directory`) is inside `<root>/bin` or `<root>/share`, which an update replaces |
 | `apply_blocked_reason` | The first condition of `can_apply` that fails, naming the path or config key; `null` when `can_apply` is true |
 | `supervisor` | What restarts the server after a crash (and so rolls back a bad update): `"systemd"` when `ARBITERAI_SUPERVISOR=systemd` and systemd set `INVOCATION_ID`, `"docker"` when `ARBITERAI_SUPERVISOR=docker` and `/.dockerenv` or `/run/.containerenv` exists, otherwise `null`. The variable alone, copied into a shell, does not count |
-| `state` | What apply or rollback is doing: `idle`, then `checking_space`, `downloading`, `verifying`, `unpacking`, `self_testing`, `installing` and `restarting` for an apply, or `rolling_back` and `restarting` for a rollback |
+| `state` | What apply or rollback is doing: `idle`, then `checking_space`, `downloading`, `verifying`, `unpacking`, `self_testing`, `installing` and `restarting` for an apply (an auto-update waits in `waiting_idle` between `self_testing` and `installing`), or `rolling_back` and `restarting` for a rollback |
 | `progress` | 0–1 over the whole apply while one runs, `null` otherwise |
 | `prev_version` | The version this one was updated from: during probation from `update-state.json`, after it from `update-history.json`; `null` when the running version was not installed by an update |
 | `update_error` | Why the last update attempt failed (or that a new version failed to start and was rolled back), from `update-history.json`; `null` after a successful update. Separate from `last_error`, which is about the release check |
 | `rollback_available` | `<root>/bin.prev` exists and nothing is running: [`POST /api/update/rollback`](#post-apiupdaterollback) can go back to it |
 | `rollback_version` | The version in `bin.prev`, `null` when there is none |
 | `drain_timeout_s` | `updates.drain_timeout_s`: how long an apply or rollback waits for running requests before it restarts |
+| `started_at` | When this process started (UTC, to the millisecond). The restart keeps the PID, so this is what changes when the new process answers |
 | `auto.enabled` | `updates.auto_apply` is on and nothing turns it off (`allow_apply`, a supervisor) |
 | `auto.status` | What auto-update is doing or waiting for, e.g. `"off"`, `"off: no supervisor declared (see README)"`, `"up to date"`, `"waiting: v0.1.16 installs 24 h after it was published"`, `"waiting for the server to be idle (1 HTTP request(s) running)"`, `"skipping v0.1.16: it failed here before …"`, `"installing v0.1.16"` |
 | `auto.next_attempt` | When the condition it waits for next holds (UTC), when that is known; `null` otherwise |
@@ -1477,7 +1480,8 @@ The steps, each shown in `state` and `progress`:
 A failure in any step leaves the install as it was, removes `.update/` and sets
 `update_error`. A failure of the release itself (digest, archive, self-test) also adds the
 version to the `failed` list in `update-history.json`, which auto-update skips; a failed
-download or a full disk does not.
+download, a full disk (also while unpacking: the archive unpacks to about 3.2x its size) or a
+`tar` that cannot be started does not.
 
 On success the server writes `<root>/update-state.json` (`from`, `to`, the loaded models with
 their variant, context, runtime options, devices and pin state, `attempt: 0`), moves `bin/` and
@@ -1510,8 +1514,10 @@ installs only when all of these hold:
 - the server has been idle for `idle_minutes`: every 15-second check in that time found no
   HTTP request open (cloud-model requests bypass the scheduler, so the drain controller's
   request count is what sees them), no scheduler job and no download. Idle is sampled, so a
-  request shorter than 15 s can fall between two checks; the install then drains like a stop,
-  so a request that comes in meanwhile still finishes.
+  request shorter than 15 s can fall between two checks. Work that comes in while the release
+  downloads and self-tests is not cut off: after staging, the install waits (`state`
+  `waiting_idle`) until nothing is open, checking every second, before it swaps and drains. Still
+  busy after 10 minutes, it removes the staged files and tries again an hour later.
 
 `auto.status` says which of these it is waiting for. After an attempt that fails without
 marking the release failed (a download error, a full disk), it waits an hour before the next.
@@ -1520,7 +1526,8 @@ marking the release failed (a download error, a full disk), it waits an hour bef
 
 Goes back to the version in `bin.prev` (`rollback_version`), through the same drain and
 restart. The version rolled back from is added to `failed`, so auto-update does not install it
-again. Answers `202`, `409` while something runs (`update_running`) or when there is no
+again. If the swap back fails, the install stays as it is, `update_error` says why ("rolling
+back to vX failed: ...") and nothing is added to `failed`. Answers `202`, `409` while something runs (`update_running`) or when there is no
 `bin.prev` (`no_previous`), `403` while `can_apply` is false.
 
 ---

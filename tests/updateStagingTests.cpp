@@ -175,6 +175,21 @@ TEST(RunProcessTest, ReportsTheExitCodeAndOutput)
     EXPECT_NE(result.output.find("err"), std::string::npos);
 }
 
+TEST(RunProcessTest, AChildThatCannotBeWaitedForIsNotASuccess)
+{
+    // with SIGCHLD ignored the kernel reaps the child: waitpid fails with ECHILD
+    struct sigaction ignore{};
+    ignore.sa_handler=SIG_IGN;
+    struct sigaction previous{};
+    sigaction(SIGCHLD, &ignore, &previous);
+    ProcessResult result=arbiterAI::server::runProcess({"sh", "-c", "exit 0"}, fs::path(), std::chrono::seconds(10));
+    sigaction(SIGCHLD, &previous, nullptr);
+
+    EXPECT_TRUE(result.started);
+    EXPECT_NE(result.exitCode, 0);
+    EXPECT_NE(result.output.find("waitpid failed"), std::string::npos)<<result.output;
+}
+
 TEST(RunProcessTest, RunsInTheGivenDirectory)
 {
     fs::path dir=fs::canonical(fs::temp_directory_path());
@@ -313,6 +328,40 @@ TEST_F(UpdateStagingTest, DigestMismatchLeavesTheInstallUntouched)
     UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
     EXPECT_EQ(history.lastError, result.error);
     EXPECT_TRUE(history.isFailed("1.1.0"));
+}
+
+TEST_F(UpdateStagingTest, SelfTestOutputCutInsideAUtf8CharacterIsRecorded)
+{
+    // 602 bytes: the last 600 begin inside the three bytes of the dash
+    makeRelease("1.1.0", "printf '\\342\\200\\224'; printf 'x%.0s' $(seq 599); exit 3");
+    StageResult result=stage();
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.step, StageStep::SelfTesting);
+    const std::string tail="..."+std::string(599, 'x');
+    ASSERT_GE(result.error.size(), tail.size());
+    EXPECT_EQ(result.error.substr(result.error.size()-tail.size()), tail);
+    UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
+    EXPECT_EQ(history.lastError, result.error);
+    EXPECT_TRUE(history.isFailed("1.1.0"));
+}
+
+TEST_F(UpdateStagingTest, TarThatCannotStartIsNotMarkedFailed)
+{
+    makeRelease("1.1.0", "exit 0");
+    const std::string path=getenv("PATH");
+    fs::create_directories(m_dir/"empty");
+    setenv("PATH", (m_dir/"empty").c_str(), 1);
+    StageResult result=stage();
+    setenv("PATH", path.c_str(), 1);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.step, StageStep::Unpacking);
+    EXPECT_NE(result.error.find("could not be started"), std::string::npos)<<result.error;
+    expectInstallUntouched();
+    UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
+    EXPECT_EQ(history.lastError, result.error);
+    EXPECT_FALSE(history.isFailed("1.1.0"));
 }
 
 TEST_F(UpdateStagingTest, FailedSelfTestLeavesTheInstallUntouched)

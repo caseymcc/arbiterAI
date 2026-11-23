@@ -39,7 +39,7 @@ void sendError(httplib::Response &res, int status, const std::string &message, c
         {"message", message},
         {"type", status == 503?"server_error":"invalid_request_error"},
         {"param", nullptr},
-        {"code", code}
+        {"code", code?nlohmann::json(code):nlohmann::json(nullptr)}
     }}};
     res.status=status;
     res.set_content(error.dump(), "application/json");

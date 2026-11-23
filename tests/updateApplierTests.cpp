@@ -152,6 +152,8 @@ protected:
         config.configPath=m_cwd/"server.json";
         config.cwd=m_cwd;
         config.selfTestTimeout=std::chrono::seconds(20);
+        config.idleWaitTimeout=m_idleWaitTimeout;
+        config.idlePollInterval=std::chrono::milliseconds(10);
 
         std::unique_ptr<FakeDownloader> downloader=std::make_unique<FakeDownloader>();
         downloader->source=m_archive;
@@ -177,7 +179,21 @@ protected:
     std::unique_ptr<UpdateApplier> m_applier;
     FakeDownloader *m_downloader=nullptr;
     std::atomic<int> m_restarts{0};
+    std::chrono::milliseconds m_idleWaitTimeout=std::chrono::seconds(20);
 };
+
+/// Waits until the applier reports \p state, up to 20 s.
+bool waitForState(UpdateApplier &applier, const std::string &state)
+{
+    std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
+    while(std::chrono::steady_clock::now()<deadline)
+    {
+        if(applier.statusJson()["state"] == state)
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
 
 TEST_F(UpdateApplierTest, ApplyInstallsWithPrevAndAsksForARestart)
 {
@@ -324,6 +340,83 @@ TEST_F(UpdateApplierTest, RollbackSwapsPrevBackAndAsksForARestart)
     EXPECT_TRUE(history.isFailed("1.1.0"));
     ASSERT_FALSE(history.updates.empty());
     EXPECT_EQ(history.updates.back().outcome, "rolled_back");
+    // the update that was undone, as a crash rollback records it
+    EXPECT_EQ(history.updates.back().from, "1.0.0");
+    EXPECT_EQ(history.updates.back().to, "1.1.0");
+}
+
+TEST_F(UpdateApplierTest, AFailedRollbackRecordsItsErrorAndMarksNothingFailed)
+{
+    std::string message;
+    ASSERT_EQ(applier().apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    m_applier->wait();
+    ASSERT_EQ(m_restarts, 1);
+
+    // A bin.failed that cannot be removed makes the swap back fail.
+    writeFile(m_root/"bin.failed"/"locked"/"file", "x");
+    fs::permissions(m_root/"bin.failed", fs::perms::owner_read|fs::perms::owner_exec);
+
+    UpdateApplier &updated=applier("1.1.0");
+    ASSERT_EQ(updated.rollback(allowed, message), UpdateApplier::Start::Started)<<message;
+    updated.wait();
+    fs::permissions(m_root/"bin.failed", fs::perms::owner_all);
+
+    EXPECT_EQ(m_restarts, 1);
+    EXPECT_FALSE(updated.busy());
+    nlohmann::json status=updated.statusJson();
+    EXPECT_EQ(status["state"], "idle");
+    ASSERT_TRUE(status["update_error"].is_string())<<status.dump();
+    EXPECT_EQ(status["update_error"].get<std::string>().rfind("rolling back to v1.0.0 failed: ", 0), 0u)<<status.dump();
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.1.0");
+    EXPECT_FALSE(arbiterAI::server::readUpdateHistory(m_root).isFailed("1.1.0"));
+}
+
+TEST_F(UpdateApplierTest, AnAutoApplyWaitsForIdleBeforeTheSwap)
+{
+    std::atomic<bool> requestOpen{true};
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message,
+        [&requestOpen]() { return requestOpen?std::string("1 HTTP request(s)"):std::string(); }),
+        UpdateApplier::Start::Started)<<message;
+
+    ASSERT_TRUE(waitForState(updater, "waiting_idle"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(m_restarts, 0);
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+    EXPECT_FALSE(fs::exists(m_root/"update-state.json"));
+
+    requestOpen=false;
+    updater.wait();
+    EXPECT_EQ(m_restarts, 1);
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.1.0");
+}
+
+TEST_F(UpdateApplierTest, AnAutoApplyStillBusyAfterStagingIsPutOff)
+{
+    m_idleWaitTimeout=std::chrono::milliseconds(200);
+    std::string message;
+    ASSERT_EQ(applier().apply("1.1.0", m_latest, allowed, message,
+        []() { return std::string("1 scheduler job(s)"); }), UpdateApplier::Start::Started)<<message;
+    m_applier->wait();
+
+    EXPECT_EQ(m_restarts, 0);
+    EXPECT_FALSE(m_applier->busy());
+    EXPECT_EQ(m_applier->statusJson()["state"], "idle");
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+    EXPECT_FALSE(fs::exists(m_root/".update"));
+    EXPECT_FALSE(fs::exists(m_root/"update-state.json"));
+    EXPECT_FALSE(arbiterAI::server::readUpdateHistory(m_root).isFailed("1.1.0"));
+}
+
+TEST_F(UpdateApplierTest, StatusSaysWhenThisProcessStarted)
+{
+    nlohmann::json first=applier().statusJson();
+    ASSERT_TRUE(first["started_at"].is_string())<<first.dump();
+    std::string started=first["started_at"].get<std::string>();
+    EXPECT_EQ(started.size(), std::string("2026-11-23T09:14:02.117Z").size())<<started;
+    EXPECT_EQ(started.back(), 'Z');
+    EXPECT_EQ(applier("1.1.0").statusJson()["started_at"], started);
 }
 
 TEST_F(UpdateApplierTest, RollbackWithoutPrevIsRefused)

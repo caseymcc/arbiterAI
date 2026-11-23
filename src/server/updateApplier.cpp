@@ -3,6 +3,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <cstdio>
 #include <ctime>
 
 namespace arbiterAI
@@ -24,6 +25,25 @@ std::string nowUtc()
     char buffer[32];
     std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
     return buffer;
+}
+
+/// When this process started, to the millisecond: execv keeps the PID, so
+/// this is how the dashboard tells the restarted server from the old one.
+std::string processStartedAt()
+{
+    static const std::string startedAt=[]()
+    {
+        std::timespec now{};
+        clock_gettime(CLOCK_REALTIME, &now);
+        std::tm utc{};
+        gmtime_r(&now.tv_sec, &utc);
+
+        char buffer[48];
+        size_t length=std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &utc);
+        std::snprintf(buffer+length, sizeof(buffer)-length, ".%03ldZ", now.tv_nsec/1000000);
+        return std::string(buffer);
+    }();
+    return startedAt;
 }
 
 /// Where each stage sits in the overall progress, as [start, end).
@@ -65,15 +85,21 @@ UpdateApplier::UpdateApplier(ApplierConfig config, std::unique_ptr<Downloader> d
     m_models(std::move(models)),
     m_restart(std::move(restart))
 {
+    processStartedAt();
 }
 
 UpdateApplier::~UpdateApplier()
 {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stopping=true;
+    }
+    m_wake.notify_all();
     wait();
 }
 
 UpdateApplier::Start UpdateApplier::apply(const std::string &version, const std::optional<ReleaseInfo> &latest,
-    const ApplyCheck &check, std::string &message)
+    const ApplyCheck &check, std::string &message, BusyProbe waitForIdle)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if(m_busy)
@@ -116,7 +142,7 @@ UpdateApplier::Start UpdateApplier::apply(const std::string &version, const std:
     m_busy=true;
     m_state=stageStepName(StageStep::CheckingSpace);
     m_progress=0.0;
-    m_worker=std::thread(&UpdateApplier::runApply, this, latestVersion, *latest->serverAsset);
+    m_worker=std::thread(&UpdateApplier::runApply, this, latestVersion, *latest->serverAsset, std::move(waitForIdle));
     message="installing v"+latestVersion;
     spdlog::info("Update: installing v{} (from v{})", latestVersion, m_config.currentVersion);
     return Start::Started;
@@ -186,6 +212,7 @@ nlohmann::json UpdateApplier::statusJson() const
     result["rollback_available"]=!busy && hasPrevious(m_config.root);
     result["rollback_version"]=previous.empty()?nlohmann::json(nullptr):nlohmann::json(previous);
     result["drain_timeout_s"]=m_config.drainTimeoutSeconds;
+    result["started_at"]=processStartedAt();
     return result;
 }
 
@@ -212,7 +239,27 @@ void UpdateApplier::finishFailed(const std::string &error)
     m_progress.reset();
 }
 
-void UpdateApplier::runApply(std::string version, ReleaseAsset asset)
+bool UpdateApplier::waitUntilIdle(const BusyProbe &busy, std::string &reason)
+{
+    const std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+m_config.idleWaitTimeout;
+    while(true)
+    {
+        reason=busy();
+        if(reason.empty())
+            return true;
+        if(std::chrono::steady_clock::now()>=deadline)
+            return false;
+
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if(m_wake.wait_for(lock, m_config.idlePollInterval, [this]() { return m_stopping; }))
+        {
+            reason="the server is stopping";
+            return false;
+        }
+    }
+}
+
+void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe waitForIdle)
 {
     StageRequest request;
     request.root=m_config.root;
@@ -235,6 +282,18 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset)
         return;
     }
 
+    if(waitForIdle)
+    {
+        setState("waiting_idle", 0.97);
+        std::string busy;
+        if(!waitUntilIdle(waitForIdle, busy))
+        {
+            removeStaging(m_config.root);
+            finishFailed("auto-update to v"+version+" put off, the server is still busy after staging: "+busy);
+            return;
+        }
+    }
+
     setState("installing", 0.98);
 
     UpdateState state;
@@ -255,6 +314,7 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset)
 
     if(!installed)
     {
+        std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
         UpdateHistory history=readUpdateHistory(m_config.root);
         history.lastError="installing v"+version+" failed: "+error;
         history.updates.push_back({m_config.currentVersion, version, "failed", nowUtc(), history.lastError});
@@ -273,21 +333,31 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset)
 
 void UpdateApplier::runRollback(std::string previous)
 {
-    UpdateHistory history=readUpdateHistory(m_config.root);
+    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
+    const UpdateHistory before=readUpdateHistory(m_config.root);
+    UpdateHistory history=before;
     // Skipped by auto-update from now on, like a version that failed to start.
     history.addFailed(m_config.currentVersion);
     history.prevVersion.clear();
     history.lastError.clear();
-    history.updates.push_back({m_config.currentVersion, previous, "rolled_back", nowUtc(), std::string()});
+    // the update that is undone, as a crash rollback records it
+    history.updates.push_back({previous, m_config.currentVersion, "rolled_back", nowUtc(), std::string()});
 
+    // Written before the swap: a crash between the two must not lose the
+    // failed mark, or --seed would install this version again.
     std::string error;
-    if(!swapBack(m_config.root, error))
-    {
-        finishFailed("rollback failed: "+error);
-        return;
-    }
     if(!writeUpdateHistory(m_config.root, history, error))
         spdlog::warn("Update: {}", error);
+    if(!swapBack(m_config.root, error))
+    {
+        history=before;
+        history.lastError="rolling back to v"+previous+" failed: "+error;
+        std::string writeError;
+        if(!writeUpdateHistory(m_config.root, history, writeError))
+            spdlog::warn("Update: {}", writeError);
+        finishFailed(history.lastError);
+        return;
+    }
     if(!removeUpdateState(m_config.root, error))
         spdlog::warn("Update: {}", error);
 

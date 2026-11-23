@@ -303,6 +303,17 @@ TEST_F(InstallerTest, MarkHealthyLeavesAStateForAnotherVersion)
     EXPECT_TRUE(stateExists());
 }
 
+TEST_F(InstallerTest, HistoryWithInvalidUtf8IsWrittenWithoutThrowing)
+{
+    UpdateHistory history;
+    history.lastError="self-test said \x94 and stopped";
+    std::string error;
+    bool written=false;
+    EXPECT_NO_THROW(written=arbiterAI::server::writeUpdateHistory(m_root, history, error));
+    EXPECT_TRUE(written)<<error;
+    EXPECT_EQ(arbiterAI::server::readUpdateHistory(m_root).lastError, "self-test said \xEF\xBF\xBD and stopped");
+}
+
 TEST_F(InstallerTest, HistoryRoundTrips)
 {
     UpdateHistory history;

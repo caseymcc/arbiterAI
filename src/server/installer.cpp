@@ -78,7 +78,8 @@ bool writeJsonFile(const fs::path &path, const nlohmann::json &value, std::strin
             error="cannot write "+temp.string();
             return false;
         }
-        file<<value.dump(4)<<"\n";
+        // an error text cut inside a UTF-8 sequence must not throw
+        file<<value.dump(4, ' ', false, nlohmann::json::error_handler_t::replace)<<"\n";
         file.flush();
         if(!file.good())
         {
@@ -262,6 +263,12 @@ void UpdateHistory::addFailed(const std::string &version)
 {
     if(!version.empty() && !isFailed(version))
         failed.push_back(version);
+}
+
+std::recursive_mutex &updateHistoryMutex()
+{
+    static std::recursive_mutex mutex;
+    return mutex;
 }
 
 UpdateHistory readUpdateHistory(const fs::path &root)
@@ -467,24 +474,28 @@ ProbationResult checkProbation(const fs::path &root, const std::string &version,
         return result;
     }
 
-    // The history is written before the swap, so a crash in between rolls back again.
+    // The history is written before the swap: a crash in between keeps the
+    // failed mark (so --seed does not install this version again), and the
+    // state file left behind rolls back again on the next start.
+    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
     UpdateHistory history=readUpdateHistory(root);
     history.lastError=displayVersion(version)+" failed to start, rolled back";
     history.prevVersion.clear();
     history.addFailed(version);
-    UpdateRecord record{state->from, state->to, "rolled_back", nowUtc(), history.lastError};
+    history.updates.push_back({state->from, state->to, "rolled_back", nowUtc(), history.lastError});
+    if(!writeUpdateHistory(root, history, error))
+        spdlog::warn("Update probation: {}", error);
 
     std::string swapError;
     bool swapped=swapBack(root, swapError);
     if(!swapped)
     {
         history.lastError=displayVersion(version)+" failed to start and could not be rolled back: "+swapError;
-        record.outcome="failed";
-        record.error=history.lastError;
+        history.updates.back().outcome="failed";
+        history.updates.back().error=history.lastError;
+        if(!writeUpdateHistory(root, history, error))
+            spdlog::warn("Update probation: {}", error);
     }
-    history.updates.push_back(record);
-    if(!writeUpdateHistory(root, history, error))
-        spdlog::warn("Update probation: {}", error);
 
     if(!removeUpdateState(root, error))
         spdlog::warn("Update probation: {}", error);
@@ -517,6 +528,7 @@ bool markHealthy(const fs::path &root, const std::string &version)
     if(!state || state->to != version)
         return false;
 
+    std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
     UpdateHistory history=readUpdateHistory(root);
     history.lastError.clear();
     history.prevVersion=state->from;

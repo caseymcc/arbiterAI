@@ -260,7 +260,7 @@ AutoDecision AutoUpdater::tick()
     {
         std::string message;
         std::string version=inputs.latest->version.toString();
-        UpdateApplier::Start start=m_applier.apply(version, inputs.latest, inputs.check, message);
+        UpdateApplier::Start start=m_applier.apply(version, inputs.latest, inputs.check, message, m_sources.busy);
         if(start == UpdateApplier::Start::Started)
         {
             spdlog::info("Auto-update: installing v{}", version);

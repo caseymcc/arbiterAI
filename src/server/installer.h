@@ -76,6 +76,9 @@ struct UpdateHistory {
 /// The history under \p root; empty when there is none or it cannot be read.
 UpdateHistory readUpdateHistory(const std::filesystem::path &root);
 bool writeUpdateHistory(const std::filesystem::path &root, const UpdateHistory &history, std::string &error);
+/// Held around each read-modify-write of the history: the health timer, the
+/// stop handler and the applier thread all update it.
+std::recursive_mutex &updateHistoryMutex();
 
 /// Moves <root>/bin and <root>/share to bin.prev and share.prev (replacing
 /// older ones), then <staged>/bin and <staged>/share into their place. On a
