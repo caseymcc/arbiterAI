@@ -28,7 +28,7 @@ foreach(_pair "WHISPER:whisper" "STABLE_DIFFUSION:stable-diffusion"
 endforeach()
 list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 
-project(arbiterAI VERSION 0.1.15 LANGUAGES C CXX)
+project(arbiterAI VERSION 0.1.16 LANGUAGES C CXX)
 
 # Read llama-cpp build number from our custom vcpkg port
 if(ARBITERAI_ENABLE_LLAMA)
