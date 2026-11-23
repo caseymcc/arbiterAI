@@ -135,14 +135,23 @@ struct UpdatePolicy {
     bool check=true;
     int intervalHours=24;
     bool allowApply=true;///< from the config file only, never over REST
+    bool autoApply=false;
+    std::string autoApplyScope="patch";///< "patch", "minor" or "major"
+    int autoApplyDelayHours=24;
+    std::string autoApplyWindow;///< "HH:MM-HH:MM" local time, may wrap midnight; empty: any time
+    int idleMinutes=10;
 };
 
-/// Reads check, interval_hours and allow_apply from an "updates" object, keeping the
+/// The minutes after midnight of an "HH:MM-HH:MM" window; false when \p text is not one.
+bool parseTimeWindow(const std::string &text, int &startMinute, int &endMinute);
+
+/// Reads check, interval_hours, allow_apply and the auto_apply keys from an "updates" object, keeping the
 /// defaults in \p policy for keys it lacks. False with \p error on a wrong type
 /// or an interval_hours under 1.
 bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::string &error);
 
-/// Puts the check and interval_hours of \p body (a PUT /api/server/config
+/// Puts the check, interval_hours and auto-update keys (auto_apply,
+/// auto_apply_scope, auto_apply_delay_hours, auto_apply_window, idle_minutes) of \p body (a PUT /api/server/config
 /// "updates" object) into the "updates" object of \p cfg, leaving its other
 /// keys alone; \p policy is the merged block's. False with \p error, and \p cfg
 /// unchanged, when the request or the merged block is invalid, or the request

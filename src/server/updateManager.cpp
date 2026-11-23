@@ -274,6 +274,71 @@ ReleaseFetch GitHubReleaseSource::fetch(const std::string &etag)
     return result;
 }
 
+bool parseTimeWindow(const std::string &text, int &startMinute, int &endMinute)
+{
+    auto parseTime=[](const std::string &part, int &minute)
+    {
+        if(part.size() != 5 || part[2] != ':')
+            return false;
+        for(size_t i:{0u, 1u, 3u, 4u})
+        {
+            if(part[i]<'0' || part[i]>'9')
+                return false;
+        }
+        int hours=std::stoi(part.substr(0, 2));
+        int minutes=std::stoi(part.substr(3, 2));
+        if(hours>23 || minutes>59)
+            return false;
+        minute=hours*60+minutes;
+        return true;
+    };
+
+    if(text.size() != 11 || text[5] != '-')
+        return false;
+    if(!parseTime(text.substr(0, 5), startMinute) || !parseTime(text.substr(6, 5), endMinute))
+        return false;
+    return startMinute != endMinute;
+}
+
+namespace
+{
+
+bool readBool(const nlohmann::json &updates, const char *key, bool &value, std::string &error)
+{
+    nlohmann::json::const_iterator it=updates.find(key);
+    if(it == updates.end())
+        return true;
+    if(!it->is_boolean())
+    {
+        error=std::string("'updates.")+key+"' must be a boolean";
+        return false;
+    }
+    value=it->get<bool>();
+    return true;
+}
+
+bool readInt(const nlohmann::json &updates, const char *key, int64_t low, int64_t high, int &value, std::string &error)
+{
+    nlohmann::json::const_iterator it=updates.find(key);
+    if(it == updates.end())
+        return true;
+    if(!it->is_number_integer())
+    {
+        error=std::string("'updates.")+key+"' must be an integer";
+        return false;
+    }
+    int64_t number=it->get<int64_t>();
+    if(number<low || number>high)
+    {
+        error=std::string("'updates.")+key+"' must be between "+std::to_string(low)+" and "+std::to_string(high);
+        return false;
+    }
+    value=static_cast<int>(number);
+    return true;
+}
+
+} // anonymous namespace
+
 bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::string &error)
 {
     if(!updates.is_object())
@@ -322,6 +387,36 @@ bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::
         result.allowApply=allowApply->get<bool>();
     }
 
+    if(!readBool(updates, "auto_apply", result.autoApply, error)
+        || !readInt(updates, "auto_apply_delay_hours", 0, 8760, result.autoApplyDelayHours, error)
+        || !readInt(updates, "idle_minutes", 0, 1440, result.idleMinutes, error))
+        return false;
+
+    nlohmann::json::const_iterator scope=updates.find("auto_apply_scope");
+    if(scope != updates.end())
+    {
+        std::string value=scope->is_string()?scope->get<std::string>():std::string();
+        if(value != "patch" && value != "minor" && value != "major")
+        {
+            error="'updates.auto_apply_scope' must be \"patch\", \"minor\" or \"major\"";
+            return false;
+        }
+        result.autoApplyScope=value;
+    }
+
+    nlohmann::json::const_iterator window=updates.find("auto_apply_window");
+    if(window != updates.end())
+    {
+        int start=0;
+        int end=0;
+        if(!window->is_string() || (!window->get<std::string>().empty() && !parseTimeWindow(window->get<std::string>(), start, end)))
+        {
+            error="'updates.auto_apply_window' must be \"HH:MM-HH:MM\" (local time) or empty";
+            return false;
+        }
+        result.autoApplyWindow=window->get<std::string>();
+    }
+
     policy=result;
     return true;
 }
@@ -345,6 +440,16 @@ bool mergeUpdatesConfig(nlohmann::json &cfg, const nlohmann::json &body, UpdateP
         updates["check"]=requested.check;
     if(body.contains("interval_hours"))
         updates["interval_hours"]=requested.intervalHours;
+    if(body.contains("auto_apply"))
+        updates["auto_apply"]=requested.autoApply;
+    if(body.contains("auto_apply_scope"))
+        updates["auto_apply_scope"]=requested.autoApplyScope;
+    if(body.contains("auto_apply_delay_hours"))
+        updates["auto_apply_delay_hours"]=requested.autoApplyDelayHours;
+    if(body.contains("auto_apply_window"))
+        updates["auto_apply_window"]=requested.autoApplyWindow;
+    if(body.contains("idle_minutes"))
+        updates["idle_minutes"]=requested.idleMinutes;
 
     UpdatePolicy merged;
     if(!readUpdatePolicy(updates, merged, error))
@@ -360,7 +465,12 @@ nlohmann::json updatePolicyJson(const UpdatePolicy &policy)
     return {
         {"check", policy.check},
         {"interval_hours", policy.intervalHours},
-        {"allow_apply", policy.allowApply}
+        {"allow_apply", policy.allowApply},
+        {"auto_apply", policy.autoApply},
+        {"auto_apply_scope", policy.autoApplyScope},
+        {"auto_apply_delay_hours", policy.autoApplyDelayHours},
+        {"auto_apply_window", policy.autoApplyWindow},
+        {"idle_minutes", policy.idleMinutes}
     };
 }
 

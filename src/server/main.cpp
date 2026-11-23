@@ -1194,6 +1194,31 @@ int main(int argc, char *argv[])
             }
         });
     arbiterAI::server::setUpdateApplier(&applier);
+
+    // ── Auto-update ─────────────────────────────────────────────
+    arbiterAI::server::AutoUpdater::Sources autoSources;
+    autoSources.policy=[&updates]() { return updates.policy(); };
+    autoSources.status=[&updates]() { return updates.status(); };
+    autoSources.failed=[applyRoot=applyContext.root]() { return arbiterAI::server::readUpdateHistory(applyRoot).failed; };
+    autoSources.check=arbiterAI::server::currentApplyCheck;
+    autoSources.supervisor=arbiterAI::server::currentSupervisor;
+    autoSources.busy=[&drainController]()
+    {
+        std::string busy;
+        size_t requests=drainController.inFlightRequests();
+        if(requests>0)
+            busy=std::to_string(requests)+" HTTP request(s)";
+        for(const arbiterAI::server::DrainController::BusyCount &work:drainController.busyWork())
+        {
+            if(work.count==0)
+                continue;
+            busy+=(busy.empty()?"":", ")+std::to_string(work.count)+" "+work.name;
+        }
+        return busy;
+    };
+    arbiterAI::server::AutoUpdater autoUpdater(autoSources, applier, ARBITERAI_VERSION_STRING);
+    arbiterAI::server::setAutoUpdater(&autoUpdater);
+    autoUpdater.start(std::chrono::seconds(15));
     arbiterAI::server::ApplyCheck applyCheck=arbiterAI::server::checkCanApply(applyContext, *environment);
     nlohmann::json supervisor=arbiterAI::server::supervisorJson(arbiterAI::server::detectSupervisor(*environment));
     spdlog::info("Update apply: {}; restart on crash: {}",
@@ -1288,6 +1313,8 @@ int main(int argc, char *argv[])
     // the singletons (ModelRuntime, TelemetryCollector) they depend on.
     arbiterAI::InferenceScheduler::instance().shutdown();
 
+    arbiterAI::server::setAutoUpdater(nullptr);
+    autoUpdater.stop();
     arbiterAI::server::setUpdateApplier(nullptr);
     arbiterAI::server::setUpdateManager(nullptr);
     updates.stop();

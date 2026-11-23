@@ -14,6 +14,7 @@ namespace
 std::atomic<UpdateManager *> g_updateManager{nullptr};
 
 std::atomic<UpdateApplier *> g_updateApplier{nullptr};
+std::atomic<AutoUpdater *> g_autoUpdater{nullptr};
 
 std::mutex g_applyMutex;
 ApplyContext g_applyContext;
@@ -25,15 +26,11 @@ nlohmann::json withApplyStatus(nlohmann::json status)
     UpdateApplier *applier=g_updateApplier.load();
     if(applier)
         status.update(applier->statusJson());
+    AutoUpdater *autoUpdater=g_autoUpdater.load();
+    status["auto"]=autoUpdater
+        ?autoUpdater->statusJson()
+        :nlohmann::json{{"enabled", false}, {"status", "off"}, {"next_attempt", nullptr}};
     return status;
-}
-
-ApplyCheck currentApplyCheck()
-{
-    std::lock_guard<std::mutex> lock(g_applyMutex);
-    if(!g_environment)
-        return ApplyCheck{false, "the installer is not set up"};
-    return checkCanApply(g_applyContext, *g_environment);
 }
 
 void sendError(httplib::Response &res, int status, const std::string &message, const char *code)
@@ -110,6 +107,25 @@ UpdateManager *updateManager()
 void setUpdateApplier(UpdateApplier *applier)
 {
     g_updateApplier.store(applier);
+}
+
+void setAutoUpdater(AutoUpdater *updater)
+{
+    g_autoUpdater.store(updater);
+}
+
+ApplyCheck currentApplyCheck()
+{
+    std::lock_guard<std::mutex> lock(g_applyMutex);
+    if(!g_environment)
+        return ApplyCheck{false, "the installer is not set up"};
+    return checkCanApply(g_applyContext, *g_environment);
+}
+
+Supervisor currentSupervisor()
+{
+    std::lock_guard<std::mutex> lock(g_applyMutex);
+    return g_environment?detectSupervisor(*g_environment):Supervisor::None;
 }
 
 void setApplyContext(const ApplyContext &context, std::shared_ptr<const Environment> env)

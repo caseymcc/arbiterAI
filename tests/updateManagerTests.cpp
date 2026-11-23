@@ -513,12 +513,12 @@ TEST(UpdatePolicyTest, MergeKeepsOtherUpdateKeys)
     nlohmann::json cfg={{"port", 8080}, {"updates", {{"check", true}, {"allow_apply", false}}}};
     UpdatePolicy result;
     std::string error;
-    ASSERT_TRUE(arbiterAI::server::mergeUpdatesConfig(cfg, {{"interval_hours", 6}, {"auto_apply", true}}, result, error));
+    ASSERT_TRUE(arbiterAI::server::mergeUpdatesConfig(cfg, {{"interval_hours", 6}, {"channel", "beta"}}, result, error));
 
     EXPECT_EQ(cfg["updates"]["interval_hours"], 6);
     EXPECT_EQ(cfg["updates"]["check"], true);
     EXPECT_EQ(cfg["updates"]["allow_apply"], false);
-    EXPECT_FALSE(cfg["updates"].contains("auto_apply"));
+    EXPECT_FALSE(cfg["updates"].contains("channel"));
     EXPECT_EQ(cfg["port"], 8080);
     EXPECT_TRUE(result.check);
     EXPECT_EQ(result.intervalHours, 6);

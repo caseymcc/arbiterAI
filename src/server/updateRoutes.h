@@ -4,6 +4,7 @@
 #include "updateManager.h"
 #include "installEnvironment.h"
 #include "updateApplier.h"
+#include "autoUpdate.h"
 
 #include <httplib.h>
 
@@ -25,6 +26,16 @@ void setApplyContext(const ApplyContext &context, std::shared_ptr<const Environm
 
 /// can_apply, apply_blocked_reason and supervisor.
 nlohmann::json applyStatusJson();
+
+/// can_apply and its reason, from the context set with setApplyContext.
+ApplyCheck currentApplyCheck();
+
+/// The supervisor of the environment set with setApplyContext.
+Supervisor currentSupervisor();
+
+/// The AutoUpdater whose status is GET /api/update's "auto"; null leaves it
+/// as {enabled: false, status: "off"}.
+void setAutoUpdater(AutoUpdater *updater);
 
 /// The UpdateApplier behind apply and rollback; null (the default) answers 503
 /// and leaves its fields out of GET /api/update.

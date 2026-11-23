@@ -166,11 +166,18 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 | `check` | `bool` | `true` | Check GitHub Releases for a newer server release, at startup and then every `interval_hours` (see [`GET /api/update`](#get-apiupdate)) |
 | `interval_hours` | `int` | `24` | Hours between checks (1–8760) |
 | `allow_apply` | `bool` | `true` | Allow installing the latest release from the dashboard (see `can_apply` in [`GET /api/update`](#get-apiupdate)). Read from the file only: `PUT /api/server/config` refuses it |
+| `auto_apply` | `bool` | `false` | Install a new release on its own, when every condition under [Auto-update](#auto-update) holds |
+| `auto_apply_scope` | `string` | `"patch"` | Which releases auto-update installs: `"patch"` (same major.minor), `"minor"` (same major) or `"major"` (any) |
+| `auto_apply_delay_hours` | `int` | `24` | Hours a release must have been published before auto-update installs it (0–8760) |
+| `auto_apply_window` | `string` | `""` | `"HH:MM-HH:MM"` in local time (may wrap past midnight, e.g. `"23:00-05:00"`) when auto-update may install; empty: any time |
+| `idle_minutes` | `int` | `10` | Minutes with no HTTP request, scheduler job or download before auto-update installs (0–1440) |
 | `drain_timeout_s` | `int` | `60` | Seconds a graceful stop waits for in-flight work (see [Stopping the Server](#stopping-the-server)) |
 
-`check` and `interval_hours` can be changed without a restart through `PUT /api/server/config` with
-`{"updates": {"check": false, "interval_hours": 6}}`: the change is saved to the config file
-and applied at once. Only these two keys are accepted (`drain_timeout_s` is read from the file at startup); a request that sets `allow_apply` is refused with 400; any other keys already in the file's
+`check`, `interval_hours`, `auto_apply`, `auto_apply_scope`, `auto_apply_delay_hours`,
+`auto_apply_window` and `idle_minutes` can be changed without a restart through
+`PUT /api/server/config`, e.g. `{"updates": {"check": false, "interval_hours": 6}}`: the change is
+saved to the config file and applied at once (auto-update reads it at its next check, within
+15 s). Only these keys are accepted (`drain_timeout_s` is read from the file at startup); a request that sets `allow_apply` is refused with 400; any other keys already in the file's
 `updates` block are kept as they are. `GET /api/server/config` returns the current values as
 `updates`. An invalid `updates` block in the file is ignored at startup with a warning (defaults apply).
 
@@ -1337,7 +1344,12 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
   "prev_version": "0.1.15",
   "update_error": null,
   "rollback_available": true,
-  "rollback_version": "0.1.15"
+  "rollback_version": "0.1.15",
+  "auto": {
+    "enabled": true,
+    "status": "waiting for the window 02:00-04:00 (local time)",
+    "next_attempt": "2026-11-24T02:00:00Z"
+  }
 }
 ```
 
@@ -1358,6 +1370,9 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
 | `update_error` | Why the last update attempt failed (or that a new version failed to start and was rolled back), from `update-history.json`; `null` after a successful update. Separate from `last_error`, which is about the release check |
 | `rollback_available` | `<root>/bin.prev` exists and nothing is running: [`POST /api/update/rollback`](#post-apiupdaterollback) can go back to it |
 | `rollback_version` | The version in `bin.prev`, `null` when there is none |
+| `auto.enabled` | `updates.auto_apply` is on and nothing turns it off (`allow_apply`, a supervisor) |
+| `auto.status` | What auto-update is doing or waiting for, e.g. `"off"`, `"off: no supervisor declared (see README)"`, `"up to date"`, `"waiting: v0.1.16 installs 24 h after it was published"`, `"waiting for the server to be idle (1 HTTP request(s) running)"`, `"skipping v0.1.16: it failed here before …"`, `"installing v0.1.16"` |
+| `auto.next_attempt` | When the condition it waits for next holds (UTC), when that is known; `null` otherwise |
 
 #### `POST /api/update/check`
 
@@ -1401,6 +1416,30 @@ The new version is in probation until it has served for 60 seconds or is stopped
 it is started again before that (it crashed), it moves `bin.prev`/`share.prev` back, records
 "vX failed to start, rolled back" and the version in `failed`, and `execv`s the old version.
 That needs something to start it again after a crash: systemd or Docker (see `supervisor`).
+
+#### Auto-update
+
+With `updates.auto_apply` on, the server runs the same install as
+[`POST /api/update/apply`](#post-apiupdateapply) by itself. It checks every 15 seconds, and
+installs only when all of these hold:
+
+- `updates.allow_apply` is on, and a supervisor is declared (`supervisor` is not `null`):
+  without one a crash after the update would leave the server down;
+- `latest` is newer than the running version and within `auto_apply_scope`;
+- `latest` is not in the `failed` list of `update-history.json` (a release that failed to
+  install or start, or that was rolled back by hand): it is skipped until a newer one
+  appears, though the dashboard still offers it;
+- `can_apply` is true and no apply or rollback is running;
+- `latest` was published at least `auto_apply_delay_hours` ago;
+- the local time is inside `auto_apply_window`, when one is set;
+- the server has been idle for `idle_minutes`: every 15-second check in that time found no
+  HTTP request open (cloud-model requests bypass the scheduler, so the drain controller's
+  request count is what sees them), no scheduler job and no download. Idle is sampled, so a
+  request shorter than 15 s can fall between two checks; the install then drains like a stop,
+  so a request that comes in meanwhile still finishes.
+
+`auto.status` says which of these it is waiting for. After an attempt that fails without
+marking the release failed (a download error, a full disk), it waits an hour before the next.
 
 #### `POST /api/update/rollback`
 
