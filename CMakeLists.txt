@@ -294,6 +294,7 @@ endif()
         tests/drainControllerTests.cpp
         tests/installerTests.cpp
         tests/installEnvironmentTests.cpp
+        tests/updateStagingTests.cpp
         src/server/drainController.cpp
     )
 
@@ -391,8 +392,11 @@ add_library(arbiterai_server_updates STATIC
     src/server/installer.cpp
     src/server/installEnvironment.h
     src/server/installEnvironment.cpp
+    src/server/updateStaging.h
+    src/server/updateStaging.cpp
 )
 target_include_directories(arbiterai_server_updates PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/server")
+target_include_directories(arbiterai_server_updates PRIVATE ${PICOSHA2_INCLUDE_DIRS})
 target_link_libraries(arbiterai_server_updates
     PUBLIC
         nlohmann_json::nlohmann_json
