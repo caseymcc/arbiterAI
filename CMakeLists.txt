@@ -290,6 +290,7 @@ endif()
         tests/serverConnectTests.cpp
         tests/dashboardAssetsTests.cpp
         tests/dashboardServingTests.cpp
+        tests/updateManagerTests.cpp
     )
 
     if(ARBITERAI_ENABLE_LLAMA)
@@ -335,6 +336,7 @@ endif()
         PRIVATE
             arbiterai
             arbiterai_dashboard_assets
+            arbiterai_server_updates
             GTest::gtest
             GTest::gmock
             ZLIB::ZLIB
@@ -373,6 +375,24 @@ target_sources(arbiterai_dashboard_assets PRIVATE
 )
 target_link_libraries(arbiterai_dashboard_assets PUBLIC httplib::httplib)
 
+# the server's release check, shared with the tests
+add_library(arbiterai_server_updates STATIC
+    src/server/updateManager.h
+    src/server/updateManager.cpp
+)
+target_include_directories(arbiterai_server_updates PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/server")
+target_link_libraries(arbiterai_server_updates
+    PUBLIC
+        nlohmann_json::nlohmann_json
+    PRIVATE
+        cpr::cpr
+        spdlog::spdlog
+)
+
+# the only repository the server checks for (and later installs) releases from;
+# never a runtime setting
+set(ARBITERAI_UPDATE_REPO "caseymcc/arbiterAI" CACHE STRING "GitHub owner/name the server checks for releases")
+
 add_executable(arbiterAI-server
     src/server/main.cpp
     src/server/routes.h
@@ -388,9 +408,11 @@ target_link_libraries(arbiterAI-server
     PRIVATE
         arbiterai
         arbiterai_dashboard_assets
+        arbiterai_server_updates
         httplib::httplib
         spdlog::spdlog
 )
+target_compile_definitions(arbiterAI-server PRIVATE ARBITERAI_UPDATE_REPO="${ARBITERAI_UPDATE_REPO}")
 
 install(
     TARGETS arbiterai
