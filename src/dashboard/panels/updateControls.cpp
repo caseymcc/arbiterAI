@@ -106,20 +106,19 @@ void UpdateControls::update(const nlohmann::json &status)
     const std::string latest=text(m_status, "latest", "?");
 
     const std::string started=text(m_status, "started_at");
-    // the baseline is the process from before the install or rollback: an
-    // idle server can restart between two polls, so no poll may see it go
+    // the baseline is the first process seen: the server can restart between
+    // two polls (an idle install in about 1 s, an auto-update inside the 30 s
+    // between idle polls), so a reply from any other process reloads the page
     const bool wasActive=active();
-    if(!wasActive && m_status.contains("current"))
+    if(m_status.contains("current"))
     {
-        m_versionBefore=current;
-        m_startedBefore=started;
-    }
-    if(state=="restarting" || state=="rolling_back")
-        m_restarting=true;
-    else if(wasActive && state=="idle")
-    {
-        // the restart keeps the PID: a new process shows by its start time
-        if(started!=m_startedBefore || current!=m_versionBefore)
+        if(!m_haveBaseline)
+        {
+            m_haveBaseline=true;
+            m_versionBefore=current;
+            m_startedBefore=started;
+        }
+        else if(started!=m_startedBefore || current!=m_versionBefore)
         {
             if(!m_reloaded && m_reload)
             {
@@ -128,6 +127,11 @@ void UpdateControls::update(const nlohmann::json &status)
             }
             return;
         }
+    }
+    if(state=="restarting" || state=="rolling_back")
+        m_restarting=true;
+    else if(wasActive && state=="idle")
+    {
         // the same process is idle again: the install or rollback failed, its error follows
         m_restarting=false;
         m_installing=false;

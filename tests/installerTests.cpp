@@ -334,6 +334,20 @@ TEST_F(InstallerTest, HistoryRoundTrips)
     EXPECT_EQ(read.updates[0].error, "boom");
 }
 
+TEST_F(InstallerTest, HistoryKeepsOnlyTheNewestRecords)
+{
+    UpdateHistory history;
+    for(size_t i=0; i<arbiterAI::server::maxHistoryRecords+20; ++i)
+        history.updates.push_back({"1.0.0", "1.1.0", "failed", "2026-11-23T00:00:00Z", "attempt "+std::to_string(i)});
+
+    std::string error;
+    ASSERT_TRUE(arbiterAI::server::writeUpdateHistory(m_root, history, error))<<error;
+    UpdateHistory read=arbiterAI::server::readUpdateHistory(m_root);
+    ASSERT_EQ(read.updates.size(), arbiterAI::server::maxHistoryRecords);
+    EXPECT_EQ(read.updates.front().error, "attempt 20");
+    EXPECT_EQ(read.updates.back().error, "attempt "+std::to_string(arbiterAI::server::maxHistoryRecords+19));
+}
+
 TEST_F(InstallerTest, HealthTimerMarksHealthyAfterTheDelay)
 {
     makeUpdatedInstall(1);

@@ -535,6 +535,28 @@ TEST(UpdatePolicyTest, ReadsAllowApplyFromTheFile)
     EXPECT_EQ(error, "'updates.allow_apply' must be a boolean");
 }
 
+TEST(UpdatePolicyTest, AnInvalidBlockInTheFileTurnsApplyOff)
+{
+    std::string error;
+    nlohmann::json typo={{"updates", {{"allow_apply", false}, {"auto_apply", true}, {"auto_apply_window", "2:00-4:00"}}}};
+    UpdatePolicy result=arbiterAI::server::configUpdatePolicy(typo, error);
+    EXPECT_FALSE(result.allowApply);
+    EXPECT_FALSE(result.autoApply);
+    EXPECT_EQ(error, "'updates.auto_apply_window' must be \"HH:MM-HH:MM\" (local time) or empty");
+
+    // without allow_apply in the block too: the default is on, an invalid block is not
+    result=arbiterAI::server::configUpdatePolicy({{"updates", {{"idle_minutes", "ten"}}}}, error);
+    EXPECT_FALSE(result.allowApply);
+    EXPECT_FALSE(error.empty());
+
+    result=arbiterAI::server::configUpdatePolicy({{"updates", {{"auto_apply_window", "02:00-04:00"}}}}, error);
+    EXPECT_TRUE(result.allowApply);
+    EXPECT_TRUE(error.empty());
+    result=arbiterAI::server::configUpdatePolicy(nlohmann::json::object(), error);
+    EXPECT_TRUE(result.allowApply);
+    EXPECT_TRUE(error.empty());
+}
+
 TEST(UpdatePolicyTest, MergeRefusesAllowApply)
 {
     nlohmann::json cfg={{"updates", {{"allow_apply", false}}}};

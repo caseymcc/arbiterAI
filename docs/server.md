@@ -179,7 +179,7 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 saved to the config file and applied at once (auto-update reads it at its next check, within
 15 s). Only these keys are accepted (`drain_timeout_s` is read from the file at startup); a request that sets `allow_apply` is refused with 400; any other keys already in the file's
 `updates` block are kept as they are. `GET /api/server/config` returns the current values as
-`updates`. An invalid `updates` block in the file is ignored at startup with a warning (defaults apply).
+`updates`. An invalid `updates` block in the file is ignored at startup with a warning: the defaults apply, except that `allow_apply` and `auto_apply` are off, so a typo in any key cannot turn installing back on. `apply_blocked_reason` then names the invalid key.
 
 ### Stopping the Server
 

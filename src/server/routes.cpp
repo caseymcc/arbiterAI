@@ -663,10 +663,8 @@ nlohmann::json buildServerConfigResponse(const nlohmann::json &cfg)
         {"effective_startup_default", resolveEffectiveStartupDefault(cfg, hw)}
     };
 
-    UpdatePolicy updatePolicy;
     std::string updatesError;
-    if(cfg.contains("updates") && !readUpdatePolicy(cfg["updates"], updatePolicy, updatesError))
-        updatePolicy=UpdatePolicy();
+    UpdatePolicy updatePolicy=configUpdatePolicy(cfg, updatesError);
     response["updates"]=updatePolicyJson(updatePolicy);
 
     if(cfg.contains("startup_models")&&cfg["startup_models"].is_array())
@@ -3265,8 +3263,13 @@ void handleGetLoadedModels(const httplib::Request &, httplib::Response &res)
 
 nlohmann::json loadedModelsSnapshot()
 {
+    // Ready (RAM-only) models first: the reload goes in this order, and a
+    // model loaded later can evict one loaded before it
+    std::vector<LoadedModel> loaded=ArbiterAI::instance().getLoadedModels();
+    std::stable_partition(loaded.begin(), loaded.end(), [](const LoadedModel &m) { return m.state == ModelState::Ready; });
+
     nlohmann::json models=nlohmann::json::array();
-    for(const LoadedModel &m:ArbiterAI::instance().getLoadedModels())
+    for(const LoadedModel &m:loaded)
     {
         if(m.state != ModelState::Loaded && m.state != ModelState::Ready)
             continue;

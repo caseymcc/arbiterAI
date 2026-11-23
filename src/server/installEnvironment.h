@@ -59,6 +59,8 @@ struct ApplyContext {
     std::filesystem::path root;///< empty when the binary is not in a bin/ directory
     std::filesystem::path cwd;
     bool allowApply=true;
+    /// why the config's "updates" block was rejected, which also turns allowApply off
+    std::string updatesError;
     /// Paths the running server uses, by config key; relative ones are relative to cwd.
     std::vector<std::pair<std::string, std::filesystem::path>> configPaths;
 };

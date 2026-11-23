@@ -340,13 +340,34 @@ TEST_F(DashboardTest, AnApplyWhoseRestartFallsBetweenTwoPollsStillReloads)
     EXPECT_EQ(reloads, 1)<<"never reloaded into the new version's dashboard";
 }
 
+TEST_F(DashboardTest, AnAutoUpdateBetweenTwoIdlePollsReloads)
+{
+    int reloads=0;
+    m_data.setJson("/api/update", loadFixture("updateCanApply.json"));
+    m_app=std::make_unique<DashboardApp>(m_headless->canvas(), m_data, "/dashboard", nullptr,
+        []() { return FixtureNow; }, [&reloads]() { reloads++; });
+    frames(120*16);
+    ASSERT_GE(m_data.count("/api/update", "GET"), 2u);
+    ASSERT_FALSE(m_app->updates().active());
+    // auto-update stages, swaps and restarts inside one 30 s gap between /api/update polls
+    nlohmann::json version=loadFixture("version.json");
+    version["version"]="0.1.16";
+    m_data.setJson("/api/version", version);
+    m_data.setJson("/api/update", loadFixture("updateAfter.json"));
+    frames(120*35);
+    EXPECT_EQ(reloads, 1)<<"the old dashboard stays on the new server";
+}
+
 TEST_F(DashboardTest, AfterAnUpdateTheStripSaysFromWhatAndOffersRollback)
 {
     nlohmann::json version=loadFixture("version.json");
     version["version"]="0.1.16";
     m_data.setJson("/api/version", version);
     m_data.setJson("/api/update", loadFixture("updateAfter.json"));
-    m_data.setJson("/api/update/rollback", loadFixture("updateRestarting.json"), "POST");
+    // the reply comes from the same process, now restarting
+    nlohmann::json restarting=loadFixture("updateAfter.json");
+    restarting["state"]="restarting";
+    m_data.setJson("/api/update/rollback", restarting, "POST");
     start();
 
     EXPECT_EQ(m_app->updates().stripText(), "Updated from v0.1.15");

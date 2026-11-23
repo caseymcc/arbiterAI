@@ -150,7 +150,9 @@ ApplyCheck checkCanApply(const ApplyContext &context, const Environment &env)
 
     if(!context.allowApply)
     {
-        check.blockedReason="updates.allow_apply is false in the config file";
+        check.blockedReason=context.updatesError.empty()
+            ?"updates.allow_apply is false in the config file"
+            :"the 'updates' config block is invalid, so apply is off: "+context.updatesError;
         return check;
     }
 

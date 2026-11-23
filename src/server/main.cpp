@@ -726,7 +726,8 @@ int main(int argc, char *argv[])
     nlohmann::json modelsToReload=nlohmann::json::array();
     if(!selfTest)
         installRoot=arbiterAI::server::runningInstallRoot();
-    if(!installRoot.empty()&&std::filesystem::exists(arbiterAI::server::installMarkerPath(installRoot)))
+    std::error_code markerError;
+    if(!installRoot.empty()&&std::filesystem::exists(arbiterAI::server::installMarkerPath(installRoot), markerError))
     {
         arbiterAI::server::ExecRestarter restarter;
         arbiterAI::server::ProbationResult probation=arbiterAI::server::runStartupProbation(
@@ -835,12 +836,8 @@ int main(int argc, char *argv[])
     if(logRetainDays<1) logRetainDays=1;
 
     // Updates
-    arbiterAI::server::UpdatePolicy updatePolicy;
     std::string updatesError;
-    if(cfg.contains("updates")&&!arbiterAI::server::readUpdatePolicy(cfg["updates"], updatePolicy, updatesError))
-    {
-        updatePolicy=arbiterAI::server::UpdatePolicy();
-    }
+    arbiterAI::server::UpdatePolicy updatePolicy=arbiterAI::server::configUpdatePolicy(cfg, updatesError);
     int drainTimeoutSec=60;
     if(cfg.contains("updates")&&cfg["updates"].is_object())
     {
@@ -1144,7 +1141,7 @@ int main(int argc, char *argv[])
     // ── Release check ───────────────────────────────────────────
     if(!updatesError.empty())
     {
-        spdlog::warn("Ignoring the 'updates' config block: {}", updatesError);
+        spdlog::warn("Ignoring the 'updates' config block, apply is off: {}", updatesError);
     }
     arbiterAI::server::UpdateManager updates(
         std::make_unique<arbiterAI::server::GitHubReleaseSource>(ARBITERAI_UPDATE_REPO),
@@ -1157,6 +1154,7 @@ int main(int argc, char *argv[])
     std::error_code cwdError;
     applyContext.cwd=std::filesystem::current_path(cwdError);
     applyContext.allowApply=updatePolicy.allowApply;
+    applyContext.updatesError=updatesError;
     applyContext.configPaths.push_back({"--config", configPath});
     for(const std::string &path:modelConfigPaths)
         applyContext.configPaths.push_back({"model_config_paths", path});
@@ -1171,6 +1169,9 @@ int main(int argc, char *argv[])
     // Asked for on the applier's worker thread once the install is swapped:
     // drain, stop listening, and let main restart from the new bin/.
     std::atomic<bool> restartRequested{false};
+    // Whoever takes it ends the process: the restart worker after its
+    // timeout, or main once listen() returned. The other one does nothing.
+    std::atomic<bool> processEnding{false};
     arbiterAI::server::ApplierConfig applierConfig;
     applierConfig.root=applyContext.root;
     applierConfig.currentVersion=ARBITERAI_VERSION_STRING;
@@ -1180,7 +1181,7 @@ int main(int argc, char *argv[])
     arbiterAI::server::UpdateApplier applier(applierConfig,
         std::make_unique<arbiterAI::server::CprDownloader>(),
         arbiterAI::server::loadedModelsSnapshot,
-        [&restartRequested, &drainController, &server, drainTimeoutSec, &args, applyRoot=applyContext.root]()
+        [&restartRequested, &processEnding, &drainController, &server, drainTimeoutSec, &args, applyRoot=applyContext.root]()
         {
             restartRequested=true;
             spdlog::info("Restarting for the update: refusing new requests, waiting up to {} s for in-flight work", drainTimeoutSec);
@@ -1191,7 +1192,7 @@ int main(int argc, char *argv[])
 
             // listen() joins the request threads; one still running after the
             // drain timeout would hold main, so restart from here instead.
-            if(!stopSignals.waitForShutdown(std::chrono::seconds(5)))
+            if(!stopSignals.waitForShutdown(std::chrono::seconds(5))&&!processEnding.exchange(true))
             {
                 spdlog::error("Requests still running after the drain timeout, restarting without unloading models");
                 restartServer(applyRoot, args);
@@ -1311,6 +1312,12 @@ int main(int argc, char *argv[])
     bool listenOk=server.listen(host, port);
 
     stopSignals.shuttingDown();
+    if(processEnding.exchange(true))
+    {
+        // the restart worker gave up waiting for this and is replacing the process
+        for(;;)
+            std::this_thread::sleep_for(std::chrono::hours(1));
+    }
     healthTimer.stop();
 
     // Stop scheduler worker threads before static destruction tears down

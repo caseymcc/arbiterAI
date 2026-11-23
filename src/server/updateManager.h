@@ -150,6 +150,11 @@ bool parseTimeWindow(const std::string &text, int &startMinute, int &endMinute);
 /// or an interval_hours under 1.
 bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::string &error);
 
+/// The policy of a server config's "updates" block, or the defaults without
+/// one. An invalid block gives the defaults with allow_apply and auto_apply
+/// off, and its \p error: a typo in any key must not turn apply back on.
+UpdatePolicy configUpdatePolicy(const nlohmann::json &cfg, std::string &error);
+
 /// Puts the check, interval_hours and auto-update keys (auto_apply,
 /// auto_apply_scope, auto_apply_delay_hours, auto_apply_window, idle_minutes) of \p body (a PUT /api/server/config
 /// "updates" object) into the "updates" object of \p cfg, leaving its other

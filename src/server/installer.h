@@ -75,6 +75,9 @@ struct UpdateHistory {
 
 /// The history under \p root; empty when there is none or it cannot be read.
 UpdateHistory readUpdateHistory(const std::filesystem::path &root);
+/// update-history.json keeps this many of the newest records
+constexpr size_t maxHistoryRecords=100;
+/// Writes the history, with only its newest maxHistoryRecords records.
 bool writeUpdateHistory(const std::filesystem::path &root, const UpdateHistory &history, std::string &error);
 /// Held around each read-modify-write of the history: the health timer, the
 /// stop handler and the applier thread all update it.

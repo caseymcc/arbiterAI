@@ -80,7 +80,8 @@ private:
     std::string m_confirmText;
 
     nlohmann::json m_status=nlohmann::json::object();
-    /// the version that was running when the restart began
+    bool m_haveBaseline=false;
+    /// the version of the first process seen
     std::string m_versionBefore;
     /// and when that process started (started_at)
     std::string m_startedBefore;

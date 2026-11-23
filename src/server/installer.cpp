@@ -129,6 +129,12 @@ bool isDirectory(const fs::path &path)
     return fs::is_directory(path, ec);
 }
 
+bool pathExists(const fs::path &path)
+{
+    std::error_code ec;
+    return fs::exists(path, ec);
+}
+
 /// A rename of \p from to \p to that move() has done.
 struct Move {
     fs::path from;
@@ -324,8 +330,10 @@ UpdateHistory readUpdateHistory(const fs::path &root)
 bool writeUpdateHistory(const fs::path &root, const UpdateHistory &history, std::string &error)
 {
     nlohmann::json updates=nlohmann::json::array();
-    for(const UpdateRecord &record:history.updates)
+    size_t first=history.updates.size()>maxHistoryRecords?history.updates.size()-maxHistoryRecords:0;
+    for(size_t i=first; i<history.updates.size(); ++i)
     {
+        const UpdateRecord &record=history.updates[i];
         nlohmann::json entry={
             {"from", record.from},
             {"to", record.to},
@@ -578,7 +586,7 @@ bool copyInstall(const fs::path &image, const fs::path &root, fs::path &seed, st
 SeedResult keptOnError(const fs::path &root, SeedResult result, const std::string &error)
 {
     result.message="cannot install v"+result.imageVersion+": "+error;
-    if(fs::exists(installedBinaryPath(root)) && installedVersion(root) == result.volumeVersion)
+    if(pathExists(installedBinaryPath(root)) && installedVersion(root) == result.volumeVersion)
     {
         result.outcome=SeedOutcome::KeptOnError;
         result.message="kept v"+result.volumeVersion+", "+result.message;
@@ -593,7 +601,7 @@ SeedResult seedInstall(const fs::path &image, const fs::path &root)
     SeedResult result;
     result.imageVersion=installedVersion(image);
     std::optional<SemVer> imageVersion=SemVer::parse(result.imageVersion, false);
-    if(!imageVersion || !fs::exists(installedBinaryPath(image)))
+    if(!imageVersion || !pathExists(installedBinaryPath(image)))
     {
         result.message=image.empty()
             ?"this binary is not in a release install's bin/ directory"
@@ -619,7 +627,7 @@ SeedResult seedInstall(const fs::path &image, const fs::path &root)
     }
 
     // A marker without a binary is a copy that never finished.
-    bool installed=fs::exists(installedBinaryPath(root)) && !installedVersion(root).empty();
+    bool installed=pathExists(installedBinaryPath(root)) && !installedVersion(root).empty();
     result.volumeVersion=installed?installedVersion(root):std::string();
 
     std::string error;

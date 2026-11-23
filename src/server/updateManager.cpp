@@ -421,6 +421,19 @@ bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::
     return true;
 }
 
+UpdatePolicy configUpdatePolicy(const nlohmann::json &cfg, std::string &error)
+{
+    UpdatePolicy policy;
+    error.clear();
+    if(!cfg.is_object() || !cfg.contains("updates") || readUpdatePolicy(cfg["updates"], policy, error))
+        return policy;
+
+    policy=UpdatePolicy();
+    policy.allowApply=false;
+    policy.autoApply=false;
+    return policy;
+}
+
 bool mergeUpdatesConfig(nlohmann::json &cfg, const nlohmann::json &body, UpdatePolicy &policy, std::string &error)
 {
     if(body.is_object() && body.contains("allow_apply"))
