@@ -1,6 +1,8 @@
 #include "dashboardApp.h"
 #include "panels/widgets.h"
 
+#include <gweni/platforms/platform.h>
+
 namespace arbiterAI
 {
 namespace dashboard
@@ -106,6 +108,18 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
     m_version->setTextColor(palette::muted);
     m_version->setDock(gweni::DockPosition::Left);
 
+    m_update=header->newChild<gweni::controls::LabelClickable>();
+    m_update->setTextColorOverride(palette::warn);
+    m_update->setDock(gweni::DockPosition::Left);
+    m_update->setMargin(gweni::Margin(16, 0, 0, 0));
+    m_update->setToolTipText("Open the release notes");
+    m_update->setHidden(true);
+    m_update->onPressCaller.addCallback(m_update, [this](gweni::event::Handler &, gweni::event::Info)
+    {
+        if(!m_releaseUrl.empty())
+            gweni::platform::openUrl(m_releaseUrl);
+    });
+
     m_status=header->newChild<gweni::controls::Label>();
     m_status->setDock(gweni::DockPosition::Center);
     m_status->setTextAlignment(gweni::Alignment::Right | gweni::Alignment::CenterV);
@@ -198,6 +212,12 @@ void DashboardApp::poll()
         });
     }
 
+    if(m_pollsUntilUpdate--==0)
+    {
+        m_pollsUntilUpdate=UpdatePollEvery-1;
+        pollUpdate();
+    }
+
     m_data.getJson("/api/stats", [this](const Response &response)
     {
         if(!response.ok)
@@ -258,6 +278,25 @@ void DashboardApp::pollStorage()
     {
         if(response.ok)
             m_storage->updateCleanup(response.json);
+    });
+}
+
+void DashboardApp::pollUpdate()
+{
+    m_data.getJson("/api/update", [this](const Response &response)
+    {
+        // a server without the check (404) or one that failed keeps the plain header
+        if(!response.ok || !response.json.is_object() || !flag(response.json, "update_available"))
+        {
+            m_update->setHidden(true);
+            m_releaseUrl.clear();
+            return;
+        }
+
+        m_releaseUrl=text(response.json, "release_url");
+        m_update->setText("v"+text(response.json, "current", "?")+" \u2192 v"+text(response.json, "latest", "?")+" available");
+        m_update->sizeToContents();
+        m_update->setHidden(false);
     });
 }
 

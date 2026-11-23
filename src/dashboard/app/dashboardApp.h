@@ -36,12 +36,15 @@ struct Route {
 Route routeForUrl(const std::string &url);
 std::string pathForTab(Tab tab);
 
-/// The whole dashboard on a canvas: a header with the version and the
-/// connection status, the tabs, and the log panel under them. It polls the
+/// The whole dashboard on a canvas: a header with the version, a badge when a
+/// newer server release is out and the connection status, the tabs, and the
+/// log panel under them. It polls the
 /// server every PollSeconds through \p data, natively or in a page alike.
 class DashboardApp {
 public:
     static constexpr double PollSeconds=2.0;
+    /// /api/update is asked for on the first poll and every this many after
+    static constexpr int UpdatePollEvery=15;
 
     /// \p url the page's URL, which picks the tab; \p pushPath is told the
     /// path of each tab the user switches to (the page's history).
@@ -63,6 +66,10 @@ public:
 
     const std::string &version() const { return m_version->getText(); }
     const std::string &status() const { return m_status->getText(); }
+    /// the badge: shown only while /api/update says an update is available;
+    /// a click opens its release notes
+    gweni::controls::Base *updateBadge() const { return m_update; }
+    const std::string &updateText() const { return m_update->getText(); }
     bool connected() const { return m_connected; }
 
     OverviewPanel &overview() { return *m_overview; }
@@ -76,6 +83,7 @@ private:
     /// a tab was chosen: its path pushed (unless navigating), its data asked for
     void tabChanged();
     void setConnected(bool connected, const std::string &error=std::string());
+    void pollUpdate();
 
     DataSource &m_data;
     std::function<void(const std::string &path)> m_pushPath;
@@ -83,6 +91,8 @@ private:
     gweni::controls::Canvas *m_canvas;
     gweni::controls::Base *m_root;
     gweni::controls::Label *m_version;
+    gweni::controls::LabelClickable *m_update;
+    std::string m_releaseUrl;
     gweni::controls::Label *m_status;
     gweni::controls::TabControl *m_tabs;
     gweni::controls::TabButton *m_tabButtons[3];
@@ -93,6 +103,7 @@ private:
     gweni::controls::TimerHandle m_pollTimer;
 
     bool m_haveVersion=false;
+    int m_pollsUntilUpdate=0;
     bool m_connected=false;
     bool m_navigating=false;
 };

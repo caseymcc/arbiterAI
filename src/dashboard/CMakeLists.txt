@@ -66,6 +66,7 @@ else()
         tests/storageTests.cpp
         tests/logTests.cpp
         tests/configTests.cpp
+        tests/updateTests.cpp
     )
     target_link_libraries(dashboard_tests PRIVATE dashboard_core gweni::app GTest::gtest)
     target_include_directories(dashboard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

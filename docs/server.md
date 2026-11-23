@@ -1245,6 +1245,11 @@ The app polls the server every 2 seconds. While the server restarts the header s
 **Disconnected** with the reason and the page keeps working; failed actions show a toast, and
 questions use gweni dialogs (no browser `alert`/`confirm`/`prompt`).
 
+When [`GET /api/update`](#get-apiupdate) reports a newer release, the header shows
+`v0.1.15 → v0.1.16 available` next to the version on every tab; a click opens the release notes
+(`release_url`) in a new tab. The app asks for it on its first poll and every 30 seconds after;
+with no update (or a server without the check) the header shows the plain version.
+
 - **Overview** — performance (prompt/generation tokens/s, active requests, total inferences,
   model swaps), system memory and CPU, a tokens/s chart (prompt on the left axis, generation on
   the right, the last two minutes, 0 while idle), the GPUs (memory bar, unified-memory figures,
