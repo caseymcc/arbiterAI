@@ -1,0 +1,42 @@
+# arbiterAI-server under Docker Compose.
+#
+#   mkdir -p config models
+#   cp server.docker.json config/server.json     # share/arbiterAI/examples/ in the tarball
+#   docker compose up -d
+#
+# The dashboard is then at http://localhost:8080/dashboard.
+
+services:
+  arbiterai-server:
+    image: ghcr.io/caseymcc/arbiterai-server:latest
+    command: ["-c", "/config/server.json"]
+    restart: unless-stopped
+    # The drain on SIGTERM takes up to updates.drain_timeout_s (60 s by default);
+    # Docker's default 10 s would SIGKILL it first.
+    stop_grace_period: 90s
+    environment:
+      # Declares the restart policy above to the server's self-update.
+      ARBITERAI_SUPERVISOR: docker
+      # NVIDIA GPU (with "gpus: all" below): "graphics" brings in the Vulkan
+      # ICD and "utility" NVML, which hardware detection loads.
+      # NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+      # API keys for cloud providers, e.g.:
+      # OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    ports:
+      - "8080:8080"
+    volumes:
+      # server.json, the arbiterAI_config clone, overrides and injected configs
+      - ./config:/config
+      # downloaded model files
+      - ./models:/models
+
+    # --- GPU: uncomment one block ---
+
+    # NVIDIA (needs the NVIDIA Container Toolkit; also uncomment
+    # NVIDIA_DRIVER_CAPABILITIES above)
+    # gpus: all
+
+    # AMD / Intel (Vulkan through Mesa)
+    # devices:
+    #   - /dev/dri:/dev/dri

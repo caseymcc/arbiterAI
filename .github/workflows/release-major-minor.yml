@@ -179,6 +179,32 @@ jobs:
         ./runDocker.sh --ci ./scripts/packageServer.sh build/linux_x64_release "${VERSION}" dist
         echo "tarball=dist/arbiterAI-server-v${VERSION}-linux-x64.tar.gz" >> $GITHUB_OUTPUT
 
+    # --- Server image (ghcr.io/<owner>/arbiterai-server, separate from the build image) ---
+
+    - name: Build and check the server image
+      id: server_image
+      run: |
+        VERSION="${{ steps.version.outputs.new_version }}"
+        OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+        IMAGE="ghcr.io/${OWNER_LC}/arbiterai-server"
+        docker build -f docker/server.Dockerfile --build-arg VERSION="${VERSION}" -t "${IMAGE}:v${VERSION}" dist
+        ./scripts/checkServerImage.sh "${IMAGE}:v${VERSION}" "${VERSION}"
+        echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+
+    - name: Push the server image
+      run: |
+        VERSION="${{ steps.version.outputs.new_version }}"
+        IMAGE="${{ steps.server_image.outputs.image }}"
+        docker push "${IMAGE}:v${VERSION}"
+        # :latest only for the highest release, not a patch on an older release line.
+        HIGHEST=$(git tag -l 'v*' | sort -V | tail -n1)
+        if [ "${HIGHEST}" = "v${VERSION}" ]; then
+          docker tag "${IMAGE}:v${VERSION}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+        else
+          echo "v${VERSION} is not the highest release (${HIGHEST}); not moving :latest"
+        fi
+
     # --- Create release ---
 
     - name: Create GitHub Release
@@ -193,7 +219,7 @@ jobs:
           | Package | Description |
           |---------|-------------|
           | `arbiterAI-lib-v${{ steps.version.outputs.new_version }}-linux-x64.tar.gz` | Library, headers, and CMake config for linking |
-          | `arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64.tar.gz` | Standalone server: stripped release binary, install marker, README |
+          | `arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64.tar.gz` | Standalone server: stripped release binary, install marker, systemd unit, compose file, README |
 
           ### Server
 
@@ -204,6 +230,8 @@ jobs:
           ./arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64/bin/arbiterAI-server --self-test -c server.json
           ./arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64/bin/arbiterAI-server -c server.json
           ```
+
+          Docker: `ghcr.io/${{ github.repository_owner }}/arbiterai-server:v${{ steps.version.outputs.new_version }}` (see the README's "Running under Docker").
         draft: false
         prerelease: false
         files: |

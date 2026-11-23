@@ -121,6 +121,19 @@ jobs:
         path: build/dashboard-shots
         if-no-files-found: ignore
 
+    # The runtime image from a packaged tarball, the way a release builds it
+    # (from the debug build here), checked but not pushed.
+    - name: Package server
+      run: |
+        VERSION=$(./scripts/version.sh get)
+        ./runDocker.sh --ci ./scripts/packageServer.sh build/linux_x64_debug "${VERSION}" dist
+        echo "SERVER_VERSION=${VERSION}" >> $GITHUB_ENV
+
+    - name: Build and check the server image
+      run: |
+        docker build -f docker/server.Dockerfile --build-arg VERSION="${SERVER_VERSION}" -t arbiterai-server:ci dist
+        ./scripts/checkServerImage.sh arbiterai-server:ci "${SERVER_VERSION}"
+
     - name: Print vcpkg build logs on failure
       if: failure()
       run: |

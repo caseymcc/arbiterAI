@@ -12,6 +12,8 @@ share/arbiterAI/install.json                  install marker: version, asset nam
 share/arbiterAI/schemas/model_config.schema.json
 share/arbiterAI/systemd/arbiterai-server.service   systemd unit (see "Running under systemd")
 share/arbiterAI/examples/server.systemd.json  example config for the systemd unit
+share/arbiterAI/examples/server.docker.json   example config for the Docker image
+share/arbiterAI/docker/compose.yaml           Docker Compose file (see "Running under Docker")
 README.md
 LICENSE
 ```
@@ -170,6 +172,53 @@ The first start clones `arbiterAI_config` into `/var/lib/arbiterAI`. Until then,
 config (`sudo -u arbiterai sh -c 'cd /var/lib/arbiterAI && /opt/arbiterAI/bin/arbiterAI-server
 --self-test -c /etc/arbiterAI/server.json'`) finds no model configs and fails, because the self-test
 never fetches.
+
+## Running under Docker
+
+The image `ghcr.io/caseymcc/arbiterai-server` holds this same release, unpacked at `/opt/arbiterAI`,
+on Ubuntu 24.04 with the runtime libraries and the Mesa Vulkan drivers. Tags: `vX.Y.Z` per release
+and `latest`.
+
+- PID 1 is `tini`, which forwards `SIGTERM` to the server for its drain and reaps child processes.
+- The working directory is `/config`, a volume: the `arbiterAI_config` clone, `server.json`, model
+  overrides and injected configs live there and survive a new container. Model files go in the
+  `/models` volume.
+- The container runs as root.
+
+With `share/arbiterAI/docker/compose.yaml`:
+
+```bash
+mkdir -p arbiterai && cd arbiterai
+cp /path/to/share/arbiterAI/docker/compose.yaml .
+mkdir -p config models
+cp /path/to/share/arbiterAI/examples/server.docker.json config/server.json
+docker compose up -d
+docker compose logs -f
+```
+
+The compose file publishes port 8080, sets `restart: unless-stopped` (a crashed server is
+restarted) and `ARBITERAI_SUPERVISOR=docker`, and gives `docker stop` 90 s
+(`stop_grace_period`), longer than the server's drain. API keys go in its `environment:` block.
+
+GPU access is off until you uncomment one of the blocks at the end of the compose file:
+
+- **NVIDIA:** `gpus: all`, and `NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics` in
+  `environment:` (Vulkan and NVML come in through the NVIDIA Container Toolkit, which the host
+  needs).
+- **AMD / Intel:** `devices: [/dev/dri:/dev/dri]`.
+
+Without compose:
+
+```bash
+docker run -d --name arbiterai-server --restart unless-stopped --stop-timeout 90 \
+    -e ARBITERAI_SUPERVISOR=docker -p 8080:8080 \
+    -v "$PWD/config:/config" -v "$PWD/models:/models" \
+    ghcr.io/caseymcc/arbiterai-server:latest
+```
+
+The self-test works in the image too
+(`docker run --rm -v "$PWD/config:/config:ro" ghcr.io/caseymcc/arbiterai-server --self-test -c
+/config/server.json`), once a first start has cloned `arbiterAI_config` into `config/`.
 
 ## API keys
 
