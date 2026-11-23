@@ -1,6 +1,7 @@
 #include "routes.h"
 #include "dashboard.h"
 #include "dashboardConfig.h"
+#include "dashboardAssets.h"
 #include "logBuffer.h"
 
 #include "arbiterAI/arbiterAI.h"
@@ -1564,6 +1565,8 @@ void registerRoutes(httplib::Server &server)
     server.Get("/dashboard/config", handleDashboardConfig);
     server.Get("/dashboard/storage", handleDashboardStorage);
     server.Get("/dashboard", handleDashboard);
+    // The gweni web dashboard, beside the pages above until it replaces them
+    registerDashboardRoutes(server);
 
     spdlog::info("Registered all HTTP routes");
 }

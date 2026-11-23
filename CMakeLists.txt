@@ -289,6 +289,7 @@ endif()
         tests/storageManagerTests.cpp
         tests/serverConnectTests.cpp
         tests/dashboardAssetsTests.cpp
+        tests/dashboardServingTests.cpp
     )
 
     if(ARBITERAI_ENABLE_LLAMA)
@@ -364,6 +365,13 @@ target_link_libraries(arbiterAI-proxy
         arbiterai
         httplib::httplib
 )
+
+# the dashboard's routes, with the embedded files (cmake/webDashboard.cmake)
+target_sources(arbiterai_dashboard_assets PRIVATE
+    src/server/dashboardAssets.h
+    src/server/dashboardAssets.cpp
+)
+target_link_libraries(arbiterai_dashboard_assets PUBLIC httplib::httplib)
 
 add_executable(arbiterAI-server
     src/server/main.cpp
