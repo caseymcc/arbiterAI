@@ -43,9 +43,9 @@ module.exports = async ({ github, context, core, cwd = process.cwd() }) => {
     const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: sha });
     let found = assoc.data.filter(isMergedHere);
 
-    // A squash merge's commit says "(#N)" and the association can lag behind it.
+    // A squash merge's commit ends in "(#N)" and the association can lag behind it.
     if (found.length === 0) {
-      const match = subject.match(/\(#(\d+)\)/);
+      const match = [...subject.matchAll(/\(#(\d+)\)/g)].pop();
       if (match) {
         try {
           const { data } = await github.rest.pulls.get({ owner, repo, pull_number: parseInt(match[1], 10) });

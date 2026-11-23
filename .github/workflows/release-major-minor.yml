@@ -71,12 +71,16 @@ jobs:
         git commit -m "release: v${{ steps.version.outputs.new_version }}"
 
     - name: Create tag
+      id: tag
       run: |
-        git tag "v${{ steps.version.outputs.new_version }}"
+        # Annotated, pushed by name and given to the release as its target, so the
+        # tag sits on this commit and not on whatever the branch tip is by release time.
+        git tag -a "v${{ steps.version.outputs.new_version }}" -m "v${{ steps.version.outputs.new_version }}"
+        echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
     - name: Push branch and tag
       run: |
-        git push origin "${{ steps.version.outputs.branch }}" --follow-tags
+        git push --atomic origin "${{ steps.version.outputs.branch }}" "refs/tags/v${{ steps.version.outputs.new_version }}"
 
     # --- Build artifacts ---
 
@@ -211,6 +215,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ steps.version.outputs.new_version }}"
+        target_commitish: ${{ steps.tag.outputs.sha }}
         name: "v${{ steps.version.outputs.new_version }}"
         generate_release_notes: true
         body: |
@@ -227,8 +232,8 @@ jobs:
           Its `README.md` covers the requirements, the configuration file and the command line:
           ```bash
           tar -xzf arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64.tar.gz
-          ./arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64/bin/arbiterAI-server --self-test -c server.json
-          ./arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64/bin/arbiterAI-server -c server.json
+          mkdir -p ~/arbiterAI && cd ~/arbiterAI    # a data directory, with your server.json in it
+          /path/to/arbiterAI-server-v${{ steps.version.outputs.new_version }}-linux-x64/bin/arbiterAI-server -c server.json
           ```
 
           Docker: `ghcr.io/${{ github.repository_owner }}/arbiterai-server:v${{ steps.version.outputs.new_version }}` (see the README's "Running under Docker").

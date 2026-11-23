@@ -33,6 +33,7 @@
 
 # Build files
 build/
+dist/
 vcpkg_installed/
 
 # Generated at build time by CMake

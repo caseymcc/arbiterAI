@@ -107,7 +107,8 @@ TEST(DrainControllerTest, GateAnswers503WhileDraining)
     EXPECT_EQ(body["error"]["code"], "server_shutting_down");
     EXPECT_EQ(body["error"]["type"], "server_error");
 
-    EXPECT_EQ(drainController.inFlightRequests(), 0u);
+    // The first request's count ends in httplib's logger, which may still be running.
+    EXPECT_TRUE(waitFor([&drainController]() { return drainController.inFlightRequests()==0; }));
 }
 
 TEST(DrainControllerTest, CountsRequestWhileHandlerRuns)

@@ -42,7 +42,17 @@ httplib::Server::HandlerResponse DrainController::gate(const httplib::Request &,
     if(t_countedBy==this)
         responseWritten();
 
-    if(m_draining.load())
+    // Checked and counted under one lock, so no request slips in after
+    // beginDrain() and past drain()'s idle check.
+    bool refused=false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        refused=m_draining.load();
+        if(!refused)
+            ++m_inFlight;
+    }
+
+    if(refused)
     {
         nlohmann::json err={{"error", {
             {"message", "Server is shutting down"},
@@ -57,10 +67,6 @@ httplib::Server::HandlerResponse DrainController::gate(const httplib::Request &,
         return httplib::Server::HandlerResponse::Handled;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        ++m_inFlight;
-    }
     t_countedBy=this;
     return httplib::Server::HandlerResponse::Unhandled;
 }
@@ -81,7 +87,10 @@ void DrainController::responseWritten()
 
 void DrainController::beginDrain()
 {
-    m_draining.store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_draining.store(true);
+    }
     m_cv.notify_all();
 }
 

@@ -64,14 +64,18 @@ jobs:
         git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }} [skip ci]"
 
     - name: Create tag
+      id: tag
       if: steps.merged_prs.outputs.should_release == 'true'
       run: |
-        git tag "v${{ steps.bump.outputs.new_version }}"
+        # Annotated, pushed by name and given to the release as its target, so the
+        # tag sits on this commit and not on whatever the branch tip is by release time.
+        git tag -a "v${{ steps.bump.outputs.new_version }}" -m "v${{ steps.bump.outputs.new_version }}"
+        echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
     - name: Push commit and tag
       if: steps.merged_prs.outputs.should_release == 'true'
       run: |
-        git push origin HEAD --follow-tags
+        git push --atomic origin HEAD "refs/tags/v${{ steps.bump.outputs.new_version }}"
 
     # --- Build ---
 
@@ -218,6 +222,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ steps.bump.outputs.new_version }}"
+        target_commitish: ${{ steps.tag.outputs.sha }}
         name: "v${{ steps.bump.outputs.new_version }}"
         body: |
           Point release with ${{ steps.merged_prs.outputs.pr_count }} pull request(s) merged since ${{ steps.merged_prs.outputs.last_tag }}:
@@ -237,8 +242,8 @@ jobs:
           Its `README.md` covers the requirements, the configuration file and the command line:
           ```bash
           tar -xzf arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz
-          ./arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64/bin/arbiterAI-server --self-test -c server.json
-          ./arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64/bin/arbiterAI-server -c server.json
+          mkdir -p ~/arbiterAI && cd ~/arbiterAI    # a data directory, with your server.json in it
+          /path/to/arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64/bin/arbiterAI-server -c server.json
           ```
 
           Docker: `ghcr.io/${{ github.repository_owner }}/arbiterai-server:v${{ steps.bump.outputs.new_version }}` (see the README's "Running under Docker").

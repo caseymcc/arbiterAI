@@ -38,8 +38,9 @@ release, next to `bin/`.
 
 ```bash
 tar -xzf arbiterAI-server-vX.Y.Z-linux-x64.tar.gz
-cd arbiterAI-server-vX.Y.Z-linux-x64
 
+# Run from a data directory: the server writes its arbiterAI_config checkout there.
+mkdir -p ~/arbiterAI && cd ~/arbiterAI
 cat > server.json <<'EOF'
 {
     "host": "0.0.0.0",
@@ -48,9 +49,11 @@ cat > server.json <<'EOF'
 }
 EOF
 
-./bin/arbiterAI-server --self-test -c server.json   # check the config first
-./bin/arbiterAI-server -c server.json
+/path/to/arbiterAI-server-vX.Y.Z-linux-x64/bin/arbiterAI-server -c server.json
 ```
+
+`--self-test` reads the `arbiterAI_config` checkout as it is and never fetches it, so in a new data
+directory it fails until the server has been started there once.
 
 Then open `http://localhost:8080/dashboard`, or call `http://localhost:8080/v1/chat/completions`
 with any OpenAI client.
@@ -60,7 +63,7 @@ with any OpenAI client.
 | Option | Description |
 |--------|-------------|
 | `-c, --config <path>` | Server configuration file (required) |
-| `--self-test` | With `-c`: check that the server would start (parse the config, load model configs, detect hardware), then exit `0`, or `1` with the reason on stderr. Binds no port, loads no models and writes nothing. |
+| `--self-test` | With `-c`: check that the server would start (parse the config, load model configs, detect hardware), then exit `0`, or non-zero with the reason on stderr. Binds no port, loads no models and writes nothing. Uses the `arbiterAI_config` checkout in the working directory as it is, so run it where the server has started before. |
 | `--version` | Print the version and exit |
 | `-h, --help` | Print usage |
 

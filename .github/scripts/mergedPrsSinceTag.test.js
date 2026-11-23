@@ -136,6 +136,23 @@ const tests = {
 
     assert.deepStrictEqual(result.prs.map(p => p.number), [40]);
   },
+
+  // A squash merge puts its own number last: 'Revert "Feature (#12)" (#15)' is #15.
+  // The release workflow tags with -a, so the range starts at an annotated tag.
+  async squashSubjectUsesLastPrNumber() {
+    const dir = makeRepo();
+    commit(dir, 'base');
+    git(dir, 'tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
+    commit(dir, 'Revert "Feature (#12)" (#15)');
+    const github = fakeGithub({}, {
+      12: pr(12, 'Feature', '2026-11-20T10:00:00Z'),
+      15: pr(15, 'Revert "Feature (#12)"', '2026-11-22T10:00:00Z'),
+    });
+    const { result, outputs } = await run(dir, github);
+
+    assert.deepStrictEqual(result.prs.map(p => p.number), [15]);
+    assert.strictEqual(outputs.last_tag, 'v0.1.0');
+  },
 };
 
 (async () => {
