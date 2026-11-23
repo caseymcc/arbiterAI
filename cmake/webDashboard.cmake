@@ -93,6 +93,11 @@ ExternalProject_Add(dashboard_web
         -DCMAKE_TOOLCHAIN_FILE=${ARBITERAI_VCPKG_TOOLCHAIN}
         -DVCPKG_TARGET_TRIPLET=wasm32-emscripten
         -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${ARBITERAI_EMSCRIPTEN_TOOLCHAIN}
+    # installed by the build step itself: ninja re-stats the byproducts right
+    # after the step that names them, so files a later install step writes
+    # would not re-run the embedding until the next build
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target install
+    INSTALL_COMMAND ""
     BUILD_ALWAYS ON
     BUILD_BYPRODUCTS ${ARBITERAI_DASHBOARD_ASSETS}
 )
