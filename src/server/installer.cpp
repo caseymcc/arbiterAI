@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace arbiterAI
@@ -189,6 +191,15 @@ std::string installedVersion(const fs::path &root)
     nlohmann::json marker;
     std::string error;
     if(!readJsonFile(installMarkerPath(root), marker, error))
+        return std::string();
+    return stringField(marker, "version");
+}
+
+std::string previousVersion(const fs::path &root)
+{
+    nlohmann::json marker;
+    std::string error;
+    if(!readJsonFile(root/"share.prev"/"arbiterAI"/"install.json", marker, error))
         return std::string();
     return stringField(marker, "version");
 }
@@ -395,6 +406,14 @@ void ExecRestarter::restart(const fs::path &binary, const std::vector<std::strin
     for(size_t i=1; i<args.size(); ++i)
         argv.push_back(const_cast<char *>(args[i].c_str()));
     argv.push_back(nullptr);
+
+    std::error_code ec;
+    for(const fs::directory_entry &entry:fs::directory_iterator("/proc/self/fd", ec))
+    {
+        int fd=std::atoi(entry.path().filename().c_str());
+        if(fd>2)
+            fcntl(fd, F_SETFD, fcntl(fd, F_GETFD)|FD_CLOEXEC);
+    }
 
     spdlog::default_logger()->flush();
     execv(path.c_str(), argv.data());

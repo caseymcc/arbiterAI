@@ -169,6 +169,7 @@ public:
     /// A check on the calling thread, whatever the policy; returns statusJson().
     nlohmann::json checkNow();
     nlohmann::json statusJson() const;
+    UpdateStatus status() const;
 
     /// Stops and joins the thread; waits for a check in flight.
     void stop();

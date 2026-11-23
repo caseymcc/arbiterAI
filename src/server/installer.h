@@ -37,6 +37,9 @@ std::filesystem::path installedBinaryPath(const std::filesystem::path &root);
 /// no readable marker.
 std::string installedVersion(const std::filesystem::path &root);
 
+/// The version of the install in <root>/share.prev; empty when there is none.
+std::string previousVersion(const std::filesystem::path &root);
+
 /// <root>/update-state.json: an update in probation.
 struct UpdateState {
     std::string from;
@@ -95,6 +98,8 @@ public:
     virtual void restart(const std::filesystem::path &binary, const std::vector<std::string> &args, std::string &error)=0;
 };
 
+/// Marks every fd above stderr close-on-exec (log files, GPU devices, sockets
+/// a library opened without it), then execv.
 class ExecRestarter:public Restarter {
 public:
     void restart(const std::filesystem::path &binary, const std::vector<std::string> &args, std::string &error) override;

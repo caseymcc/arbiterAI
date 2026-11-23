@@ -1323,7 +1323,13 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
   "last_error": null,
   "can_apply": false,
   "apply_blocked_reason": "the working directory (/opt/arbiterAI/bin) is inside /opt/arbiterAI/bin, which an update replaces: move it out of the install",
-  "supervisor": "systemd"
+  "supervisor": "systemd",
+  "state": "idle",
+  "progress": null,
+  "prev_version": "0.1.15",
+  "update_error": null,
+  "rollback_available": true,
+  "rollback_version": "0.1.15"
 }
 ```
 
@@ -1338,11 +1344,62 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
 | `can_apply` | The server can install the latest release itself. Only when every one of these holds: it runs from a release tarball's install (`share/arbiterAI/install.json` next to `bin/`), `updates.allow_apply` is on, the install root is writable, in a container the install root is a mount point (a volume), and neither the working directory nor a path the config names (`--config`, `model_config_paths`, `models_dir`, `override_path`, `injected_config_dir`, `logging.directory`) is inside `<root>/bin` or `<root>/share`, which an update replaces |
 | `apply_blocked_reason` | The first condition of `can_apply` that fails, naming the path or config key; `null` when `can_apply` is true |
 | `supervisor` | What restarts the server after a crash (and so rolls back a bad update): `"systemd"` when `ARBITERAI_SUPERVISOR=systemd` and systemd set `INVOCATION_ID`, `"docker"` when `ARBITERAI_SUPERVISOR=docker` and `/.dockerenv` or `/run/.containerenv` exists, otherwise `null`. The variable alone, copied into a shell, does not count |
+| `state` | What apply or rollback is doing: `idle`, then `checking_space`, `downloading`, `verifying`, `unpacking`, `self_testing`, `installing` and `restarting` for an apply, or `rolling_back` and `restarting` for a rollback |
+| `progress` | 0–1 over the whole apply while one runs, `null` otherwise |
+| `prev_version` | The version this one was updated from: during probation from `update-state.json`, after it from `update-history.json`; `null` when the running version was not installed by an update |
+| `update_error` | Why the last update attempt failed (or that a new version failed to start and was rolled back), from `update-history.json`; `null` after a successful update. Separate from `last_error`, which is about the release check |
+| `rollback_available` | `<root>/bin.prev` exists and nothing is running: [`POST /api/update/rollback`](#post-apiupdaterollback) can go back to it |
+| `rollback_version` | The version in `bin.prev`, `null` when there is none |
 
 #### `POST /api/update/check`
 
 Checks now, on the request's thread, whatever `updates.check` says, and returns the same
 object as `GET /api/update`. It gives up after 15 seconds when GitHub does not answer.
+
+#### `POST /api/update/apply`
+
+Installs the latest release in place: `{"version": "0.1.16"}` (a leading `v` is accepted). Only
+the current `latest` of `GET /api/update` is accepted, and only when it is newer than the running
+version; there is no way to install another version. Answers `202` with the `GET /api/update`
+object once the install has started on its own thread, `409` while an apply or rollback runs
+(`code: update_running`), for any other version (`not_latest`) or a release without the server
+tarball (`no_asset`), `403` while `can_apply` is false (`apply_blocked`, with the reason) and
+`400` for a body without `version`.
+
+The steps, each shown in `state` and `progress`:
+
+1. at least 3× the tarball's size must be free in the install root;
+2. the tarball is downloaded to `<root>/.update/`;
+3. its size and SHA-256 must match the release asset's `size` and `digest`;
+4. it is unpacked with `tar`, and its `share/arbiterAI/install.json` must name the version;
+5. `<staged>/bin/arbiterAI-server --self-test -c <config>` runs in the server's working
+   directory and must exit 0 within 2 minutes (a binary that does not load, or a version that
+   rejects the current config, stops here).
+
+A failure in any step leaves the install as it was, removes `.update/` and sets
+`update_error`. A failure of the release itself (digest, archive, self-test) also adds the
+version to the `failed` list in `update-history.json`, which auto-update skips; a failed
+download or a full disk does not.
+
+On success the server writes `<root>/update-state.json` (`from`, `to`, the loaded models with
+their variant, context, runtime options, devices and pin state, `attempt: 0`), moves `bin/` and
+`share/` to `bin.prev/` and `share.prev/`, moves the new ones in, drains like a SIGTERM stop (up
+to `updates.drain_timeout_s`), unloads the models and `execv`s `<root>/bin/arbiterAI-server` with
+the same arguments and working directory. The process ID does not change, so systemd and
+Docker do not see a restart. The new version reloads the models that were loaded and pins the
+ones that were pinned.
+
+The new version is in probation until it has served for 60 seconds or is stopped cleanly. If
+it is started again before that (it crashed), it moves `bin.prev`/`share.prev` back, records
+"vX failed to start, rolled back" and the version in `failed`, and `execv`s the old version.
+That needs something to start it again after a crash: systemd or Docker (see `supervisor`).
+
+#### `POST /api/update/rollback`
+
+Goes back to the version in `bin.prev` (`rollback_version`), through the same drain and
+restart. The version rolled back from is added to `failed`, so auto-update does not install it
+again. Answers `202`, `409` while something runs (`update_running`) or when there is no
+`bin.prev` (`no_previous`), `403` while `can_apply` is false.
 
 ---
 

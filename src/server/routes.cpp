@@ -3263,6 +3263,26 @@ void handleGetLoadedModels(const httplib::Request &, httplib::Response &res)
     res.set_content(nlohmann::json{{"models", models}}.dump(), "application/json");
 }
 
+nlohmann::json loadedModelsSnapshot()
+{
+    nlohmann::json models=nlohmann::json::array();
+    for(const LoadedModel &m:ArbiterAI::instance().getLoadedModels())
+    {
+        if(m.state != ModelState::Loaded && m.state != ModelState::Ready)
+            continue;
+
+        models.push_back({
+            {"model", m.modelName},
+            {"variant", m.variant},
+            {"context", m.contextSize},
+            {"runtime_options", runtimeOptionsToJson(m.activeOptions)},
+            {"devices", m.gpuIndices},
+            {"pinned", m.pinned}
+        });
+    }
+    return models;
+}
+
 void handleLoadModel(const httplib::Request &req, httplib::Response &res)
 {
     try

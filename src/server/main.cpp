@@ -3,6 +3,7 @@
 #include "logBuffer.h"
 #include "drainController.h"
 #include "installer.h"
+#include "updateApplier.h"
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/version.h"
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <atomic>
 #include <pthread.h>
 
 namespace
@@ -506,6 +508,13 @@ public:
         });
     }
 
+    /// A stop signal has come in since start().
+    bool stopRequested()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_stopRequested;
+    }
+
     /// For onStop: wait until shuttingDown() has been called.
     bool waitForShutdown(std::chrono::milliseconds timeout)
     {
@@ -545,6 +554,72 @@ private:
     arbiterAI::StorageManager::instance().shutdown();
     spdlog::default_logger()->flush();
     std::_Exit(code);
+}
+
+/// Replaces the process with <root>/bin/arbiterAI-server, same argv and cwd,
+/// after saving storage state; exits if execv fails.
+[[noreturn]] void restartServer(const std::filesystem::path &root, const std::vector<std::string> &args)
+{
+    arbiterAI::StorageManager::instance().shutdown();
+    std::filesystem::path binary=arbiterAI::server::installedBinaryPath(root);
+    spdlog::info("Restarting as {}", binary.string());
+
+    arbiterAI::server::ExecRestarter restarter;
+    std::string error;
+    restarter.restart(binary, args, error);
+    spdlog::error("Restart failed: {}", error);
+    exitServer(1);
+}
+
+/// Loads the models update-state.json says were loaded before the update,
+/// unless the startup config already loaded them, and pins the pinned ones.
+void reloadModelsAfterUpdate(const nlohmann::json &models)
+{
+    if(!models.is_array())
+        return;
+
+    arbiterAI::ArbiterAI &ai=arbiterAI::ArbiterAI::instance();
+    for(const nlohmann::json &entry:models)
+    {
+        if(!entry.is_object()||!entry.value("model", nlohmann::json()).is_string())
+            continue;
+
+        std::string model=entry["model"].get<std::string>();
+        bool loaded=false;
+        for(const arbiterAI::LoadedModel &state:ai.getLoadedModels())
+        {
+            if(state.modelName==model&&(state.state==arbiterAI::ModelState::Loaded||state.state==arbiterAI::ModelState::Ready))
+                loaded=true;
+        }
+
+        std::string variant=entry.value("variant", nlohmann::json()).is_string()?entry["variant"].get<std::string>():std::string();
+        int contextSize=entry.value("context", nlohmann::json()).is_number_integer()?sanitizeContextSize(entry["context"].get<int>()):0;
+        arbiterAI::RuntimeOptions options=parseStartupRuntimeOptions(entry.value("runtime_options", nlohmann::json::object()));
+        std::vector<int> devices;
+        if(entry.value("devices", nlohmann::json()).is_array())
+        {
+            for(const nlohmann::json &device:entry["devices"])
+            {
+                if(device.is_number_integer())
+                    devices.push_back(device.get<int>());
+            }
+        }
+
+        if(!loaded)
+        {
+            spdlog::info("Reloading '{}' (loaded before the update)", model);
+            arbiterAI::ErrorCode loadErr=ai.loadModel(model, variant, contextSize, &options, devices);
+            if(loadErr!=arbiterAI::ErrorCode::Success)
+            {
+                spdlog::warn("Could not reload '{}' after the update (error={})", model, static_cast<int>(loadErr));
+                continue;
+            }
+        }
+
+        bool pinned=entry.value("pinned", nlohmann::json()).is_boolean()&&entry["pinned"].get<bool>();
+        if(pinned&&ai.pinModel(model)!=arbiterAI::ErrorCode::Success)
+            spdlog::warn("Could not pin '{}' after the update", model);
+    }
 }
 
 void printUsage()
@@ -621,14 +696,18 @@ int main(int argc, char *argv[])
     // ── Update probation ─────────────────────────────────────────
     // First, so a crash anywhere in the start below can still be rolled back.
     // Resolved now: an update moves the running binary to bin.prev.
+    std::vector<std::string> args(argv, argv+argc);
     std::filesystem::path installRoot;
+    nlohmann::json modelsToReload=nlohmann::json::array();
     if(!selfTest)
         installRoot=arbiterAI::server::runningInstallRoot();
     if(!installRoot.empty()&&std::filesystem::exists(arbiterAI::server::installMarkerPath(installRoot)))
     {
         arbiterAI::server::ExecRestarter restarter;
         arbiterAI::server::ProbationResult probation=arbiterAI::server::runStartupProbation(
-            installRoot, ARBITERAI_VERSION_STRING, restarter, std::vector<std::string>(argv, argv+argc));
+            installRoot, ARBITERAI_VERSION_STRING, restarter, args);
+        if(probation.outcome==arbiterAI::server::ProbationOutcome::Started)
+            modelsToReload=probation.state.loadedModels;
 
         switch(probation.outcome)
         {
@@ -1000,6 +1079,9 @@ int main(int argc, char *argv[])
         }
     }
 
+    // ── Models loaded before an update ──────────────────────────
+    reloadModelsAfterUpdate(modelsToReload);
+
     // ── Inference Scheduler ─────────────────────────────────────────
     {
         std::vector<int> gpuIndices;
@@ -1059,6 +1141,37 @@ int main(int argc, char *argv[])
     applyContext.configPaths.push_back({"logging.directory", logDir});
     std::shared_ptr<arbiterAI::server::SystemEnvironment> environment=std::make_shared<arbiterAI::server::SystemEnvironment>();
     arbiterAI::server::setApplyContext(applyContext, environment);
+
+    // ── Apply and rollback ──────────────────────────────────────
+    // Asked for on the applier's worker thread once the install is swapped:
+    // drain, stop listening, and let main restart from the new bin/.
+    std::atomic<bool> restartRequested{false};
+    arbiterAI::server::ApplierConfig applierConfig;
+    applierConfig.root=applyContext.root;
+    applierConfig.currentVersion=ARBITERAI_VERSION_STRING;
+    applierConfig.configPath=configPath;
+    applierConfig.cwd=applyContext.cwd;
+    arbiterAI::server::UpdateApplier applier(applierConfig,
+        std::make_unique<arbiterAI::server::CprDownloader>(),
+        arbiterAI::server::loadedModelsSnapshot,
+        [&restartRequested, &drainController, &server, drainTimeoutSec, &args, applyRoot=applyContext.root]()
+        {
+            restartRequested=true;
+            spdlog::info("Restarting for the update: refusing new requests, waiting up to {} s for in-flight work", drainTimeoutSec);
+            if(drainController.drain(std::chrono::seconds(drainTimeoutSec)))
+                spdlog::info("Drain complete");
+            server.wait_until_ready();
+            server.stop();
+
+            // listen() joins the request threads; one still running after the
+            // drain timeout would hold main, so restart from here instead.
+            if(!stopSignals.waitForShutdown(std::chrono::seconds(5)))
+            {
+                spdlog::error("Requests still running after the drain timeout, restarting without unloading models");
+                restartServer(applyRoot, args);
+            }
+        });
+    arbiterAI::server::setUpdateApplier(&applier);
     arbiterAI::server::ApplyCheck applyCheck=arbiterAI::server::checkCanApply(applyContext, *environment);
     nlohmann::json supervisor=arbiterAI::server::supervisorJson(arbiterAI::server::detectSupervisor(*environment));
     spdlog::info("Update apply: {}; restart on crash: {}",
@@ -1071,6 +1184,8 @@ int main(int argc, char *argv[])
     spdlog::info("  GET  /health                - Health check");
     spdlog::info("  GET  /api/update            - Newer release check result");
     spdlog::info("  POST /api/update/check      - Check for a newer release now");
+    spdlog::info("  POST /api/update/apply      - Install the latest release and restart");
+    spdlog::info("  POST /api/update/rollback   - Go back to the previous install and restart");
     spdlog::info("  POST /v1/chat/completions   - Chat completions (OpenAI-compatible)");
     spdlog::info("  GET  /v1/models             - List models (OpenAI-compatible)");
     spdlog::info("  GET  /v1/models/:id         - Get model info (OpenAI-compatible)");
@@ -1151,6 +1266,7 @@ int main(int argc, char *argv[])
     // the singletons (ModelRuntime, TelemetryCollector) they depend on.
     arbiterAI::InferenceScheduler::instance().shutdown();
 
+    arbiterAI::server::setUpdateApplier(nullptr);
     arbiterAI::server::setUpdateManager(nullptr);
     updates.stop();
 
@@ -1173,6 +1289,11 @@ int main(int argc, char *argv[])
 
     if(!arbiterAI::ModelRuntime::instance().getActiveDownloadSnapshots().empty())
         spdlog::warn("Downloads still running after the drain timeout, abandoning them");
+
+    // A stop signal during the drain wins: the supervisor (or the operator)
+    // starts the new install from disk.
+    if(restartRequested&&!stopSignals.stopRequested())
+        restartServer(applyContext.root, args);
 
     spdlog::info("shutdown complete");
     exitServer(0);

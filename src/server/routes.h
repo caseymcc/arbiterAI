@@ -4,6 +4,7 @@
 #include "drainController.h"
 
 #include <httplib.h>
+#include <nlohmann/json.hpp>
 
 namespace arbiterAI
 {
@@ -58,6 +59,10 @@ void handleGetStartupOptions(const httplib::Request &req, httplib::Response &res
 
 void handleGetModels(const httplib::Request &req, httplib::Response &res);
 void handleGetLoadedModels(const httplib::Request &req, httplib::Response &res);
+
+/// The loaded models as update-state.json's loaded_models:
+/// [{model, variant, context, runtime_options, devices, pinned}].
+nlohmann::json loadedModelsSnapshot();
 void handleLoadModel(const httplib::Request &req, httplib::Response &res);
 void handleUnloadModel(const httplib::Request &req, httplib::Response &res);
 void handlePinModel(const httplib::Request &req, httplib::Response &res);

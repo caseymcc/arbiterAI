@@ -418,6 +418,11 @@ nlohmann::json UpdateManager::statusJson() const
     return m_checker.statusJson();
 }
 
+UpdateStatus UpdateManager::status() const
+{
+    return m_checker.status();
+}
+
 void UpdateManager::stop()
 {
     {

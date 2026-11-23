@@ -295,6 +295,7 @@ endif()
         tests/installerTests.cpp
         tests/installEnvironmentTests.cpp
         tests/updateStagingTests.cpp
+        tests/updateApplierTests.cpp
         src/server/drainController.cpp
     )
 
@@ -394,6 +395,8 @@ add_library(arbiterai_server_updates STATIC
     src/server/installEnvironment.cpp
     src/server/updateStaging.h
     src/server/updateStaging.cpp
+    src/server/updateApplier.h
+    src/server/updateApplier.cpp
 )
 target_include_directories(arbiterai_server_updates PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/server")
 target_include_directories(arbiterai_server_updates PRIVATE ${PICOSHA2_INCLUDE_DIRS})

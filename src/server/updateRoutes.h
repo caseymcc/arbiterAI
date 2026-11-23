@@ -3,6 +3,7 @@
 
 #include "updateManager.h"
 #include "installEnvironment.h"
+#include "updateApplier.h"
 
 #include <httplib.h>
 
@@ -25,11 +26,24 @@ void setApplyContext(const ApplyContext &context, std::shared_ptr<const Environm
 /// can_apply, apply_blocked_reason and supervisor.
 nlohmann::json applyStatusJson();
 
-/// GET /api/update: UpdateManager::statusJson() and applyStatusJson().
+/// The UpdateApplier behind apply and rollback; null (the default) answers 503
+/// and leaves its fields out of GET /api/update.
+void setUpdateApplier(UpdateApplier *applier);
+
+/// GET /api/update: UpdateManager::statusJson(), applyStatusJson() and
+/// UpdateApplier::statusJson().
 void handleGetUpdate(const httplib::Request &req, httplib::Response &res);
 
 /// POST /api/update/check: a check now, then the same object as GET.
 void handleCheckUpdate(const httplib::Request &req, httplib::Response &res);
+
+/// POST /api/update/apply {"version": "X.Y.Z"}: 202 when the install started,
+/// 409 while one runs or when the version is not the latest, 403 when
+/// can_apply is false.
+void handleApplyUpdate(const httplib::Request &req, httplib::Response &res);
+
+/// POST /api/update/rollback: back to bin.prev, through the same restart.
+void handleRollbackUpdate(const httplib::Request &req, httplib::Response &res);
 
 void registerUpdateRoutes(httplib::Server &server);
 
