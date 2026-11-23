@@ -2,6 +2,7 @@
 #define _ARBITERAI_DASHBOARD_OVERVIEWPANEL_H_
 
 #include "data/dataSource.h"
+#include "panels/vramOverride.h"
 
 #include <gweni/controls.h>
 #include <gweni/controls/chart.h>
@@ -79,7 +80,7 @@ public:
     };
     const std::vector<GpuRow> &gpus() const { return m_gpuRows; }
     /// the VRAM prompt while it is open
-    gweni::dialogs::PromptDialog *vramPrompt() const { return m_vramPrompt; }
+    gweni::dialogs::PromptDialog *vramPrompt() const { return m_vram.dialog(); }
 
 private:
     void renderGpus(const nlohmann::json &gpus);
@@ -92,6 +93,7 @@ private:
     std::function<void()> m_refresh;
     gweni::controls::Base *m_page;
     gweni::controls::ScrollControl *m_scroll;
+    VramOverride m_vram;
 
     std::vector<std::pair<std::string, gweni::controls::Label *>> m_stats;
     gweni::controls::ProgressBar *m_cpuBar;
@@ -104,7 +106,6 @@ private:
     gweni::controls::Base *m_gpuList;
     gweni::controls::Label *m_noGpus;
     std::vector<GpuRow> m_gpuRows;
-    gweni::dialogs::PromptDialog *m_vramPrompt=nullptr;
 
     gweni::controls::DataTable *m_models;
     gweni::controls::Base *m_downloads;

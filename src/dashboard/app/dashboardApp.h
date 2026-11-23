@@ -2,6 +2,7 @@
 #define _ARBITERAI_DASHBOARD_DASHBOARDAPP_H_
 
 #include "data/dataSource.h"
+#include "panels/configPanel.h"
 #include "panels/logPanel.h"
 #include "panels/overviewPanel.h"
 #include "panels/storagePanel.h"
@@ -71,6 +72,7 @@ public:
 
     OverviewPanel &overview() { return *m_overview; }
     StoragePanel &storage() { return *m_storage; }
+    ConfigPanel &config() { return *m_config; }
     LogPanel &logPanel() { return *m_logPanel; }
     gweni::controls::TabButton *tabButton(Tab tab) const;
 
@@ -90,6 +92,7 @@ private:
     gweni::controls::TabButton *m_tabButtons[3];
     std::unique_ptr<OverviewPanel> m_overview;
     std::unique_ptr<StoragePanel> m_storage;
+    std::unique_ptr<ConfigPanel> m_config;
     std::unique_ptr<LogPanel> m_logPanel;
     gweni::controls::TimerHandle m_pollTimer;
 

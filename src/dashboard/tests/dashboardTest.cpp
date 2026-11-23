@@ -42,6 +42,9 @@ void DashboardTest::SetUp()
     m_data.setJson("/api/storage/models", loadFixture("storageModels.json"));
     m_data.setJson("/api/storage/cleanup/preview", loadFixture("cleanupPreview.json"));
     m_data.setJson("/api/logs?count=200", loadFixture("logs.json"));
+    m_data.setJson("/api/server/config", loadFixture("serverConfig.json"));
+    m_data.setJson("/api/server/startup-options?accelerator=vulkan", loadFixture("startupOptionsVulkan.json"));
+    m_data.setJson("/api/server/startup-options?accelerator=cuda", loadFixture("startupOptionsCuda.json"));
 }
 
 void DashboardTest::TearDown()

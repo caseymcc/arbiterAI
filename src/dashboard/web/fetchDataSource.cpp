@@ -44,6 +44,11 @@ void FetchDataSource::postJson(const std::string &path, const nlohmann::json &bo
     send("POST", path, body.dump(), std::move(handler));
 }
 
+void FetchDataSource::putJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler)
+{
+    send("PUT", path, body.dump(), std::move(handler));
+}
+
 void FetchDataSource::del(const std::string &path, ResponseHandler handler)
 {
     send("DELETE", path, std::string(), std::move(handler));

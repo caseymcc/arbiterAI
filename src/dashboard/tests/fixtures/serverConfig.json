@@ -1,0 +1,57 @@
+{
+  "default_model": "",
+  "default_variant": "",
+  "detected_accelerators": [
+    "vulkan",
+    "cpu"
+  ],
+  "effective_startup_default": {
+    "accelerator": "legacy",
+    "context_size": 0,
+    "model": "",
+    "variant": ""
+  },
+  "startup_defaults": {
+    "cpu": {
+      "context_size": 0,
+      "model": "",
+      "runtime_options": {},
+      "variant": ""
+    },
+    "cuda": {
+      "context_size": 0,
+      "model": "",
+      "runtime_options": {},
+      "variant": ""
+    },
+    "vulkan": {
+      "context_size": 0,
+      "model": "",
+      "runtime_options": {},
+      "variant": ""
+    }
+  },
+  "startup_models": [
+    {
+      "model": "gpt-oss-120b",
+      "variant": "Q4_K_M",
+      "context_size": 32768,
+      "runtime_options": {
+        "kv_cache_type_k": "q8_0",
+        "flash_attn": true
+      },
+      "devices": [
+        0
+      ],
+      "api_format": "harmony"
+    },
+    {
+      "model": "qwen3-8b",
+      "variant": "Q8_0",
+      "context_size": 0,
+      "runtime_options": {},
+      "devices": [],
+      "api_format": ""
+    }
+  ]
+}

@@ -15,6 +15,7 @@ class FetchDataSource: public DataSource
 public:
     void getJson(const std::string &path, ResponseHandler handler) override;
     void postJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler) override;
+    void putJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler) override;
     void del(const std::string &path, ResponseHandler handler) override;
 
 private:

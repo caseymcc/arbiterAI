@@ -2,7 +2,6 @@
 #include "widgets.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <map>
 
 namespace arbiterAI
@@ -103,7 +102,8 @@ std::string stageName(const std::string &stage)
 OverviewPanel::OverviewPanel(gweni::controls::Base *page, DataSource &data, std::function<void()> refresh):
     m_data(data),
     m_refresh(std::move(refresh)),
-    m_page(page)
+    m_page(page),
+    m_vram(page, data, m_refresh)
 {
     m_scroll=page->newChild<gweni::controls::ScrollControl>();
     m_scroll->setDock(gweni::DockPosition::Center);
@@ -540,41 +540,17 @@ void OverviewPanel::modelAction(const std::string &name, const std::string &acti
 
 void OverviewPanel::promptVramOverride(int gpuIndex, double currentMb)
 {
-    const std::string current=formatFixed(currentMb, 0);
-    m_vramPrompt=gweni::dialogs::prompt(m_page->getCanvas(), "VRAM override",
-        "Enter VRAM override in MB for GPU "+std::to_string(gpuIndex)+" (current: "+current+" MB):", current,
-        [this, gpuIndex](gweni::dialogs::Result result, const gweni::String &input)
-        {
-            m_vramPrompt=nullptr;
-            if(result==gweni::dialogs::Result::Ok)
-                setVramOverride(gpuIndex, input);
-        });
+    m_vram.prompt(gpuIndex, currentMb);
 }
 
 void OverviewPanel::setVramOverride(int gpuIndex, const std::string &input)
 {
-    char *end=nullptr;
-    const long vramMb=std::strtol(input.c_str(), &end, 10);
-    if(input.empty() || *end!='\0' || vramMb<=0)
-    {
-        notify(m_page, gweni::controls::ToastKind::Warning, "Invalid value: enter a positive whole number of MB.");
-        return;
-    }
-
-    m_data.postJson("/api/hardware/vram-override", {{"gpu_index", gpuIndex}, {"vram_mb", vramMb}}, [this](const Response &response)
-    {
-        if(!reportFailure(response, "VRAM override") && m_refresh)
-            m_refresh();
-    });
+    m_vram.set(gpuIndex, input);
 }
 
 void OverviewPanel::clearVramOverride(int gpuIndex)
 {
-    m_data.del("/api/hardware/vram-override/"+std::to_string(gpuIndex), [this](const Response &response)
-    {
-        if(!reportFailure(response, "Clearing the VRAM override") && m_refresh)
-            m_refresh();
-    });
+    m_vram.clear(gpuIndex);
 }
 
 }//namespace dashboard

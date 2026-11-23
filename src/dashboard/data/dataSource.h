@@ -35,6 +35,7 @@ public:
 
     virtual void getJson(const std::string &path, ResponseHandler handler)=0;
     virtual void postJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler)=0;
+    virtual void putJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler)=0;
     virtual void del(const std::string &path, ResponseHandler handler)=0;
 };
 

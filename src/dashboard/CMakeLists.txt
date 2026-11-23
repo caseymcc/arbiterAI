@@ -27,6 +27,10 @@ add_library(dashboard_core STATIC
     panels/logPanel.cpp
     panels/storagePanel.h
     panels/storagePanel.cpp
+    panels/vramOverride.h
+    panels/vramOverride.cpp
+    panels/configPanel.h
+    panels/configPanel.cpp
 )
 target_include_directories(dashboard_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dashboard_core PUBLIC gweni::gweni nlohmann_json::nlohmann_json)
@@ -61,6 +65,7 @@ else()
         tests/overviewTests.cpp
         tests/storageTests.cpp
         tests/logTests.cpp
+        tests/configTests.cpp
     )
     target_link_libraries(dashboard_tests PRIVATE dashboard_core gweni::app GTest::gtest)
     target_include_directories(dashboard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

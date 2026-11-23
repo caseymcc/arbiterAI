@@ -25,7 +25,7 @@ public:
         nlohmann::json body;
     };
 
-    /// \p method "GET", "POST" or "DELETE"
+    /// \p method "GET", "POST", "PUT" or "DELETE"
     void setJson(const std::string &path, const nlohmann::json &json, const std::string &method="GET");
     /// a reply of \p status (0: unreachable) with {"error": message}
     void setFailure(const std::string &path, int status, const std::string &message, const std::string &method="GET");
@@ -37,6 +37,7 @@ public:
 
     void getJson(const std::string &path, ResponseHandler handler) override;
     void postJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler) override;
+    void putJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler) override;
     void del(const std::string &path, ResponseHandler handler) override;
 
 private:

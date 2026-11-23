@@ -42,6 +42,11 @@ void FixtureDataSource::postJson(const std::string &path, const nlohmann::json &
     answer("POST", path, body, handler);
 }
 
+void FixtureDataSource::putJson(const std::string &path, const nlohmann::json &body, ResponseHandler handler)
+{
+    answer("PUT", path, body, handler);
+}
+
 void FixtureDataSource::del(const std::string &path, ResponseHandler handler)
 {
     answer("DELETE", path, nlohmann::json(), handler);

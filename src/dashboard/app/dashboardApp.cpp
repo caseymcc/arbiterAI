@@ -113,11 +113,14 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
             // the Storage tab polls only while it shows: fill it now
             if(static_cast<Tab>(i)==Tab::Storage && m_storage)
                 pollStorage();
+            // the Config tab loads once, when it first shows
+            if(static_cast<Tab>(i)==Tab::Config && m_config && !m_config->loaded())
+                m_config->load();
         });
     }
     m_overview=std::make_unique<OverviewPanel>(tabButton(Tab::Overview)->getPage(), m_data, [this]() { poll(); });
     m_storage=std::make_unique<StoragePanel>(tabButton(Tab::Storage)->getPage(), m_data, [this]() { pollStorage(); }, std::move(now));
-    addHeading(tabButton(Tab::Config)->getPage(), "Startup configuration: coming with the Config panel");
+    m_config=std::make_unique<ConfigPanel>(tabButton(Tab::Config)->getPage(), m_data);
 
     showTab(route.tab);
     setConnected(false, "connecting...");
@@ -214,6 +217,9 @@ void DashboardApp::poll()
     });
     if(currentTab()==Tab::Storage)
         pollStorage();
+    // until the configuration arrives (a server restarting), each poll asks again
+    if(currentTab()==Tab::Config && !m_config->loaded())
+        m_config->load();
     m_logPanel->poll();
 }
 
