@@ -57,8 +57,10 @@ The server supports:
 
 `arbiterAI-server --self-test -c <config>` runs the normal startup up to, but not including, `listen()`:
 it parses the config file, loads the model configs (`ArbiterAI::initialize`) and detects hardware. It
-exits `0` and prints `self-test passed: …` when a real start would get that far, or exits `1` with the
-reason on stderr (config file missing, invalid JSON, no model config loadable).
+exits `0` and prints `self-test passed: …` when a real start would get that far, or exits non-zero with
+the reason on stderr: `1` for a missing config file, invalid JSON or no loadable model config; a value of
+the wrong type (`"port": "abc"`) aborts with the JSON library's message, as a real start would. The
+`startup_models` entries are parsed too, but not loaded.
 
 It is safe to run next to a live server, in that server's working directory:
 
@@ -179,7 +181,7 @@ On `SIGTERM` or `SIGINT` (`systemctl stop`, `docker stop`, Ctrl-C) the server dr
 2. In-flight requests (streamed responses until their last chunk is written), scheduler jobs and model downloads get up to `updates.drain_timeout_s` to finish.
 3. The server stops listening, stops the inference scheduler, unloads every model, logs `shutdown complete` and exits `0`.
 
-A second signal exits at once. If requests are still running 5 seconds after the drain timeout, the server logs that and exits `1` without unloading models.
+A second signal exits at once (`128+signal`). A signal that arrives before the server is listening (while it clones `arbiterAI_config`, loads startup models or runs `--self-test`) also exits at once, with `128+signal`: there is nothing to drain yet. If requests are still running 5 seconds after the drain timeout, the server logs that and exits `1` without unloading models; downloads still running then are abandoned.
 
 ### Examples
 

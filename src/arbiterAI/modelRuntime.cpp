@@ -91,6 +91,24 @@ ModelRuntime::ModelRuntime()
     m_readyRamBudgetMb=hw.totalRamMb/2;
 }
 
+ModelRuntime::~ModelRuntime()
+{
+    // A std::thread still joinable at destruction calls std::terminate.
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_shuttingDown=true;
+        m_downloadCv.notify_all();
+    }
+
+    for(std::thread &t:m_downloadThreads)
+    {
+        if(t.joinable())
+        {
+            t.join();
+        }
+    }
+}
+
 // ---- llama.cpp log capture ------------------------------------------------
 
 // Thread-local pointer to the active ModelRuntime capturing logs.

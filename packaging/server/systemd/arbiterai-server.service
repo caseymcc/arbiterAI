@@ -31,6 +31,8 @@ RestartSec=5
 # SIGTERM starts a drain of up to updates.drain_timeout_s (default 60 s);
 # give it longer before systemd falls back to SIGKILL.
 TimeoutStopSec=120
+# A stop before the server is listening exits 128+SIGTERM at once.
+SuccessExitStatus=143
 
 [Install]
 WantedBy=multi-user.target

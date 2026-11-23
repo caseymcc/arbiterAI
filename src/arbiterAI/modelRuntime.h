@@ -235,6 +235,7 @@ public:
 
 private:
     ModelRuntime();
+    ~ModelRuntime();
 
     ModelRuntime(const ModelRuntime &)=delete;
     ModelRuntime &operator=(const ModelRuntime &)=delete;

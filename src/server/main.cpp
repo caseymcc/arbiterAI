@@ -440,25 +440,11 @@ public:
     }
 
     /// Must run before any other thread starts, so they all inherit the mask.
+    /// Until start() is called, a signal exits at once: nothing needs draining
+    /// yet, and a hung clone or model load can still be interrupted.
     void block()
     {
         pthread_sigmask(SIG_BLOCK, &m_signals, nullptr);
-    }
-
-    /// The first signal runs onStop on its own thread; any signal after it,
-    /// or after shuttingDown(), exits the process at once.
-    void start(std::function<void()> onStop)
-    {
-        m_onStop=std::move(onStop);
-        m_stopThread=std::thread([this]()
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            m_cv.wait(lock, [this]() { return m_stopRequested||m_shuttingDown; });
-            if(!m_stopRequested)
-                return;
-            lock.unlock();
-            m_onStop();
-        });
 
         std::thread([this]()
         {
@@ -469,6 +455,13 @@ public:
                     continue;
 
                 std::unique_lock<std::mutex> lock(m_mutex);
+                if(!m_started)
+                {
+                    lock.unlock();
+                    spdlog::warn("Received {} before the server was listening, exiting now", strsignal(sig));
+                    spdlog::default_logger()->flush();
+                    std::_Exit(128+sig);
+                }
                 if(m_stopRequested||m_shuttingDown)
                 {
                     lock.unlock();
@@ -482,6 +475,24 @@ public:
                 m_cv.notify_all();
             }
         }).detach();
+    }
+
+    /// From here on the first signal runs onStop on its own thread; any
+    /// signal after it, or after shuttingDown(), exits the process at once.
+    void start(std::function<void()> onStop)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_onStop=std::move(onStop);
+        m_started=true;
+        m_stopThread=std::thread([this]()
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_cv.wait(lock, [this]() { return m_stopRequested||m_shuttingDown; });
+            if(!m_stopRequested)
+                return;
+            lock.unlock();
+            m_onStop();
+        });
     }
 
     /// For onStop: wait until shuttingDown() has been called.
@@ -509,6 +520,7 @@ private:
     std::thread m_stopThread;
     std::mutex m_mutex;
     std::condition_variable m_cv;
+    bool m_started=false;
     bool m_stopRequested=false;
     bool m_shuttingDown=false;
 };
@@ -523,7 +535,7 @@ void printUsage()
         "                        parse the config, load model configs, detect hardware.\n"
         "                        Binds no port, loads no models and writes nothing; uses the\n"
         "                        arbiterAI_config checkout in the working directory as it is.\n"
-        "                        Exits 0 if the start would succeed, 1 with the reason if not.\n"
+        "                        Exits 0 if the start would succeed, non-zero with the reason if not.\n"
         "      --version         Print the version and exit\n"
         "  -h, --help            Print this help message\n"
         "\n"
@@ -835,15 +847,15 @@ int main(int argc, char *argv[])
     arbiterAI::HardwareDetector::instance().refresh();
     arbiterAI::SystemInfo startupHardware=arbiterAI::HardwareDetector::instance().getSystemInfo();
 
+    // Parsed before the self-test returns: a malformed entry fails both.
+    std::vector<StartupModelEntry> startupModels=parseStartupModels(cfg);
+
     if(selfTest)
     {
         std::cout<<"self-test passed: "<<arbiterAI::ModelManager::instance().getModelsByRanking().size()
             <<" model configs, "<<startupHardware.gpus.size()<<" GPU(s)\n";
         return 0;
     }
-
-    // New format: startup_models array (preferred)
-    std::vector<StartupModelEntry> startupModels=parseStartupModels(cfg);
 
     if(!startupModels.empty())
     {
@@ -1031,7 +1043,7 @@ int main(int argc, char *argv[])
         if(drained)
             spdlog::info("Drain complete");
 
-        // A signal during startup arrives before listen() has bound.
+        // start() runs just before listen(), which may not have bound yet.
         server.wait_until_ready();
         server.stop();
 
@@ -1073,7 +1085,15 @@ int main(int argc, char *argv[])
         }
     }
 
+    // ~ModelRuntime joins the download threads; one still running after the
+    // drain timeout would hold the exit, so skip static destruction.
+    bool downloadsRunning=!arbiterAI::ModelRuntime::instance().getActiveDownloadSnapshots().empty();
+    if(downloadsRunning)
+        spdlog::warn("Downloads still running after the drain timeout, abandoning them");
+
     spdlog::info("shutdown complete");
     spdlog::default_logger()->flush();
+    if(downloadsRunning)
+        std::_Exit(0);
     return 0;
 }

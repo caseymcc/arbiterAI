@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 #include <fstream>
 #include <filesystem>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 
 namespace arbiterAI
 {
@@ -750,6 +753,65 @@ TEST_F(ModelRuntimeTest, ResetClearsDownloadState)
     EXPECT_EQ(rt.getMaxConcurrentDownloads(), 2);
 
     std::filesystem::remove_all("rt_test_models");
+}
+
+// A finished download thread must not abort the process at exit (the server's
+// graceful stop returns from main and runs static destruction).
+TEST_F(ModelRuntimeTest, ExitAfterDownloadDoesNotAbort)
+{
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+
+    std::ofstream dlModel("rt_config/models/download_model_exit.json");
+    dlModel << R"({
+        "models": [
+            {
+                "model": "test-download-exit",
+                "provider": "llama",
+                "ranking": 40,
+                "context_window": 4096,
+                "max_tokens": 2048,
+                "hardware_requirements": {
+                    "min_system_ram_mb": 4096,
+                    "parameter_count": "7B"
+                },
+                "variants": [
+                    {
+                        "quantization": "Q4_K_M",
+                        "file_size_mb": 1,
+                        "min_vram_mb": 128,
+                        "recommended_vram_mb": 256,
+                        "download": {
+                            "url": "http://127.0.0.1:9/fake.gguf",
+                            "sha256": "abc123",
+                            "filename": "test-dl-exit-q4.gguf"
+                        }
+                    }
+                ]
+            }
+        ]
+    })";
+    dlModel.close();
+
+    EXPECT_EXIT(
+        {
+            ModelManager::reset();
+            ModelManager::instance().initialize({"rt_config"});
+            ModelRuntime::reset();
+            std::filesystem::create_directories("rt_test_models_exit");
+            StorageManager::instance().initialize("rt_test_models_exit");
+            StorageManager::instance().setStorageLimit(static_cast<int64_t>(10)*1024*1024*1024);
+
+            ModelRuntime &rt=ModelRuntime::instance();
+            if(rt.downloadModel("test-download-exit", "Q4_K_M")!=ErrorCode::ModelDownloading)
+                std::exit(2);
+
+            std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
+            while(!rt.getActiveDownloadSnapshots().empty()&&std::chrono::steady_clock::now()<deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::filesystem::remove_all("rt_test_models_exit");
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0), "");
 }
 
 } // namespace arbiterAI
