@@ -65,7 +65,7 @@ std::string pathForTab(const std::string &base, Tab tab)
 }
 
 DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, const std::string &url,
-    std::function<void(const std::string &path)> pushPath):
+    std::function<void(const std::string &path)> pushPath, std::function<std::time_t()> now):
     m_data(data),
     m_pushPath(std::move(pushPath)),
     m_canvas(canvas)
@@ -96,7 +96,7 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
     m_status->setDock(gweni::DockPosition::Center);
     m_status->setTextAlignment(gweni::Alignment::Right | gweni::Alignment::CenterV);
 
-    m_logPanel=std::make_unique<LogPanel>(m_root);
+    m_logPanel=std::make_unique<LogPanel>(m_root, m_data);
     m_logPanel->setExpanded(route.logs);
 
     m_tabs=m_root->newChild<gweni::controls::TabControl>();
@@ -110,10 +110,13 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
         {
             if(!m_navigating && m_pushPath)
                 m_pushPath(pathForTab(m_base, static_cast<Tab>(i)));
+            // the Storage tab polls only while it shows: fill it now
+            if(static_cast<Tab>(i)==Tab::Storage && m_storage)
+                pollStorage();
         });
     }
     m_overview=std::make_unique<OverviewPanel>(tabButton(Tab::Overview)->getPage(), m_data, [this]() { poll(); });
-    addHeading(tabButton(Tab::Storage)->getPage(), "Downloaded models: coming with the Storage panel");
+    m_storage=std::make_unique<StoragePanel>(tabButton(Tab::Storage)->getPage(), m_data, [this]() { pollStorage(); }, std::move(now));
     addHeading(tabButton(Tab::Config)->getPage(), "Startup configuration: coming with the Config panel");
 
     showTab(route.tab);
@@ -132,8 +135,11 @@ void DashboardApp::navigate(const std::string &url)
 {
     Route route=routeForUrl(url);
     showTab(route.tab);
-    if(route.logs)
+    if(route.logs && !m_logPanel->expanded())
+    {
         m_logPanel->setExpanded(true);
+        m_logPanel->poll();
+    }
 }
 
 void DashboardApp::selectTab(Tab tab)
@@ -202,7 +208,31 @@ void DashboardApp::poll()
     });
     m_data.getJson("/api/downloads", [this](const Response &response)
     {
-        m_overview->updateDownloads(response.ok?response.json:nlohmann::json::object());
+        const nlohmann::json downloads=response.ok?response.json:nlohmann::json::object();
+        m_overview->updateDownloads(downloads);
+        m_storage->updateDownloads(downloads);
+    });
+    if(currentTab()==Tab::Storage)
+        pollStorage();
+    m_logPanel->poll();
+}
+
+void DashboardApp::pollStorage()
+{
+    m_data.getJson("/api/storage", [this](const Response &response)
+    {
+        if(response.ok)
+            m_storage->updateStorage(response.json);
+    });
+    m_data.getJson("/api/storage/models", [this](const Response &response)
+    {
+        if(response.ok)
+            m_storage->updateModels(response.json);
+    });
+    m_data.getJson("/api/storage/cleanup/preview", [this](const Response &response)
+    {
+        if(response.ok)
+            m_storage->updateCleanup(response.json);
     });
 }
 

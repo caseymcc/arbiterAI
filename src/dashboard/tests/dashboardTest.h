@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <ctime>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,6 +16,9 @@
 /// --shots <dir> on the command line (tests/main.cpp); a temporary directory
 /// otherwise
 const std::string &shotDir();
+
+/// The tests' clock: 2026-11-23T00:00:00Z, so the fixtures' ages do not move.
+constexpr std::time_t FixtureNow=1795392000;
 
 /// A fixture JSON file of tests/fixtures/.
 nlohmann::json loadFixture(const std::string &name);

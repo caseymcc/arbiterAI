@@ -3,6 +3,7 @@
 
 #include <gweni/controls.h>
 #include <gweni/controls/dataTable.h>
+#include <gweni/controls/progressBar.h>
 #include <gweni/controls/toast.h>
 
 #include <nlohmann/json.hpp>
@@ -50,6 +51,10 @@ gweni::controls::DataTable *addTable(gweni::controls::Base *parent, int height,
 /// One table row per entry of \p rows; no rows: one row showing \p empty.
 void setRows(gweni::controls::DataTable *table, const std::vector<std::vector<std::string>> &rows,
     const std::string &empty);
+
+/// \p downloads (/api/downloads' "downloads") as rows in \p container, which
+/// is sized to them: the model, a progress bar, and the bytes, speed and ETA.
+void showDownloads(gweni::controls::Base *container, const nlohmann::json &downloads);
 
 /// A toast on \p control's canvas.
 void notify(gweni::controls::Base *control, gweni::controls::ToastKind kind, const std::string &text);

@@ -4,9 +4,11 @@
 #include "data/dataSource.h"
 #include "panels/logPanel.h"
 #include "panels/overviewPanel.h"
+#include "panels/storagePanel.h"
 
 #include <gweni/controls.h>
 
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <string>
@@ -47,8 +49,9 @@ public:
 
     /// \p url the page's URL, which picks the tab; \p pushPath is told the
     /// path of each tab the user switches to (the page's history).
+    /// \p now the clock the Storage tab's age colours are measured against
     DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, const std::string &url,
-        std::function<void(const std::string &path)> pushPath=nullptr);
+        std::function<void(const std::string &path)> pushPath=nullptr, std::function<std::time_t()> now=nullptr);
     ~DashboardApp();
 
     /// The page's URL changed (back, forward): show its tab, pushing nothing.
@@ -59,12 +62,15 @@ public:
 
     /// One round of requests; the timer calls it every PollSeconds.
     void poll();
+    /// the Storage tab's requests (poll() makes them while it shows)
+    void pollStorage();
 
     const std::string &version() const { return m_version->getText(); }
     const std::string &status() const { return m_status->getText(); }
     bool connected() const { return m_connected; }
 
     OverviewPanel &overview() { return *m_overview; }
+    StoragePanel &storage() { return *m_storage; }
     LogPanel &logPanel() { return *m_logPanel; }
     gweni::controls::TabButton *tabButton(Tab tab) const;
 
@@ -83,6 +89,7 @@ private:
     gweni::controls::TabControl *m_tabs;
     gweni::controls::TabButton *m_tabButtons[3];
     std::unique_ptr<OverviewPanel> m_overview;
+    std::unique_ptr<StoragePanel> m_storage;
     std::unique_ptr<LogPanel> m_logPanel;
     gweni::controls::TimerHandle m_pollTimer;
 

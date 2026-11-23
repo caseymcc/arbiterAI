@@ -1,5 +1,6 @@
 #include "widgets.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 
@@ -94,6 +95,48 @@ void setRows(gweni::controls::DataTable *table, const std::vector<std::vector<st
         gweni::controls::DataTableRow *row=table->addRow();
         for(size_t i=0; i<cells.size(); ++i)
             row->setCellText(static_cast<int>(i), cells[i]);
+    }
+}
+
+void showDownloads(gweni::controls::Base *container, const nlohmann::json &downloads)
+{
+    gweni::controls::Base::List previous=container->getChildren();
+    for(gweni::controls::Base *child:previous)
+        child->delayedDelete();
+    container->setHeight(downloads.is_array()?static_cast<int>(downloads.size())*24:0);
+
+    if(!downloads.is_array())
+        return;
+    for(const nlohmann::json &download:downloads)
+    {
+        gweni::controls::Base *row=container->newChild<gweni::controls::Base>();
+        row->setDock(gweni::DockPosition::Top);
+        row->setHeight(24);
+
+        gweni::controls::Label *name=row->newChild<gweni::controls::Label>();
+        name->setText(text(download, "model")+" "+text(download, "variant")+"  Downloading");
+        name->setDock(gweni::DockPosition::Left);
+        fixWidth(name, 320);
+
+        const double percent=number(download, "percent_complete");
+        gweni::controls::ProgressBar *bar=row->newChild<gweni::controls::ProgressBar>();
+        bar->setDock(gweni::DockPosition::Left);
+        fixWidth(bar, 240);
+        bar->setMargin(gweni::Margin(0, 6, 8, 6));
+        bar->setAutoLabel(false);
+        bar->setProgress(static_cast<float>(std::clamp(percent/100.0, 0.0, 1.0)));
+
+        std::string details=formatFixed(percent, 1)+"%";
+        if(number(download, "total_bytes")>0)
+            details+="   "+formatBytes(number(download, "bytes_downloaded"))+" / "+formatBytes(number(download, "total_bytes"));
+        if(number(download, "speed_mbps")>0)
+            details+="   "+formatFixed(number(download, "speed_mbps"), 1)+" MB/s";
+        if(number(download, "eta_seconds")>0)
+            details+="   ~"+formatFixed(number(download, "eta_seconds"), 0)+"s left";
+        gweni::controls::Label *info=row->newChild<gweni::controls::Label>();
+        info->setText(details);
+        info->setTextColor(palette::muted);
+        info->setDock(gweni::DockPosition::Center);
     }
 }
 

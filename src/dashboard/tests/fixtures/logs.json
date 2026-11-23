@@ -1,0 +1,52 @@
+{
+  "logs": [
+    {
+      "epoch_ms": 1795392000000,
+      "level": "info",
+      "message": "log line 0",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392000250,
+      "level": "debug",
+      "message": "log line 1",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392000500,
+      "level": "warning",
+      "message": "log line 2",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392000500,
+      "level": "info",
+      "message": "log line 3",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392001000,
+      "level": "error",
+      "message": "log line 4",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392001250,
+      "level": "info",
+      "message": "log line 5",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392001500,
+      "level": "critical",
+      "message": "log line 6",
+      "timestamp": ""
+    },
+    {
+      "epoch_ms": 1795392001750,
+      "level": "trace",
+      "message": "log line 7",
+      "timestamp": ""
+    }
+  ]
+}

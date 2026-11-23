@@ -15,6 +15,9 @@ int main()
     if(!window->ok())
         return 1;
 
+    // the log's Copy and Ctrl+C reach the page's clipboard
+    gweni::platform::useBrowserClipboard(true);
+
     auto *data=new arbiterAI::dashboard::FetchDataSource();
     auto *app=new arbiterAI::dashboard::DashboardApp(window->canvas(), *data, gweni::platform::currentUrl(),
         [](const std::string &path) { gweni::platform::pushUrl(path); });

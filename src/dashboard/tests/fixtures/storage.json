@@ -1,0 +1,10 @@
+{
+  "available_for_models_bytes": 835791314944,
+  "cleanup_enabled": true,
+  "free_disk_bytes": 429496729600,
+  "model_count": 4,
+  "models_directory": "/models",
+  "storage_limit_bytes": 0,
+  "total_disk_bytes": 2011859927040,
+  "used_by_models_bytes": 107374182400
+}

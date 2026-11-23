@@ -38,6 +38,10 @@ void DashboardTest::SetUp()
     m_data.setJson("/api/stats/swaps", loadFixture("swaps.json"));
     m_data.setJson("/api/scheduler/jobs", loadFixture("jobs.json"));
     m_data.setJson("/api/downloads", loadFixture("downloads.json"));
+    m_data.setJson("/api/storage", loadFixture("storage.json"));
+    m_data.setJson("/api/storage/models", loadFixture("storageModels.json"));
+    m_data.setJson("/api/storage/cleanup/preview", loadFixture("cleanupPreview.json"));
+    m_data.setJson("/api/logs?count=200", loadFixture("logs.json"));
 }
 
 void DashboardTest::TearDown()
@@ -49,7 +53,7 @@ void DashboardTest::TearDown()
 void DashboardTest::start(const std::string &url)
 {
     m_app=std::make_unique<arbiterAI::dashboard::DashboardApp>(m_headless->canvas(), m_data, url,
-        [this](const std::string &path) { m_pushed.push_back(path); });
+        [this](const std::string &path) { m_pushed.push_back(path); }, []() { return FixtureNow; });
     frames(2);
 }
 

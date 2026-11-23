@@ -1,0 +1,62 @@
+{
+  "models": [
+    {
+      "model": "gpt-oss-120b",
+      "variant": "Q4_K_M",
+      "filename": "gpt-oss-120b-Q4_K_M.gguf",
+      "file_size_bytes": 65498251264,
+      "file_size_display": "61.0 GB",
+      "downloaded_at": "2026-10-01T09:00:00Z",
+      "last_used_at": "2026-11-22T18:30:00Z",
+      "usage_count": 152,
+      "hot_ready": true,
+      "protected": false,
+      "runtime_state": "Loaded",
+      "file_count": 2
+    },
+    {
+      "model": "qwen3-8b",
+      "variant": "Q8_0",
+      "filename": "qwen3-8b-Q8_0.gguf",
+      "file_size_bytes": 8709518336,
+      "file_size_display": "8.1 GB",
+      "downloaded_at": "2026-09-15T12:00:00Z",
+      "last_used_at": "2026-11-01T08:00:00Z",
+      "usage_count": 17,
+      "hot_ready": false,
+      "protected": false,
+      "runtime_state": "Unloaded",
+      "file_count": 1
+    },
+    {
+      "model": "llama-3.1-8b",
+      "variant": "Q4_K_M",
+      "filename": "llama-3.1-8b-Q4_K_M.gguf",
+      "file_size_bytes": 4920733696,
+      "file_size_display": "4.6 GB",
+      "downloaded_at": "2026-08-02T12:00:00Z",
+      "last_used_at": "2026-09-30T08:00:00Z",
+      "usage_count": 3,
+      "hot_ready": false,
+      "protected": true,
+      "runtime_state": "Unloaded",
+      "file_count": 1
+    },
+    {
+      "model": "org/odd model",
+      "variant": "Q2_K",
+      "filename": "odd.gguf",
+      "file_size_bytes": 3000000000,
+      "file_size_display": "2.8 GB",
+      "downloaded_at": "2026-11-20T12:00:00Z",
+      "last_used_at": "",
+      "usage_count": 0,
+      "hot_ready": false,
+      "protected": false,
+      "runtime_state": "Unloaded",
+      "file_count": 1
+    }
+  ],
+  "total_size_bytes": 82128503296,
+  "total_size_display": "76.5 GB"
+}

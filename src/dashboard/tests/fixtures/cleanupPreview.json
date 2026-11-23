@@ -1,0 +1,15 @@
+{
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "model": "llama-3.1-8b",
+      "variant": "Q4_K_M"
+    },
+    {
+      "model": "qwen3-8b",
+      "variant": "Q8_0"
+    }
+  ],
+  "total_freeable_bytes": 13630252032,
+  "total_freeable_display": "12.7 GB"
+}
