@@ -21,8 +21,7 @@ namespace dashboard
 /// of /api/logs. Live off freezes the view, so lines can be selected and
 /// copied while the server keeps logging; turning it on or changing the
 /// level reloads it.
-class LogPanel
-{
+class LogPanel {
 public:
     static constexpr int Count=200;
 

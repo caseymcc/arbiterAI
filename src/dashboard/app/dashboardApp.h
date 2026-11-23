@@ -19,8 +19,7 @@ namespace arbiterAI
 namespace dashboard
 {
 
-enum class Tab
-{
+enum class Tab {
     Overview,
     Storage,
     Config
@@ -28,8 +27,7 @@ enum class Tab
 
 /// Where a dashboard path leads: /dashboard, /dashboard/storage,
 /// /dashboard/config, /dashboard/logs (the Overview with the log expanded).
-struct Route
-{
+struct Route {
     Tab tab=Tab::Overview;
     bool logs=false;
 };
@@ -41,8 +39,7 @@ std::string pathForTab(Tab tab);
 /// The whole dashboard on a canvas: a header with the version and the
 /// connection status, the tabs, and the log panel under them. It polls the
 /// server every PollSeconds through \p data, natively or in a page alike.
-class DashboardApp
-{
+class DashboardApp {
 public:
     static constexpr double PollSeconds=2.0;
 
@@ -76,6 +73,8 @@ public:
 
 private:
     void showTab(Tab tab);
+    /// a tab was chosen: its path pushed (unless navigating), its data asked for
+    void tabChanged();
     void setConnected(bool connected, const std::string &error=std::string());
 
     DataSource &m_data;

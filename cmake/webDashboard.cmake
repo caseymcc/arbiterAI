@@ -7,7 +7,7 @@
 #                     times larger); installs app.js/app.wasm/app.data and the
 #                     shell into ${ARBITERAI_DASHBOARD_ASSET_DIR}
 #   dashboard_native  x64-linux, the outer build type; builds dashboard_tests
-#                     (${ARBITERAI_DASHBOARD_TESTS})
+#                     (${ARBITERAI_DASHBOARD_TESTS}), with BUILD_TESTING only
 #
 # Either way it defines arbiterai_dashboard_assets, the library holding the
 # embedded files (src/server/dashboardAssetTable.h): with the dashboard, built
@@ -104,18 +104,20 @@ ExternalProject_Add(dashboard_web
 
 set(ARBITERAI_DASHBOARD_TESTS "${CMAKE_BINARY_DIR}/dashboard/native/dashboard_tests")
 
-ExternalProject_Add(dashboard_native
-    SOURCE_DIR "${ARBITERAI_DASHBOARD_SOURCE_DIR}"
-    BINARY_DIR "${CMAKE_BINARY_DIR}/dashboard/native"
-    CMAKE_ARGS
-        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-        -DCMAKE_TOOLCHAIN_FILE=${ARBITERAI_VCPKG_TOOLCHAIN}
-        -DVCPKG_TARGET_TRIPLET=x64-linux
-        -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}
-    BUILD_ALWAYS ON
-    BUILD_BYPRODUCTS "${ARBITERAI_DASHBOARD_TESTS}"
-    INSTALL_COMMAND ""
-)
+if(BUILD_TESTING)
+    ExternalProject_Add(dashboard_native
+        SOURCE_DIR "${ARBITERAI_DASHBOARD_SOURCE_DIR}"
+        BINARY_DIR "${CMAKE_BINARY_DIR}/dashboard/native"
+        CMAKE_ARGS
+            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+            -DCMAKE_TOOLCHAIN_FILE=${ARBITERAI_VCPKG_TOOLCHAIN}
+            -DVCPKG_TARGET_TRIPLET=x64-linux
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}
+        BUILD_ALWAYS ON
+        BUILD_BYPRODUCTS "${ARBITERAI_DASHBOARD_TESTS}"
+        INSTALL_COMMAND ""
+    )
+endif()
 
 enable_language(ASM)
 add_custom_command(

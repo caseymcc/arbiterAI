@@ -12,8 +12,7 @@ namespace dashboard
 {
 
 /// What a request to the server came back with.
-struct Response
-{
+struct Response {
     /// a 2xx status with a body that parsed (or none)
     bool ok=false;
     /// the HTTP status; 0 when the server could not be reached
@@ -28,8 +27,7 @@ using ResponseHandler=std::function<void(const Response &response)>;
 /// The server's REST API as the dashboard reads it: same-origin paths
 /// ("/api/stats"), JSON in and out. Handlers run on the UI thread, later
 /// (web) or before the call returns (fixtures).
-class DataSource
-{
+class DataSource {
 public:
     virtual ~DataSource()=default;
 

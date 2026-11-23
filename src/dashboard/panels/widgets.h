@@ -27,6 +27,9 @@ const gweni::Color bad(244, 67, 54);
 const gweni::Color info(100, 181, 246);
 }
 
+/// A model state's colour: Loaded, Ready, Downloading, the rest muted.
+gweni::Color stateColor(const std::string &state);
+
 /// A label docked at the top of \p parent.
 gweni::controls::Label *addHeading(gweni::controls::Base *parent, const std::string &text);
 
@@ -74,6 +77,8 @@ std::string urlEncode(const std::string &text);
 
 /// \p json[key] as a number, 0 when it is missing or not one.
 double number(const nlohmann::json &json, const char *key);
+/// \p json[key] as a boolean, false when it is missing or not one.
+bool flag(const nlohmann::json &json, const char *key);
 /// \p json[key] as text, \p fallback when it is missing or not a string.
 std::string text(const nlohmann::json &json, const char *key, const std::string &fallback=std::string());
 

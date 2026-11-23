@@ -18,13 +18,14 @@
 <div id="status">Loading dashboard&hellip;</div>
 <script>
   var statusEl=document.getElementById('status');
-  if(!document.createElement('canvas').getContext('webgl2'))
+  var webgl2=!!document.createElement('canvas').getContext('webgl2');
+  if(!webgl2)
     statusEl.textContent='The dashboard needs WebGL 2, which this browser does not provide.';
   var Module={
     canvas: document.getElementById('canvas'),
     locateFile: function(path) { return '/dashboard/'+path; },
-    onRuntimeInitialized: function() { statusEl.remove(); },
-    onAbort: function(what) { statusEl.textContent='The dashboard stopped: '+what; }
+    onRuntimeInitialized: function() { if(webgl2) statusEl.hidden=true; },
+    onAbort: function(what) { statusEl.textContent='The dashboard stopped: '+what; statusEl.hidden=false; }
   };
 </script>
 <script async src="/dashboard/app.js"></script>

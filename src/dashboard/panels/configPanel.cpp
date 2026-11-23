@@ -114,6 +114,7 @@ ContextFit contextFit(const nlohmann::json &option, double vramMb)
     const double perThousand=number(option, "memory_per_1k_context_mb");
     if(perThousand<=0 || vramMb<=0)
         return fit;
+    fit.known=true;
     const double baseMemory=number(option, "base_memory_mb");
     const double baseContext=number(option, "base_context_size");
     // whole 1K steps, as the slider moves
@@ -221,6 +222,8 @@ void ConfigPanel::load()
 
 void ConfigPanel::updateConfig(const nlohmann::json &config)
 {
+    if(!config.is_object())
+        return;
     m_loaded=true;
     m_models.clear();
     if(config.contains("startup_models") && config["startup_models"].is_array())
@@ -233,6 +236,8 @@ void ConfigPanel::updateConfig(const nlohmann::json &config)
 
 void ConfigPanel::updateHardware(const nlohmann::json &hardware)
 {
+    if(!hardware.is_object())
+        return;
     m_gpus=hardware.value("gpus", nlohmann::json::array());
     renderGpus();
     renderModels();
@@ -240,13 +245,28 @@ void ConfigPanel::updateHardware(const nlohmann::json &hardware)
 
 void ConfigPanel::updateOptions(const nlohmann::json &options)
 {
-    const nlohmann::json list=options.value("options", nlohmann::json::array());
-    if(!list.is_array())
+    if(!options.is_object() || !options.contains("options") || !options["options"].is_array())
         return;
-    for(const nlohmann::json &option:list)
+    m_optionReplies[text(options, "accelerator")]=options["options"];
+
+    // Vulkan's entries first, then those only another accelerator offers, as
+    // the old page merged them, whichever reply arrives first
+    m_options.clear();
+    auto merge=[this](const nlohmann::json &list)
     {
-        if(!findOption(text(option, "model"), text(option, "variant")))
-            m_options.push_back(option);
+        for(const nlohmann::json &option:list)
+        {
+            if(!findOption(text(option, "model"), text(option, "variant")))
+                m_options.push_back(option);
+        }
+    };
+    auto vulkan=m_optionReplies.find("vulkan");
+    if(vulkan!=m_optionReplies.end())
+        merge(vulkan->second);
+    for(const auto &[accelerator, list]:m_optionReplies)
+    {
+        if(accelerator!="vulkan")
+            merge(list);
     }
     renderModels();
 }
@@ -465,6 +485,11 @@ void ConfigPanel::renderEntryContext(size_t index)
         view.fit->setText("Auto: the server picks the largest context that fits the assigned devices' VRAM.");
         view.fit->setTextColor(palette::info);
     }
+    else if(fit.known && fit.tight==0)
+    {
+        view.fit->setText("Does not fit in "+formatMb(vram)+" of VRAM");
+        view.fit->setTextColor(palette::bad);
+    }
     else if(fit.tight>0)
     {
         view.fit->setText("Fits comfortably up to "+contextLabel(fit.likely)+", tight up to "+contextLabel(fit.tight)
@@ -556,19 +581,22 @@ void ConfigPanel::renderModels()
         view.context->setHeight(RowHeight);
         const nlohmann::json *option=findOption(entry.model, entry.variant);
         int maxContext=option&&number(*option, "max_context_size")>0?static_cast<int>(number(*option, "max_context_size")):131072;
+        // the placeholder max (no option yet) only bounds the slider; what
+        // the devices hold also lowers the saved value, as the old page did
         if(option)
         {
-            // never past what the devices hold at all
             const ContextFit fit=contextFit(*option, devicesVram(entry));
             if(fit.tight>0 && fit.tight<maxContext)
+            {
                 maxContext=std::max(fit.tight, 1024);
+                if(entry.contextSize>maxContext)
+                    m_models[i].contextSize=maxContext;
+            }
         }
         view.context->setRange(0.0f, static_cast<float>(maxContext));
         view.context->setNotchCount(maxContext/1024);
         view.context->setClampToNotches(true);
         view.context->setFloatValue(static_cast<float>(std::min(entry.contextSize, maxContext)), false);
-        if(entry.contextSize>maxContext)
-            m_models[i].contextSize=maxContext;
         view.context->onValueChanged.addCallback(view.context, [this, i](gweni::event::Handler &, gweni::event::Info)
         {
             const float value=m_entries[i].context->getFloatValue();
@@ -664,7 +692,7 @@ void ConfigPanel::renderGpus()
     {
         const int index=static_cast<int>(number(gpu, "index"));
         const double total=number(gpu, "vram_total_mb");
-        const bool overridden=gpu.value("vram_overridden", false);
+        const bool overridden=flag(gpu, "vram_overridden");
 
         gweni::controls::Base *row=m_gpuList->newChild<gweni::controls::Base>();
         row->setDock(gweni::DockPosition::Top);

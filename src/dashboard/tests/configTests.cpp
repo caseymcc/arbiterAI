@@ -62,10 +62,14 @@ TEST(ConfigFit, LikelyAtEightyFivePercentTightAtAllOfTheVram)
     EXPECT_EQ(fit.likely, 315392);
     EXPECT_EQ(fit.tight, 462848);
 
+    EXPECT_TRUE(fit.known);
+
     EXPECT_EQ(contextFit(option, 0).tight, 0);
-    EXPECT_EQ(contextFit({{"base_memory_mb", 1}}, 1000).tight, 0);
-    // less VRAM than the base: nothing fits
+    EXPECT_FALSE(contextFit(option, 0).known);
+    EXPECT_FALSE(contextFit({{"base_memory_mb", 1}}, 1000).known);
+    // less VRAM than the base: nothing fits, which is known
     EXPECT_EQ(contextFit(option, 32768).tight, 0);
+    EXPECT_TRUE(contextFit(option, 32768).known);
 }
 
 TEST_F(ConfigTest, LoadsOnceWhenTheTabFirstShows)
@@ -122,10 +126,11 @@ TEST_F(ConfigTest, ContextNoteShowsTheFitOnTheChosenDevices)
     EXPECT_EQ(fit->getText(), "Fits comfortably up to 308K, tight up to 452K on 120.0 GB of VRAM");
     EXPECT_TRUE(fit->getTextColor()==palette::good);
 
-    // on GPU1 alone (24 GB) the model does not fit at all: no note
+    // on GPU1 alone (24 GB) the model does not fit at all
     config().setDevice(0, 1, true);
     config().setDevice(0, 0, false);
-    EXPECT_EQ(fit->getText(), "");
+    EXPECT_EQ(fit->getText(), "Does not fit in 24.0 GB of VRAM");
+    EXPECT_TRUE(fit->getTextColor()==palette::bad);
 }
 
 TEST_F(ConfigTest, ChoosingAModelTakesItsDefaults)
@@ -170,6 +175,9 @@ TEST_F(ConfigTest, SaveAndLoadSavesTheConfigThenLoadsTheModel)
     click(config().entries()[0].save);
 
     EXPECT_EQ(writes(), std::vector<std::string>({"PUT /api/models/config", "PUT /api/server/config", "POST /api/models/gpt-oss-120b/load"}));
+    ASSERT_NE(lastBody("PUT", "/api/models/config"), nullptr);
+    ASSERT_NE(lastBody("PUT", "/api/server/config"), nullptr);
+    ASSERT_NE(lastBody("POST", "/api/models/gpt-oss-120b/load"), nullptr);
     EXPECT_EQ(*lastBody("PUT", "/api/models/config"), nlohmann::json({{"model", "gpt-oss-120b"}, {"api_format", "harmony"}}));
     EXPECT_EQ((*lastBody("PUT", "/api/server/config"))["startup_models"].size(), 2u);
     EXPECT_EQ(*lastBody("POST", "/api/models/gpt-oss-120b/load"), nlohmann::json({{"variant", "Q4_K_M"}, {"context_size", 32768},
@@ -272,6 +280,7 @@ TEST_F(ConfigTest, VramOverridesForEachGpu)
     ASSERT_NE(config().vram().dialog(), nullptr);
     config().vram().dialog()->getField()->setText("65536");
     config().vram().dialog()->close(gweni::dialogs::Result::Ok);
+    ASSERT_NE(lastBody("POST", "/api/hardware/vram-override"), nullptr);
     EXPECT_EQ(*lastBody("POST", "/api/hardware/vram-override"), nlohmann::json({{"gpu_index", 0}, {"vram_mb", 65536}}));
     // the GPU list is read again once the server took it
     EXPECT_GT(m_data.count("/api/hardware"), hardware);
@@ -285,4 +294,61 @@ TEST_F(ConfigTest, EntriesWithoutAModelAreNotSaved)
     const nlohmann::json body=config().configBody();
     ASSERT_EQ(body["startup_models"].size(), 2u);
     EXPECT_EQ(body["startup_models"][1]["model"], "qwen3-8b");
+}
+
+TEST_F(ConfigTest, ASavedContextAboveThePlaceholderMaxIsKept)
+{
+    // the config arrives before the options: until then the slider's max is
+    // a placeholder, which must not lower the saved value
+    nlohmann::json saved=loadFixture("serverConfig.json");
+    saved["startup_models"][0]["context_size"]=262144;
+    m_data.setJson("/api/server/config", saved);
+    nlohmann::json vulkan=loadFixture("startupOptionsVulkan.json");
+    vulkan["options"][0]["max_context_size"]=262144;
+    m_data.setJson("/api/server/startup-options?accelerator=vulkan", vulkan);
+    start("/dashboard/config");
+
+    EXPECT_EQ(config().models()[0].contextSize, 262144);
+    EXPECT_EQ(config().configBody()["startup_models"][0]["context_size"], 262144);
+    EXPECT_FLOAT_EQ(config().entries()[0].context->getFloatValue(), 262144.0f);
+}
+
+TEST_F(ConfigTest, AContextPastWhatTheDevicesHoldIsLowered)
+{
+    // 120 GB holds 452K of this model, so a saved 512K is lowered, as the old page did
+    nlohmann::json saved=loadFixture("serverConfig.json");
+    saved["startup_models"][0]["context_size"]=524288;
+    m_data.setJson("/api/server/config", saved);
+    nlohmann::json vulkan=loadFixture("startupOptionsVulkan.json");
+    vulkan["options"][0]["max_context_size"]=1048576;
+    m_data.setJson("/api/server/startup-options?accelerator=vulkan", vulkan);
+    start("/dashboard/config");
+
+    EXPECT_EQ(config().models()[0].contextSize, 462848);
+}
+
+TEST_F(ConfigTest, VulkanOptionsWinWhicheverReplyArrivesFirst)
+{
+    start("/dashboard");
+    config().updateOptions(loadFixture("startupOptionsCuda.json"));
+    config().updateOptions(loadFixture("startupOptionsVulkan.json"));
+
+    const std::vector<nlohmann::json> &options=config().options();
+    ASSERT_EQ(options.size(), 4u);
+    // Vulkan's own order, then what only CUDA offers
+    EXPECT_EQ(arbiterAI::dashboard::text(options[0], "model"), "gpt-oss-120b");
+    EXPECT_EQ(arbiterAI::dashboard::text(options[2], "model"), "qwen3-8b");
+    EXPECT_EQ(arbiterAI::dashboard::number(options[2], "base_memory_mb"), 9000);
+    EXPECT_EQ(arbiterAI::dashboard::text(options[3], "model"), "llama-3.1-8b");
+}
+
+TEST_F(ConfigTest, RepliesThatAreNotObjectsAreIgnored)
+{
+    start("/dashboard/config");
+    EXPECT_NO_THROW(config().updateHardware(nlohmann::json::array()));
+    EXPECT_NO_THROW(config().updateOptions(nlohmann::json("busy")));
+    EXPECT_NO_THROW(config().updateConfig(nlohmann::json::array()));
+    EXPECT_EQ(config().gpuRows().size(), 2u);
+    EXPECT_EQ(config().options().size(), 4u);
+    EXPECT_EQ(config().models().size(), 2u);
 }

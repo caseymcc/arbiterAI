@@ -26,8 +26,7 @@ nlohmann::json loadFixture(const std::string &name);
 /// The app on a headless canvas (surfaceless EGL, llvmpipe), its data from
 /// FixtureDataSource: the fixtures every tab polls are set before start().
 /// The clock is stepped, 60 frames a second, so frames(120) is one poll.
-class DashboardTest: public ::testing::Test
-{
+class DashboardTest: public ::testing::Test {
 protected:
     void SetUp() override;
     void TearDown() override;

@@ -33,6 +33,17 @@ gweni::controls::Base *addCard(gweni::controls::Base *parent, const std::string 
     return card;
 }
 
+gweni::Color stateColor(const std::string &state)
+{
+    if(state=="Loaded")
+        return palette::good;
+    if(state=="Ready")
+        return palette::info;
+    if(state=="Downloading")
+        return palette::warn;
+    return palette::muted;
+}
+
 void fixWidth(gweni::controls::Base *control, int width)
 {
     control->setSizeFlags({gweni::SizeFlag::Fixed, gweni::SizeFlag::Expand});
@@ -207,6 +218,14 @@ std::string urlEncode(const std::string &text)
         }
     }
     return out;
+}
+
+bool flag(const nlohmann::json &json, const char *key)
+{
+    if(!json.is_object())
+        return false;
+    auto it=json.find(key);
+    return it!=json.end() && it->is_boolean() && it->get<bool>();
 }
 
 double number(const nlohmann::json &json, const char *key)

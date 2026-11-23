@@ -15,11 +15,9 @@ namespace dashboard
 /// Canned replies for the tests: a path answers with the JSON or the failure
 /// given for it (a path with no reply is a 404), before the call returns. Every
 /// request is recorded.
-class FixtureDataSource: public DataSource
-{
+class FixtureDataSource: public DataSource {
 public:
-    struct Request
-    {
+    struct Request {
         std::string method;
         std::string path;
         nlohmann::json body;
@@ -41,8 +39,7 @@ public:
     void del(const std::string &path, ResponseHandler handler) override;
 
 private:
-    struct Reply
-    {
+    struct Reply {
         int status;
         std::string body;
     };

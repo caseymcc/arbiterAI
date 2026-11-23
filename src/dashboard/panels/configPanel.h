@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -21,8 +22,7 @@ namespace dashboard
 {
 
 /// One startup model as /api/server/config's startup_models holds it.
-struct StartupModel
-{
+struct StartupModel {
     std::string model;
     std::string variant;
     /// 0: the largest that fits the devices (the server's "auto")
@@ -37,11 +37,12 @@ struct StartupModel
 
 /// The context limits a model fits on some VRAM, from its startup option's
 /// memory figures (base memory at a base context, plus memory per 1K tokens):
-/// "likely" at 85% of the VRAM, "tight" at all of it. 0 when unknown.
-struct ContextFit
-{
+/// "likely" at 85% of the VRAM, "tight" at all of it. 0 when unknown or when
+/// nothing fits; \a known tells the two apart.
+struct ContextFit {
     int likely=0;
     int tight=0;
+    bool known=false;
 };
 ContextFit contextFit(const nlohmann::json &option, double vramMb);
 
@@ -50,8 +51,7 @@ ContextFit contextFit(const nlohmann::json &option, double vramMb);
 /// runtime options (KV cache types, flash attention, no host-visible VRAM),
 /// saved to /api/server/config and loaded at once; and the VRAM overrides.
 /// It loads once (load()) and is not polled, so edits are never overwritten.
-class ConfigPanel
-{
+class ConfigPanel {
 public:
     ConfigPanel(gweni::controls::Base *page, DataSource &data);
 
@@ -62,7 +62,8 @@ public:
 
     void updateConfig(const nlohmann::json &config);
     void updateHardware(const nlohmann::json &hardware);
-    /// a /api/server/startup-options reply, merged into the model list
+    /// a /api/server/startup-options reply, merged into the model list:
+    /// Vulkan's entry wins for a model and variant both accelerators offer
     void updateOptions(const nlohmann::json &options);
 
     void addModel();
@@ -87,8 +88,7 @@ public:
     const std::string &message() const { return m_message->getText(); }
 
     /// the controls of an entry, as built for it
-    struct Entry
-    {
+    struct Entry {
         gweni::controls::Base *box=nullptr;
         gweni::controls::Label *status=nullptr;
         gweni::controls::Button *save=nullptr;
@@ -107,8 +107,7 @@ public:
     };
     const std::vector<Entry> &entries() const { return m_entries; }
     gweni::controls::Button *addButton() const { return m_add; }
-    struct GpuRow
-    {
+    struct GpuRow {
         gweni::controls::Label *name=nullptr;
         gweni::controls::Label *memory=nullptr;
         gweni::controls::Button *overrideButton=nullptr;
@@ -143,6 +142,8 @@ private:
     std::vector<StartupModel> m_models;
     std::vector<Entry> m_entries;
     std::vector<nlohmann::json> m_options;
+    /// each accelerator's options, as its reply gave them
+    std::map<std::string, nlohmann::json> m_optionReplies;
     nlohmann::json m_gpus=nlohmann::json::array();
     std::vector<GpuRow> m_gpuRows;
     int m_listHeight=0;

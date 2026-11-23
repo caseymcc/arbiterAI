@@ -20,8 +20,7 @@ namespace dashboard
 {
 
 /// How long ago a model was last used, as its row's colour shows it.
-enum class Age
-{
+enum class Age {
     Fresh,  //!< 14 days or less
     Stale,  //!< 15 to 30 days
     Old     //!< more than 30 days, or never
@@ -35,8 +34,7 @@ std::string dateOf(const std::string &iso);
 /// The Storage tab (the old Downloaded Models page): the storage bar, the
 /// active downloads, the cleanup preview and the model files with their
 /// hot-ready and protected flags and a guarded delete.
-class StoragePanel
-{
+class StoragePanel {
 public:
     StoragePanel(gweni::controls::Base *page, DataSource &data, std::function<void()> refresh,
         std::function<std::time_t()> now=nullptr);

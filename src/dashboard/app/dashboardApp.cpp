@@ -11,6 +11,24 @@ namespace
 
 const char *TabNames[]={"Overview", "Storage", "Config"};
 
+/// A TabControl that says when its tab changed, by a click or by the arrow
+/// keys (TabButton's key handlers select the next tab without a press).
+class Tabs: public gweni::controls::TabControl
+{
+public:
+    GWENI_CONTROL_INLINE(Tabs, gweni::controls::TabControl) {}
+
+    std::function<void()> onChanged;
+
+    void onTabPressed(gweni::event::Info info) override
+    {
+        gweni::controls::TabButton *before=getCurrentButton();
+        ParentClass::onTabPressed(info);
+        if(getCurrentButton()!=before && onChanged)
+            onChanged();
+    }
+};
+
 /// The path of \p url: no scheme and host, no query or fragment, no trailing /.
 std::string pathOf(const std::string &url)
 {
@@ -95,30 +113,22 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
     m_logPanel=std::make_unique<LogPanel>(m_root, m_data);
     m_logPanel->setExpanded(route.logs);
 
-    m_tabs=m_root->newChild<gweni::controls::TabControl>();
+    Tabs *tabs=m_root->newChild<Tabs>();
+    m_tabs=tabs;
     m_tabs->setDock(gweni::DockPosition::Center);
     for(int i=0; i<3; ++i)
     {
         gweni::controls::Base *page=m_root->newChild<gweni::controls::Base>();
         page->setPadding(gweni::Padding(8, 8, 8, 8));
         m_tabButtons[i]=m_tabs->addPage(TabNames[i], page);
-        m_tabButtons[i]->onPressCaller.addCallback(m_tabButtons[i], [this, i](gweni::event::Handler &, gweni::event::Info)
-        {
-            if(!m_navigating && m_pushPath)
-                m_pushPath(pathForTab(static_cast<Tab>(i)));
-            // the Storage tab polls only while it shows: fill it now
-            if(static_cast<Tab>(i)==Tab::Storage && m_storage)
-                pollStorage();
-            // the Config tab loads once, when it first shows
-            if(static_cast<Tab>(i)==Tab::Config && m_config && !m_config->loaded())
-                m_config->load();
-        });
     }
     m_overview=std::make_unique<OverviewPanel>(tabButton(Tab::Overview)->getPage(), m_data, [this]() { poll(); });
     m_storage=std::make_unique<StoragePanel>(tabButton(Tab::Storage)->getPage(), m_data, [this]() { pollStorage(); }, std::move(now));
     m_config=std::make_unique<ConfigPanel>(tabButton(Tab::Config)->getPage(), m_data);
 
+    // the first poll below fills the tab the URL opens
     showTab(route.tab);
+    tabs->onChanged=[this]() { tabChanged(); };
     setConnected(false, "connecting...");
 
     m_pollTimer=canvas->every(PollSeconds, [this]() { poll(); }, m_root);
@@ -148,6 +158,19 @@ void DashboardApp::selectTab(Tab tab)
     tabButton(tab)->onPress(gweni::event::Info(tabButton(tab)));
 }
 
+void DashboardApp::tabChanged()
+{
+    const Tab tab=currentTab();
+    if(!m_navigating && m_pushPath)
+        m_pushPath(pathForTab(tab));
+    // the Storage tab polls only while it shows: fill it now
+    if(tab==Tab::Storage)
+        pollStorage();
+    // the Config tab loads once, when it first shows
+    if(tab==Tab::Config && !m_config->loaded())
+        m_config->load();
+}
+
 Tab DashboardApp::currentTab() const
 {
     for(int i=0; i<3; ++i)
@@ -164,14 +187,14 @@ void DashboardApp::poll()
     {
         m_data.getJson("/api/version", [this](const Response &response)
         {
-            if(!response.ok)
+            if(!response.ok || !response.json.is_object())
                 return;
             m_haveVersion=true;
-            std::string text="v"+response.json.value("version", std::string("?"));
-            std::string llama=response.json.value("llamaCppBuild", std::string());
+            std::string version="v"+text(response.json, "version", "?");
+            std::string llama=text(response.json, "llamaCppBuild");
             if(!llama.empty() && llama!="disabled")
-                text+="   llama.cpp "+llama;
-            m_version->setText(text);
+                version+="   llama.cpp "+llama;
+            m_version->setText(version);
         });
     }
 

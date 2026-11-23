@@ -293,3 +293,21 @@ TEST_F(OverviewTest, WritesTheWholeOverview)
     frames(2);
     shot("overview-bottom");
 }
+
+TEST_F(OverviewTest, ASplitModelShowsItsShareOnEachGpu)
+{
+    nlohmann::json stats=loadFixture("stats.json");
+    nlohmann::json &split=stats["models"][2];
+    split["gpu_indices"]={0, 1};
+    split["per_gpu_vram_mb"]={{"0", 4000}, {"1", 2100}};
+    m_data.setJson("/api/stats", stats);
+    start();
+
+    const auto &gpus=overview().gpus();
+    ASSERT_EQ(gpus.size(), 2u);
+    EXPECT_EQ(gpus[0].models->getText(), "gpt-oss-120b 65536MB   llama-3.1-8b 4000MB");
+    EXPECT_EQ(gpus[1].models->getText(), "llama-3.1-8b 2100MB");
+    // without device_allocations the VRAM cell lists the shares itself
+    EXPECT_EQ(rowCells(overview().modelsTable(), 2)[6], "6100 (GPU0:4000, GPU1:2100)");
+    EXPECT_EQ(rowCells(overview().modelsTable(), 0)[6], "65536");
+}

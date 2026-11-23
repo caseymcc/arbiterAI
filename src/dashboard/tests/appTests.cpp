@@ -173,3 +173,39 @@ TEST_F(DashboardTest, WritesAPngPerTab)
         EXPECT_GT(std::filesystem::file_size(path), 1000u)<<path;
     }
 }
+
+TEST_F(DashboardTest, ASelectionWithoutAPressPushesItsPath)
+{
+    start("/dashboard");
+    // as TabButton's arrow keys select the next tab: through the TabControl,
+    // with no press of the button
+    gweni::controls::TabButton *storage=m_app->tabButton(Tab::Storage);
+    gweni::event::Info info(storage);
+    info.controlCaller=storage;
+    storage->getTabControl()->onTabPressed(info);
+    EXPECT_EQ(m_app->currentTab(), Tab::Storage);
+    ASSERT_EQ(m_pushed.size(), 1u);
+    EXPECT_EQ(m_pushed[0], "/dashboard/storage");
+    EXPECT_GE(m_data.count("/api/storage"), 1u);
+}
+
+TEST_F(DashboardTest, PressingTheShownTabPushesNothing)
+{
+    start("/dashboard/storage");
+    click(m_app->tabButton(Tab::Storage));
+    EXPECT_TRUE(m_pushed.empty());
+}
+
+TEST_F(DashboardTest, AStorageLinkAsksForStorageOnce)
+{
+    start("/dashboard/storage");
+    EXPECT_EQ(m_data.count("/api/storage"), 1u);
+}
+
+TEST_F(DashboardTest, AVersionThatIsNotAnObjectIsIgnored)
+{
+    m_data.setJson("/api/version", nlohmann::json::array());
+    start();
+    EXPECT_EQ(m_app->version(), "");
+    EXPECT_TRUE(m_app->connected());
+}

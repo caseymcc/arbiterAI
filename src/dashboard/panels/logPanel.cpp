@@ -186,27 +186,27 @@ void LogPanel::updateLogs(const nlohmann::json &logs)
     size_t atShownEpoch=0;
     for(const nlohmann::json &entry:entries)
     {
-        const int64_t epoch=entry.value("epoch_ms", static_cast<int64_t>(0));
+        const int64_t epoch=static_cast<int64_t>(number(entry, "epoch_ms"));
         if(epoch<shownEpoch)
             continue;
         if(epoch==shownEpoch && atShownEpoch++<m_atLastEpoch)
             continue;
 
-        const std::string level=entry.value("level", std::string("info"));
+        const std::string level=text(entry, "level", "info");
         std::string upper=level;
         for(char &c:upper)
             c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         upper.resize(9, ' ');
-        m_view->append(gweni::controls::LogRow(formatLogTime(epoch)+"  "+upper+entry.value("message", std::string()), levelColor(level)));
+        m_view->append(gweni::controls::LogRow(formatLogTime(epoch)+"  "+upper+text(entry, "message"), levelColor(level)));
     }
 
     if(entries.empty())
         return;
-    m_lastEpoch=entries.back().value("epoch_ms", static_cast<int64_t>(0));
+    m_lastEpoch=static_cast<int64_t>(number(entries.back(), "epoch_ms"));
     m_atLastEpoch=0;
     for(const nlohmann::json &entry:entries)
     {
-        if(entry.value("epoch_ms", static_cast<int64_t>(0))==m_lastEpoch)
+        if(static_cast<int64_t>(number(entry, "epoch_ms"))==m_lastEpoch)
             ++m_atLastEpoch;
     }
 }

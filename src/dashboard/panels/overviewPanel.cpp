@@ -15,29 +15,20 @@ namespace
 const int TopRowHeight=150;
 const int TableHeight=170;
 
-gweni::Color stateColor(const std::string &state)
-{
-    if(state=="Loaded")
-        return palette::good;
-    if(state=="Ready")
-        return palette::info;
-    if(state=="Downloading")
-        return palette::warn;
-    return palette::muted;
-}
-
 std::string heapToolTip(const nlohmann::json &gpu)
 {
+    if(!gpu.is_object())
+        return std::string();
     const nlohmann::json heaps=gpu.value("memory_heaps", nlohmann::json::array());
     if(!heaps.is_array() || heaps.empty())
         return std::string();
 
-    const bool budget=gpu.value("has_memory_budget", false);
+    const bool budget=flag(gpu, "has_memory_budget");
     std::string tip=budget?"Vulkan Memory Heaps (VK_EXT_memory_budget)":"Vulkan Memory Heaps";
     for(const nlohmann::json &heap:heaps)
     {
         tip+="\nHeap "+std::to_string(static_cast<int>(number(heap, "index")))+" ["
-            +(heap.value("device_local", false)?"DEVICE_LOCAL":"host")+"]: size "+formatMb(number(heap, "size_mb"));
+            +(flag(heap, "device_local")?"DEVICE_LOCAL":"host")+"]: size "+formatMb(number(heap, "size_mb"));
         if(budget)
         {
             const double available=std::max(0.0, number(heap, "budget_mb")-number(heap, "usage_mb"));
@@ -53,6 +44,8 @@ std::string heapToolTip(const nlohmann::json &gpu)
 std::string allocationToolTip(const nlohmann::json &model)
 {
     std::string tip;
+    if(!model.is_object())
+        return tip;
     const nlohmann::json allocations=model.value("device_allocations", nlohmann::json::object());
 
     if(allocations.is_object())
@@ -153,7 +146,7 @@ OverviewPanel::OverviewPanel(gweni::controls::Base *page, DataSource &data, std:
 
     gweni::controls::Base *models=addCard(content, "LOADED MODELS", gweni::DockPosition::Top, 0, TableHeight+40);
     m_models=addTable(models, TableHeight, {{"Model", 200}, {"Variant", 90}, {"State", 90}, {"Context", 90}, {"Max Context", 100},
-        {"GPU(s)", 70}, {"VRAM (MB)", 90}, {"RAM (MB)", 80}, {"Pinned", 60}, {"Actions", 160}});
+        {"GPU(s)", 70}, {"VRAM (MB)", 160}, {"RAM (MB)", 80}, {"Pinned", 60}, {"Actions", 160}});
     setRows(m_models, {}, "No models loaded");
 
     gweni::controls::Base *requests=addCard(content, "ACTIVE REQUESTS", gweni::DockPosition::Top, 0, TableHeight+60);
@@ -262,7 +255,7 @@ void OverviewPanel::updateHistory(const nlohmann::json &history)
     for(size_t i=0; i<history.size() && i<10; ++i)
     {
         const nlohmann::json &run=history[history.size()-1-i];
-        const bool cancelled=run.value("cancelled", false);
+        const bool cancelled=flag(run, "cancelled");
         rows.push_back({run.contains("job_id")?"#"+run["job_id"].dump():"-",
             cancelled?"Cancelled":"Complete",
             text(run, "model"),
@@ -363,9 +356,10 @@ void OverviewPanel::renderGpus(const nlohmann::json &gpus)
             if(!index.is_number())
                 continue;
             const int gpu=index.get<int>();
-            double vram=number(model, "estimated_vram_mb");
-            if(model.contains("per_gpu_vram_mb"))
-                vram=std::max(vram, number(model["per_gpu_vram_mb"], std::to_string(gpu).c_str()));
+            // its share of this GPU, the whole estimate when there is none
+            double vram=model.contains("per_gpu_vram_mb")?number(model["per_gpu_vram_mb"], std::to_string(gpu).c_str()):0.0;
+            if(vram==0)
+                vram=number(model, "estimated_vram_mb");
             std::string &line=gpuModels[gpu];
             line+=(line.empty()?"":"   ")+text(model, "model")+" "+formatFixed(vram, 0)+"MB";
         }
@@ -423,8 +417,8 @@ void OverviewPanel::renderGpus(const nlohmann::json &gpus)
         GpuRow &row=m_gpuRows[i];
         const int index=static_cast<int>(number(gpu, "index"));
         const std::string backend=text(gpu, "backend");
-        const bool unified=gpu.value("unified_memory", false);
-        const bool overridden=gpu.value("vram_overridden", false);
+        const bool unified=flag(gpu, "unified_memory");
+        const bool overridden=flag(gpu, "vram_overridden");
 
         std::string memoryLabel="VRAM";
         double total=number(gpu, "vram_total_mb");
@@ -476,9 +470,11 @@ void OverviewPanel::renderModels(const nlohmann::json &models)
 
     for(const nlohmann::json &model:models)
     {
+        if(!model.is_object())
+            continue;
         const std::string name=text(model, "model");
         const std::string state=text(model, "state");
-        const bool pinned=model.value("pinned", false);
+        const bool pinned=flag(model, "pinned");
         double vram=number(model, "estimated_vram_mb");
         if(vram==0)
             vram=number(model, "vram_usage_mb");
@@ -492,7 +488,17 @@ void OverviewPanel::renderModels(const nlohmann::json &models)
         row->setCellText(4, number(model, "max_context_size")>0?formatThousands(static_cast<long long>(number(model, "max_context_size"))):"-");
         std::string gpus=joinIndices(model.value("gpu_indices", nlohmann::json::array()));
         row->setCellText(5, gpus.empty()?"-":gpus);
-        row->setCellText(6, formatFixed(vram, 0));
+        std::string vramText=formatFixed(vram, 0);
+        const nlohmann::json allocations=model.value("device_allocations", nlohmann::json::object());
+        const nlohmann::json perGpu=model.value("per_gpu_vram_mb", nlohmann::json::object());
+        if((!allocations.is_object() || allocations.empty()) && perGpu.is_object() && perGpu.size()>1)
+        {
+            std::string parts;
+            for(auto it=perGpu.begin(); it!=perGpu.end(); ++it)
+                parts+=(parts.empty()?"":", ")+std::string("GPU")+it.key()+":"+formatFixed(number(perGpu, it.key().c_str()), 0);
+            vramText+=" ("+parts+")";
+        }
+        row->setCellText(6, vramText);
         row->getCell(6)->setToolTipText(allocationToolTip(model));
         row->setCellText(7, formatFixed(number(model, "ram_usage_mb"), 0));
         row->setCellText(8, pinned?"Yes":"No");

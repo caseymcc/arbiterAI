@@ -27,17 +27,6 @@ gweni::Color ageColor(Age age)
     }
 }
 
-gweni::Color stateColor(const std::string &state)
-{
-    if(state=="Loaded")
-        return palette::good;
-    if(state=="Ready")
-        return palette::info;
-    if(state=="Downloading")
-        return palette::warn;
-    return palette::muted;
-}
-
 }//namespace
 
 Age ageOf(const std::string &iso, std::time_t now)
@@ -122,7 +111,7 @@ void StoragePanel::updateStorage(const nlohmann::json &storage)
     m_limit->setText(limit>0?"Limit: "+formatBytes(limit):"Limit: All free space");
     m_bar->setProgress(static_cast<float>(std::clamp(share, 0.0, 1.0)));
     m_bar->setText(formatBytes(used)+" / "+formatBytes(total)+" ("+formatFixed(share*100.0, 1)+"%)");
-    m_cleanup->setText(std::string("Auto-cleanup: ")+(storage.value("cleanup_enabled", false)?"ON":"OFF"));
+    m_cleanup->setText(std::string("Auto-cleanup: ")+(flag(storage, "cleanup_enabled")?"ON":"OFF"));
 }
 
 void StoragePanel::updateCleanup(const nlohmann::json &preview)
@@ -174,8 +163,8 @@ void StoragePanel::updateModels(const nlohmann::json &models)
         const std::string name=text(model, "model");
         const std::string variant=text(model, "variant");
         const std::string state=text(model, "runtime_state", "Unloaded");
-        const bool hotReady=model.value("hot_ready", false);
-        const bool isProtected=model.value("protected", false);
+        const bool hotReady=flag(model, "hot_ready");
+        const bool isProtected=flag(model, "protected");
         const bool guarded=hotReady || isProtected;
         const gweni::Color color=ageColor(ageOf(text(model, "last_used_at"), now));
 

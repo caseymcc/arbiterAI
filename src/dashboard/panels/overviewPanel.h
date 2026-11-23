@@ -28,8 +28,7 @@ namespace dashboard
 /// requests and downloads, and the recent inferences and swaps. Each update*()
 /// takes one endpoint's reply; the actions call \p refresh once the server has
 /// answered.
-class OverviewPanel
-{
+class OverviewPanel {
 public:
     /// the chart's points, one per poll (two minutes)
     static constexpr size_t ChartPoints=60;
@@ -67,8 +66,7 @@ public:
     gweni::controls::DataTable *swapsTable() const { return m_swaps; }
     gweni::controls::Base *downloads() const { return m_downloads; }
 
-    struct GpuRow
-    {
+    struct GpuRow {
         gweni::controls::Base *row=nullptr;
         gweni::controls::Label *name=nullptr;
         gweni::controls::Label *memory=nullptr;
@@ -86,7 +84,7 @@ private:
     void renderGpus(const nlohmann::json &gpus);
     void renderModels(const nlohmann::json &models);
     void renderChart();
-    /// a failed action's toast; \return whether it succeeded
+    /// a failed action's toast; \return whether it failed
     bool reportFailure(const Response &response, const std::string &what);
 
     DataSource &m_data;

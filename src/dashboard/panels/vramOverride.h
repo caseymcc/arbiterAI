@@ -18,8 +18,7 @@ namespace dashboard
 /// for the Overview's and the Config tab's GPU rows alike: a gweni prompt for
 /// the value, a toast for a bad value or a refusal, and \p refresh once the
 /// server took it.
-class VramOverride
-{
+class VramOverride {
 public:
     VramOverride(gweni::controls::Base *anchor, DataSource &data, std::function<void()> refresh);
 
