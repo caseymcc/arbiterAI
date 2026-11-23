@@ -1,12 +1,17 @@
 #ifndef _ARBITERAI_SERVER_ROUTES_H_
 #define _ARBITERAI_SERVER_ROUTES_H_
 
+#include "drainController.h"
+
 #include <httplib.h>
 
 namespace arbiterAI
 {
 namespace server
 {
+
+/// Gate and count requests with this controller; call before registerRoutes().
+void setDrainController(DrainController *drainController);
 
 /// Register all route handlers on the given HTTP server.
 void registerRoutes(httplib::Server &server);

@@ -291,6 +291,8 @@ endif()
         tests/dashboardAssetsTests.cpp
         tests/dashboardServingTests.cpp
         tests/updateManagerTests.cpp
+        tests/drainControllerTests.cpp
+        src/server/drainController.cpp
     )
 
     if(ARBITERAI_ENABLE_LLAMA)
@@ -337,6 +339,8 @@ endif()
             arbiterai
             arbiterai_dashboard_assets
             arbiterai_server_updates
+            httplib::httplib
+            spdlog::spdlog
             GTest::gtest
             GTest::gmock
             ZLIB::ZLIB
@@ -400,6 +404,8 @@ add_executable(arbiterAI-server
     src/server/main.cpp
     src/server/routes.h
     src/server/routes.cpp
+    src/server/drainController.h
+    src/server/drainController.cpp
 )
 
 target_include_directories(arbiterAI-server

@@ -93,7 +93,8 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
     },
     "updates": {
         "check": true,
-        "interval_hours": 24
+        "interval_hours": 24,
+        "drain_timeout_s": 60
     }
 }
 ```
@@ -144,12 +145,23 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 |-------|------|---------|-------------|
 | `check` | `bool` | `true` | Check GitHub Releases for a newer server release, at startup and then every `interval_hours` (see [`GET /api/update`](#get-apiupdate)) |
 | `interval_hours` | `int` | `24` | Hours between checks (1–8760) |
+| `drain_timeout_s` | `int` | `60` | Seconds a graceful stop waits for in-flight work (see [Stopping the Server](#stopping-the-server)) |
 
-Both can be changed without a restart through `PUT /api/server/config` with
+`check` and `interval_hours` can be changed without a restart through `PUT /api/server/config` with
 `{"updates": {"check": false, "interval_hours": 6}}`: the change is saved to the config file
-and applied at once. Only these two keys are accepted; any other keys already in the file's
+and applied at once. Only these two keys are accepted (`drain_timeout_s` is read from the file at startup); any other keys already in the file's
 `updates` block are kept as they are. `GET /api/server/config` returns the current values as
 `updates`. An invalid `updates` block in the file is ignored at startup with a warning (defaults apply).
+
+### Stopping the Server
+
+On `SIGTERM` or `SIGINT` (`systemctl stop`, `docker stop`, Ctrl-C) the server drains before it exits:
+
+1. New requests get `503` with `Retry-After` and the error code `server_shutting_down`.
+2. In-flight requests (streamed responses until their last chunk is written), scheduler jobs and model downloads get up to `updates.drain_timeout_s` to finish.
+3. The server stops listening, stops the inference scheduler, unloads every model, logs `shutdown complete` and exits `0`.
+
+A second signal exits at once. If requests are still running 5 seconds after the drain timeout, the server logs that and exits `1` without unloading models.
 
 ### Examples
 

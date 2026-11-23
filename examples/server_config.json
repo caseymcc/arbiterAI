@@ -62,6 +62,7 @@
     },
     "updates": {
         "check": true,
-        "interval_hours": 24
+        "interval_hours": 24,
+        "drain_timeout_s": 60
     }
 }

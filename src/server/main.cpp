@@ -1,6 +1,7 @@
 #include "routes.h"
 #include "updateRoutes.h"
 #include "logBuffer.h"
+#include "drainController.h"
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/hardwareDetector.h"
@@ -24,6 +25,11 @@
 #include <map>
 #include <csignal>
 #include <cstdlib>
+#include <condition_variable>
+#include <cstring>
+#include <functional>
+#include <mutex>
+#include <pthread.h>
 
 namespace
 {
@@ -421,6 +427,91 @@ int64_t parseStorageLimit(const std::string &str)
     return std::stoll(str);
 }
 
+/// SIGTERM/SIGINT are blocked in every thread and taken by sigwait() on a
+/// thread of their own, so the drain runs as ordinary code, not in a handler.
+class StopSignals {
+public:
+    StopSignals()
+    {
+        sigemptyset(&m_signals);
+        sigaddset(&m_signals, SIGTERM);
+        sigaddset(&m_signals, SIGINT);
+    }
+
+    /// Must run before any other thread starts, so they all inherit the mask.
+    void block()
+    {
+        pthread_sigmask(SIG_BLOCK, &m_signals, nullptr);
+    }
+
+    /// The first signal runs onStop on its own thread; any signal after it,
+    /// or after shuttingDown(), exits the process at once.
+    void start(std::function<void()> onStop)
+    {
+        m_onStop=std::move(onStop);
+        m_stopThread=std::thread([this]()
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_cv.wait(lock, [this]() { return m_stopRequested||m_shuttingDown; });
+            if(!m_stopRequested)
+                return;
+            lock.unlock();
+            m_onStop();
+        });
+
+        std::thread([this]()
+        {
+            while(true)
+            {
+                int sig=0;
+                if(sigwait(&m_signals, &sig)!=0)
+                    continue;
+
+                std::unique_lock<std::mutex> lock(m_mutex);
+                if(m_stopRequested||m_shuttingDown)
+                {
+                    lock.unlock();
+                    spdlog::warn("Received {} again, exiting now", strsignal(sig));
+                    spdlog::default_logger()->flush();
+                    std::_Exit(128+sig);
+                }
+                m_stopRequested=true;
+                lock.unlock();
+                spdlog::info("Received {}, shutting down (send it again to exit at once)", strsignal(sig));
+                m_cv.notify_all();
+            }
+        }).detach();
+    }
+
+    /// For onStop: wait until shuttingDown() has been called.
+    bool waitForShutdown(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        return m_cv.wait_for(lock, timeout, [this]() { return m_shuttingDown; });
+    }
+
+    /// The server has stopped listening: no drain is started from here on.
+    void shuttingDown()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_shuttingDown=true;
+        }
+        m_cv.notify_all();
+        if(m_stopThread.joinable())
+            m_stopThread.join();
+    }
+
+private:
+    sigset_t m_signals;
+    std::function<void()> m_onStop;
+    std::thread m_stopThread;
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    bool m_stopRequested=false;
+    bool m_shuttingDown=false;
+};
+
 void printUsage()
 {
     std::cout<<"Usage: arbiterAI-server [options]\n"
@@ -436,6 +527,10 @@ void printUsage()
 
 int main(int argc, char *argv[])
 {
+    // Static: the signal thread is detached and may outlive main's locals.
+    static StopSignals stopSignals;
+    stopSignals.block();
+
     // ── Parse CLI — only --config and --help ──────────────────────
     std::string configPath;
 
@@ -554,6 +649,13 @@ int main(int argc, char *argv[])
     if(cfg.contains("updates")&&!arbiterAI::server::readUpdatePolicy(cfg["updates"], updatePolicy, updatesError))
     {
         updatePolicy=arbiterAI::server::UpdatePolicy();
+    }
+    int drainTimeoutSec=60;
+    if(cfg.contains("updates")&&cfg["updates"].is_object())
+    {
+        const nlohmann::json &drainTimeout=cfg["updates"].value("drain_timeout_s", nlohmann::json());
+        if(drainTimeout.is_number_integer())
+            drainTimeoutSec=drainTimeout.get<int>();
     }
 
     // ── Configure logging ────────────────────────────────────────
@@ -799,6 +901,17 @@ int main(int argc, char *argv[])
 
     // ── HTTP server ──────────────────────────────────────────────
     httplib::Server server;
+    arbiterAI::server::DrainController drainController;
+
+    drainController.addBusyProbe("scheduler_jobs", []()
+    {
+        return arbiterAI::InferenceScheduler::instance().getActiveJobs().size();
+    });
+    drainController.addBusyProbe("downloads", []()
+    {
+        return arbiterAI::ModelRuntime::instance().getActiveDownloadSnapshots().size();
+    });
+    arbiterAI::server::setDrainController(&drainController);
 
     arbiterAI::server::registerRoutes(server);
     arbiterAI::server::setServerConfigPath(configPath);
@@ -868,7 +981,30 @@ int main(int argc, char *argv[])
     spdlog::info("Starting server on {}:{}", host, port);
     spdlog::info("Dashboard: http://{}:{}/dashboard", host=="0.0.0.0"?"localhost":host, port);
 
+    stopSignals.start([&drainController, &server, drainTimeoutSec]()
+    {
+        spdlog::info("Draining: refusing new requests, waiting up to {} s for in-flight work", drainTimeoutSec);
+        bool drained=drainController.drain(std::chrono::seconds(drainTimeoutSec));
+        if(drained)
+            spdlog::info("Drain complete");
+
+        // A signal during startup arrives before listen() has bound.
+        server.wait_until_ready();
+        server.stop();
+
+        // listen() joins the request threads, so a request still running
+        // after the drain timeout would hold it; do not wait for it.
+        if(!drained&&!stopSignals.waitForShutdown(std::chrono::seconds(5)))
+        {
+            spdlog::error("Requests still running after the drain timeout, exiting without unloading models");
+            spdlog::default_logger()->flush();
+            std::_Exit(1);
+        }
+    });
+
     bool listenOk=server.listen(host, port);
+
+    stopSignals.shuttingDown();
 
     // Stop scheduler worker threads before static destruction tears down
     // the singletons (ModelRuntime, TelemetryCollector) they depend on.
@@ -883,5 +1019,18 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    for(const arbiterAI::LoadedModel &model:arbiterAI::ModelRuntime::instance().getModelStates())
+    {
+        if(model.state==arbiterAI::ModelState::Loaded||model.state==arbiterAI::ModelState::Ready)
+        {
+            spdlog::info("Unloading model '{}'", model.modelName);
+            // A pinned model only drops to Ready on unload.
+            ai.unpinModel(model.modelName);
+            ai.unloadModel(model.modelName);
+        }
+    }
+
+    spdlog::info("shutdown complete");
+    spdlog::default_logger()->flush();
     return 0;
 }

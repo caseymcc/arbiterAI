@@ -31,6 +31,7 @@ namespace
 {
 
 std::string g_overridePath;
+DrainController *g_drainController=nullptr;
 std::string g_serverConfigPath;
 std::mutex g_serverConfigMutex;
 constexpr const char *STARTUP_ACCELERATOR_CPU="cpu";
@@ -1458,12 +1459,23 @@ void setOverridePath(const std::string &path)
 
 void handleGetSchedulerJobs(const httplib::Request &, httplib::Response &res);
 
+void setDrainController(DrainController *drainController)
+{
+    g_drainController=drainController;
+}
+
 void registerRoutes(httplib::Server &server)
 {
+    if(g_drainController)
+        g_drainController->attach(server);
+
     // Ensure POST/PUT/DELETE requests without a body include Content-Length: 0.
     // httplib's read_content() rejects requests that lack Content-Length,
     // but many REST clients omit it for bodyless POST (e.g. /api/models/:name/load).
-    server.set_pre_routing_handler([](const httplib::Request &req, httplib::Response &) -> httplib::Server::HandlerResponse {
+    server.set_pre_routing_handler([](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse {
+        if(g_drainController&&g_drainController->gate(req, res)==httplib::Server::HandlerResponse::Handled)
+            return httplib::Server::HandlerResponse::Handled;
+
         if((req.method=="POST"||req.method=="PUT"||req.method=="DELETE")
             &&!req.has_header("Content-Length")
             &&!req.has_header("Transfer-Encoding"))
