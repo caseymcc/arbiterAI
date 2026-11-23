@@ -1,6 +1,7 @@
 #include "routes.h"
 #include "dashboardAssets.h"
 #include "logBuffer.h"
+#include "updateRoutes.h"
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/modelManager.h"
@@ -660,6 +661,12 @@ nlohmann::json buildServerConfigResponse(const nlohmann::json &cfg)
         {"detected_accelerators", detectedAccelerators},
         {"effective_startup_default", resolveEffectiveStartupDefault(cfg, hw)}
     };
+
+    UpdatePolicy updatePolicy;
+    std::string updatesError;
+    if(cfg.contains("updates") && !readUpdatePolicy(cfg["updates"], updatePolicy, updatesError))
+        updatePolicy=UpdatePolicy();
+    response["updates"]=updatePolicyJson(updatePolicy);
 
     if(cfg.contains("startup_models")&&cfg["startup_models"].is_array())
     {
@@ -1490,6 +1497,7 @@ void registerRoutes(httplib::Server &server)
 
     // Version
     server.Get("/api/version", handleGetVersion);
+    registerUpdateRoutes(server);
 
     // Server config
     server.Get("/api/server/config", handleGetServerConfig);
@@ -3046,12 +3054,27 @@ void handleSetServerConfig(const httplib::Request &req, httplib::Response &res)
         cfg["startup_models"]=body["startup_models"];
     }
 
+    UpdatePolicy updatePolicy;
+    if(body.contains("updates"))
+    {
+        if(!mergeUpdatesConfig(cfg, body["updates"], updatePolicy, error))
+        {
+            res.status=400;
+            res.set_content(errorJson(error, "invalid_request_error", "updates", "invalid_value").dump(), "application/json");
+            return;
+        }
+    }
+
     if(!saveServerConfigJson(cfg, error))
     {
         res.status=500;
         res.set_content(errorJson("Failed to save server config: "+error).dump(), "application/json");
         return;
     }
+
+    UpdateManager *updates=updateManager();
+    if(body.contains("updates") && updates)
+        updates->setPolicy(updatePolicy);
 
     res.set_content(buildServerConfigResponse(cfg).dump(), "application/json");
 }

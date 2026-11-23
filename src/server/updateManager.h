@@ -4,11 +4,13 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
 namespace arbiterAI
 {
@@ -114,6 +116,73 @@ private:
     std::mutex m_checkMutex;
     mutable std::mutex m_statusMutex;
     UpdateStatus m_status;
+};
+
+/// The release list of a GitHub repository ("owner/name"), from
+/// \p apiBase/repos/<repo>/releases?per_page=100.
+class GitHubReleaseSource:public ReleaseSource {
+public:
+    explicit GitHubReleaseSource(std::string repo, std::string apiBase="https://api.github.com");
+
+    ReleaseFetch fetch(const std::string &etag) override;
+
+private:
+    std::string m_url;
+};
+
+/// The "updates" block of the server config that this task reads.
+struct UpdatePolicy {
+    bool check=true;
+    int intervalHours=24;
+};
+
+/// Reads check and interval_hours from an "updates" object, keeping the
+/// defaults in \p policy for keys it lacks. False with \p error on a wrong type
+/// or an interval_hours under 1.
+bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::string &error);
+
+/// Puts the check and interval_hours of \p body (a PUT /api/server/config
+/// "updates" object) into the "updates" object of \p cfg, leaving its other
+/// keys alone; \p policy is the merged block's. False with \p error, and \p cfg
+/// unchanged, when the request or the merged block is invalid.
+bool mergeUpdatesConfig(nlohmann::json &cfg, const nlohmann::json &body, UpdatePolicy &policy, std::string &error);
+
+/// The "updates" object of GET /api/server/config.
+nlohmann::json updatePolicyJson(const UpdatePolicy &policy);
+
+/// Runs an UpdateChecker on its own thread: once at start, then every
+/// interval while the policy has check on. Nothing waits on that thread.
+class UpdateManager {
+public:
+    UpdateManager(std::unique_ptr<ReleaseSource> source, std::string currentVersion);
+    ~UpdateManager();
+
+    /// How long an hour of interval_hours is (tests shorten it).
+    void setIntervalUnit(std::chrono::milliseconds unit);
+
+    void start(const UpdatePolicy &policy);
+    void setPolicy(const UpdatePolicy &policy);
+    UpdatePolicy policy() const;
+
+    /// A check on the calling thread, whatever the policy; returns statusJson().
+    nlohmann::json checkNow();
+    nlohmann::json statusJson() const;
+
+    /// Stops and joins the thread; waits for a check in flight.
+    void stop();
+
+private:
+    void run();
+
+    UpdateChecker m_checker;
+
+    mutable std::mutex m_mutex;
+    std::condition_variable m_wake;
+    UpdatePolicy m_policy;
+    std::chrono::milliseconds m_intervalUnit=std::chrono::hours(1);
+    bool m_policyChanged=false;
+    bool m_stopping=false;
+    std::thread m_thread;
 };
 
 } // namespace server

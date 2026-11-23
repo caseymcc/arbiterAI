@@ -379,11 +379,14 @@ target_link_libraries(arbiterai_dashboard_assets PUBLIC httplib::httplib)
 add_library(arbiterai_server_updates STATIC
     src/server/updateManager.h
     src/server/updateManager.cpp
+    src/server/updateRoutes.h
+    src/server/updateRoutes.cpp
 )
 target_include_directories(arbiterai_server_updates PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/server")
 target_link_libraries(arbiterai_server_updates
     PUBLIC
         nlohmann_json::nlohmann_json
+        httplib::httplib
     PRIVATE
         cpr::cpr
         spdlog::spdlog

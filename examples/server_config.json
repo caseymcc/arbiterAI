@@ -59,5 +59,9 @@
         "directory": "",
         "rotate_hour": 0,
         "retain_days": 7
+    },
+    "updates": {
+        "check": true,
+        "interval_hours": 24
     }
 }

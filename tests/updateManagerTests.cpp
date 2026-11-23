@@ -1,8 +1,14 @@
 #include "updateManager.h"
+#include "updateRoutes.h"
 
 #include <gtest/gtest.h>
+#include <httplib.h>
 
+#include <atomic>
+#include <condition_variable>
 #include <deque>
+#include <mutex>
+#include <thread>
 #include <memory>
 #include <string>
 #include <vector>
@@ -286,4 +292,337 @@ TEST_F(UpdateCheckerTest, StatusJsonHasTheApiFields)
     ASSERT_TRUE(after["checked_at"].is_string());
     EXPECT_EQ(after["checked_at"].get<std::string>().size(), 20u);
     EXPECT_TRUE(after["last_error"].is_null());
+}
+
+namespace
+{
+
+using arbiterAI::server::UpdateManager;
+using arbiterAI::server::UpdatePolicy;
+
+/// Answers every fetch with one newer release, and counts them.
+class CountingSource:public arbiterAI::server::ReleaseSource {
+public:
+    struct State {
+        std::mutex mutex;
+        std::condition_variable changed;
+        int fetches=0;
+    };
+
+    explicit CountingSource(std::shared_ptr<State> state):m_state(std::move(state)) {}
+
+    ReleaseFetch fetch(const std::string &) override
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->fetches++;
+        }
+        m_state->changed.notify_all();
+        return ok(nlohmann::json::array({release("v0.1.16")}));
+    }
+
+private:
+    std::shared_ptr<State> m_state;
+};
+
+class UpdateManagerTest:public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        m_manager=std::make_unique<UpdateManager>(std::make_unique<CountingSource>(m_state), "0.1.15");
+    }
+
+    void TearDown() override
+    {
+        arbiterAI::server::setUpdateManager(nullptr);
+        m_manager->stop();
+    }
+
+    bool waitForFetches(int count, std::chrono::milliseconds timeout=std::chrono::milliseconds(2000))
+    {
+        std::unique_lock<std::mutex> lock(m_state->mutex);
+        return m_state->changed.wait_for(lock, timeout, [&]() { return m_state->fetches>=count; });
+    }
+
+    int fetches()
+    {
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+        return m_state->fetches;
+    }
+
+    std::shared_ptr<CountingSource::State> m_state=std::make_shared<CountingSource::State>();
+    std::unique_ptr<UpdateManager> m_manager;
+};
+
+UpdatePolicy policy(bool check, int intervalHours)
+{
+    UpdatePolicy result;
+    result.check=check;
+    result.intervalHours=intervalHours;
+    return result;
+}
+
+} // namespace
+
+TEST_F(UpdateManagerTest, ChecksAtStart)
+{
+    m_manager->start(policy(true, 24));
+
+    EXPECT_TRUE(waitForFetches(1));
+    // the next one is a day away
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(fetches(), 1);
+}
+
+TEST_F(UpdateManagerTest, ChecksAgainEveryInterval)
+{
+    m_manager->setIntervalUnit(std::chrono::milliseconds(20));
+    m_manager->start(policy(true, 1));
+
+    EXPECT_TRUE(waitForFetches(3));
+}
+
+TEST_F(UpdateManagerTest, CheckOffMakesNoRequest)
+{
+    m_manager->setIntervalUnit(std::chrono::milliseconds(10));
+    m_manager->start(policy(false, 1));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(fetches(), 0);
+}
+
+TEST_F(UpdateManagerTest, TurningCheckOnLiveStartsChecking)
+{
+    m_manager->start(policy(false, 24));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ASSERT_EQ(fetches(), 0);
+
+    m_manager->setPolicy(policy(true, 24));
+    EXPECT_TRUE(waitForFetches(1));
+}
+
+TEST_F(UpdateManagerTest, TurningCheckOffLiveStopsChecking)
+{
+    m_manager->setIntervalUnit(std::chrono::milliseconds(10));
+    m_manager->start(policy(true, 1));
+    ASSERT_TRUE(waitForFetches(2));
+
+    m_manager->setPolicy(policy(false, 1));
+    // a check the thread had already begun may still land
+    int afterOff=fetches()+1;
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_LE(fetches(), afterOff);
+}
+
+TEST_F(UpdateManagerTest, ShorterIntervalLiveTakesEffect)
+{
+    m_manager->setIntervalUnit(std::chrono::milliseconds(10));
+    m_manager->start(policy(true, 1000));
+    ASSERT_TRUE(waitForFetches(1));
+
+    m_manager->setPolicy(policy(true, 1));
+    EXPECT_TRUE(waitForFetches(3));
+}
+
+TEST_F(UpdateManagerTest, StopDoesNotWaitForTheInterval)
+{
+    m_manager->setIntervalUnit(std::chrono::milliseconds(100));
+    m_manager->start(policy(true, 30));
+    ASSERT_TRUE(waitForFetches(1));
+    // let the thread reach its wait for the next check
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::chrono::steady_clock::time_point before=std::chrono::steady_clock::now();
+    m_manager->stop();
+    EXPECT_LT(std::chrono::steady_clock::now()-before, std::chrono::seconds(1));
+}
+
+TEST_F(UpdateManagerTest, GetUpdateRouteReturnsStatus)
+{
+    m_manager->start(policy(false, 24));
+    m_manager->checkNow();
+    arbiterAI::server::setUpdateManager(m_manager.get());
+
+    httplib::Request req;
+    httplib::Response res;
+    arbiterAI::server::handleGetUpdate(req, res);
+
+    EXPECT_EQ(res.status, -1);
+    nlohmann::json body=nlohmann::json::parse(res.body);
+    EXPECT_EQ(body["current"], "0.1.15");
+    EXPECT_EQ(body["latest"], "0.1.16");
+    EXPECT_EQ(body["update_available"], true);
+    EXPECT_EQ(fetches(), 1);
+}
+
+TEST_F(UpdateManagerTest, CheckRouteChecksNow)
+{
+    m_manager->start(policy(false, 24));
+    arbiterAI::server::setUpdateManager(m_manager.get());
+
+    httplib::Request req;
+    httplib::Response res;
+    arbiterAI::server::handleCheckUpdate(req, res);
+
+    EXPECT_EQ(fetches(), 1);
+    nlohmann::json body=nlohmann::json::parse(res.body);
+    EXPECT_EQ(body["latest"], "0.1.16");
+    EXPECT_TRUE(body["checked_at"].is_string());
+}
+
+TEST_F(UpdateManagerTest, RoutesWithoutManagerAnswer503)
+{
+    httplib::Request req;
+    httplib::Response res;
+    arbiterAI::server::handleGetUpdate(req, res);
+    EXPECT_EQ(res.status, 503);
+
+    httplib::Response checkRes;
+    arbiterAI::server::handleCheckUpdate(req, checkRes);
+    EXPECT_EQ(checkRes.status, 503);
+}
+
+TEST(UpdatePolicyTest, ReadsKeysAndKeepsDefaults)
+{
+    UpdatePolicy result;
+    std::string error;
+    ASSERT_TRUE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"interval_hours", 6}}), result, error));
+    EXPECT_TRUE(result.check);
+    EXPECT_EQ(result.intervalHours, 6);
+
+    ASSERT_TRUE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"check", false}}), result, error));
+    EXPECT_FALSE(result.check);
+    EXPECT_EQ(result.intervalHours, 6);
+}
+
+TEST(UpdatePolicyTest, RejectsBadValues)
+{
+    UpdatePolicy result;
+    std::string error;
+    EXPECT_FALSE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"check", "yes"}}), result, error));
+    EXPECT_EQ(error, "'updates.check' must be a boolean");
+    EXPECT_FALSE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"interval_hours", 0}}), result, error));
+    EXPECT_FALSE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"interval_hours", 1.5}}), result, error));
+    EXPECT_FALSE(arbiterAI::server::readUpdatePolicy(nlohmann::json::array(), result, error));
+    EXPECT_TRUE(result.check);
+    EXPECT_EQ(result.intervalHours, 24);
+}
+
+TEST(UpdatePolicyTest, MergeKeepsOtherUpdateKeys)
+{
+    nlohmann::json cfg={{"port", 8080}, {"updates", {{"check", true}, {"allow_apply", false}}}};
+    UpdatePolicy result;
+    std::string error;
+    ASSERT_TRUE(arbiterAI::server::mergeUpdatesConfig(cfg, {{"interval_hours", 6}, {"auto_apply", true}}, result, error));
+
+    EXPECT_EQ(cfg["updates"]["interval_hours"], 6);
+    EXPECT_EQ(cfg["updates"]["check"], true);
+    EXPECT_EQ(cfg["updates"]["allow_apply"], false);
+    EXPECT_FALSE(cfg["updates"].contains("auto_apply"));
+    EXPECT_EQ(cfg["port"], 8080);
+    EXPECT_TRUE(result.check);
+    EXPECT_EQ(result.intervalHours, 6);
+}
+
+TEST(UpdatePolicyTest, MergeRejectsBadValuesAndLeavesConfig)
+{
+    nlohmann::json cfg={{"updates", {{"check", true}}}};
+    nlohmann::json original=cfg;
+    UpdatePolicy result;
+    std::string error;
+    EXPECT_FALSE(arbiterAI::server::mergeUpdatesConfig(cfg, {{"interval_hours", -1}}, result, error));
+    EXPECT_EQ(cfg, original);
+
+    nlohmann::json badFile={{"updates", {{"check", "yes"}}}};
+    nlohmann::json badOriginal=badFile;
+    EXPECT_FALSE(arbiterAI::server::mergeUpdatesConfig(badFile, {{"interval_hours", 6}}, result, error));
+    EXPECT_EQ(badFile, badOriginal);
+}
+
+namespace
+{
+
+class LocalGitHub {
+public:
+    LocalGitHub()
+    {
+        m_server.Get("/repos/owner/name/releases", [this](const httplib::Request &req, httplib::Response &res)
+        {
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_ifNoneMatch.push_back(req.get_header_value("If-None-Match"));
+                m_perPage=req.get_param_value("per_page");
+            }
+            if(req.get_header_value("If-None-Match") == "\"v1\"")
+            {
+                res.status=304;
+                return;
+            }
+            res.set_header("ETag", "\"v1\"");
+            res.set_content(nlohmann::json::array({release("v0.1.16")}).dump(), "application/json");
+        });
+        m_port=m_server.bind_to_any_port("127.0.0.1");
+        m_thread=std::thread([this]() { m_server.listen_after_bind(); });
+        m_server.wait_until_ready();
+    }
+
+    ~LocalGitHub()
+    {
+        m_server.stop();
+        m_thread.join();
+    }
+
+    std::string base() const { return "http://127.0.0.1:"+std::to_string(m_port); }
+
+    std::vector<std::string> ifNoneMatch()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_ifNoneMatch;
+    }
+
+    std::string perPage()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_perPage;
+    }
+
+private:
+    httplib::Server m_server;
+    int m_port=0;
+    std::thread m_thread;
+    std::mutex m_mutex;
+    std::vector<std::string> m_ifNoneMatch;
+    std::string m_perPage;
+};
+
+} // namespace
+
+TEST(GitHubReleaseSourceTest, SendsIfNoneMatchAndReadsNotModified)
+{
+    LocalGitHub github;
+    UpdateChecker checker(std::make_unique<arbiterAI::server::GitHubReleaseSource>("owner/name", github.base()), "0.1.15");
+
+    EXPECT_EQ(checker.check(), UpdateCheckResult::Updated);
+    EXPECT_EQ(checker.check(), UpdateCheckResult::NotModified);
+
+    std::vector<std::string> sent=github.ifNoneMatch();
+    ASSERT_EQ(sent.size(), 2u);
+    EXPECT_EQ(sent[0], "");
+    EXPECT_EQ(sent[1], "\"v1\"");
+    EXPECT_EQ(github.perPage(), "100");
+    EXPECT_TRUE(checker.status().updateAvailable);
+}
+
+TEST(GitHubReleaseSourceTest, UnreachableIsAnError)
+{
+    std::string base;
+    {
+        LocalGitHub github;
+        base=github.base();
+    }
+    arbiterAI::server::GitHubReleaseSource source("owner/name", base);
+
+    ReleaseFetch fetch=source.fetch("");
+    EXPECT_FALSE(fetch.error.empty());
+    EXPECT_EQ(fetch.status, 0);
 }

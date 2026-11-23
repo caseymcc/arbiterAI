@@ -1,4 +1,5 @@
 #include "routes.h"
+#include "updateRoutes.h"
 #include "logBuffer.h"
 
 #include "arbiterAI/arbiterAI.h"
@@ -547,6 +548,14 @@ int main(int argc, char *argv[])
     if(logRotateHour<0||logRotateHour>23) logRotateHour=0;
     if(logRetainDays<1) logRetainDays=1;
 
+    // Updates
+    arbiterAI::server::UpdatePolicy updatePolicy;
+    std::string updatesError;
+    if(cfg.contains("updates")&&!arbiterAI::server::readUpdatePolicy(cfg["updates"], updatePolicy, updatesError))
+    {
+        updatePolicy=arbiterAI::server::UpdatePolicy();
+    }
+
     // ── Configure logging ────────────────────────────────────────
     if(logLevel=="trace")       spdlog::set_level(spdlog::level::trace);
     else if(logLevel=="debug")  spdlog::set_level(spdlog::level::debug);
@@ -800,8 +809,23 @@ int main(int argc, char *argv[])
         spdlog::info("Runtime model config overrides will be saved to: {}", overridePath);
     }
 
+    // ── Release check ───────────────────────────────────────────
+    if(!updatesError.empty())
+    {
+        spdlog::warn("Ignoring the 'updates' config block: {}", updatesError);
+    }
+    arbiterAI::server::UpdateManager updates(
+        std::make_unique<arbiterAI::server::GitHubReleaseSource>(ARBITERAI_UPDATE_REPO),
+        arbiterAI::getVersion().toString());
+    arbiterAI::server::setUpdateManager(&updates);
+    updates.start(updatePolicy);
+    spdlog::info("Release check for {}: {}", ARBITERAI_UPDATE_REPO,
+        updatePolicy.check?"every "+std::to_string(updatePolicy.intervalHours)+" h":std::string("off"));
+
     spdlog::info("Server endpoints:");
     spdlog::info("  GET  /health                - Health check");
+    spdlog::info("  GET  /api/update            - Newer release check result");
+    spdlog::info("  POST /api/update/check      - Check for a newer release now");
     spdlog::info("  POST /v1/chat/completions   - Chat completions (OpenAI-compatible)");
     spdlog::info("  GET  /v1/models             - List models (OpenAI-compatible)");
     spdlog::info("  GET  /v1/models/:id         - Get model info (OpenAI-compatible)");
@@ -849,6 +873,9 @@ int main(int argc, char *argv[])
     // Stop scheduler worker threads before static destruction tears down
     // the singletons (ModelRuntime, TelemetryCollector) they depend on.
     arbiterAI::InferenceScheduler::instance().shutdown();
+
+    arbiterAI::server::setUpdateManager(nullptr);
+    updates.stop();
 
     if(!listenOk)
     {

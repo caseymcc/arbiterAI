@@ -1,5 +1,6 @@
 #include "updateManager.h"
 
+#include <cpr/cpr.h>
 #include <spdlog/spdlog.h>
 
 #include <ctime>
@@ -239,6 +240,205 @@ nlohmann::json UpdateChecker::statusJson() const
     result["checked_at"]=current.checkedAt?nlohmann::json(formatTime(*current.checkedAt)):nlohmann::json(nullptr);
     result["last_error"]=current.lastError.empty()?nlohmann::json(nullptr):nlohmann::json(current.lastError);
     return result;
+}
+
+GitHubReleaseSource::GitHubReleaseSource(std::string repo, std::string apiBase):
+    m_url(apiBase+"/repos/"+repo+"/releases?per_page=100")
+{
+}
+
+ReleaseFetch GitHubReleaseSource::fetch(const std::string &etag)
+{
+    cpr::Header headers{
+        {"Accept", "application/vnd.github+json"},
+        {"X-GitHub-Api-Version", "2022-11-28"},
+        {"User-Agent", "arbiterAI-server"}
+    };
+    if(!etag.empty())
+        headers["If-None-Match"]=etag;
+
+    cpr::Response response=cpr::Get(cpr::Url{m_url}, headers, cpr::ConnectTimeout{5000}, cpr::Timeout{15000});
+
+    ReleaseFetch result;
+    if(response.error.code != cpr::ErrorCode::OK)
+    {
+        result.error=response.error.message.empty()?"request failed":response.error.message;
+        return result;
+    }
+
+    result.status=static_cast<int>(response.status_code);
+    result.body=std::move(response.text);
+    cpr::Header::const_iterator etagHeader=response.header.find("ETag");
+    if(etagHeader != response.header.end())
+        result.etag=etagHeader->second;
+    return result;
+}
+
+bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::string &error)
+{
+    if(!updates.is_object())
+    {
+        error="'updates' must be an object";
+        return false;
+    }
+
+    UpdatePolicy result=policy;
+    nlohmann::json::const_iterator check=updates.find("check");
+    if(check != updates.end())
+    {
+        if(!check->is_boolean())
+        {
+            error="'updates.check' must be a boolean";
+            return false;
+        }
+        result.check=check->get<bool>();
+    }
+
+    nlohmann::json::const_iterator interval=updates.find("interval_hours");
+    if(interval != updates.end())
+    {
+        if(!interval->is_number_integer())
+        {
+            error="'updates.interval_hours' must be an integer";
+            return false;
+        }
+        int64_t hours=interval->get<int64_t>();
+        if(hours<1 || hours>8760)
+        {
+            error="'updates.interval_hours' must be between 1 and 8760";
+            return false;
+        }
+        result.intervalHours=static_cast<int>(hours);
+    }
+
+    policy=result;
+    return true;
+}
+
+bool mergeUpdatesConfig(nlohmann::json &cfg, const nlohmann::json &body, UpdatePolicy &policy, std::string &error)
+{
+    UpdatePolicy requested;
+    if(!readUpdatePolicy(body, requested, error))
+        return false;
+
+    nlohmann::json updates=cfg.value("updates", nlohmann::json::object());
+    if(!updates.is_object())
+        updates=nlohmann::json::object();
+    if(body.contains("check"))
+        updates["check"]=requested.check;
+    if(body.contains("interval_hours"))
+        updates["interval_hours"]=requested.intervalHours;
+
+    UpdatePolicy merged;
+    if(!readUpdatePolicy(updates, merged, error))
+        return false;
+
+    cfg["updates"]=updates;
+    policy=merged;
+    return true;
+}
+
+nlohmann::json updatePolicyJson(const UpdatePolicy &policy)
+{
+    return {
+        {"check", policy.check},
+        {"interval_hours", policy.intervalHours}
+    };
+}
+
+UpdateManager::UpdateManager(std::unique_ptr<ReleaseSource> source, std::string currentVersion):
+    m_checker(std::move(source), std::move(currentVersion))
+{
+}
+
+UpdateManager::~UpdateManager()
+{
+    stop();
+}
+
+void UpdateManager::setIntervalUnit(std::chrono::milliseconds unit)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_intervalUnit=unit;
+}
+
+void UpdateManager::start(const UpdatePolicy &policy)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if(m_thread.joinable())
+        return;
+
+    m_policy=policy;
+    m_stopping=false;
+    m_thread=std::thread(&UpdateManager::run, this);
+}
+
+void UpdateManager::setPolicy(const UpdatePolicy &policy)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_policy=policy;
+        m_policyChanged=true;
+    }
+    m_wake.notify_all();
+}
+
+UpdatePolicy UpdateManager::policy() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_policy;
+}
+
+nlohmann::json UpdateManager::checkNow()
+{
+    m_checker.check();
+    return m_checker.statusJson();
+}
+
+nlohmann::json UpdateManager::statusJson() const
+{
+    return m_checker.statusJson();
+}
+
+void UpdateManager::stop()
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stopping=true;
+    }
+    m_wake.notify_all();
+
+    if(m_thread.joinable())
+        m_thread.join();
+}
+
+void UpdateManager::run()
+{
+    std::optional<std::chrono::steady_clock::time_point> lastAttempt;
+
+    std::unique_lock<std::mutex> lock(m_mutex);
+    while(!m_stopping)
+    {
+        m_policyChanged=false;
+        if(!m_policy.check)
+        {
+            m_wake.wait(lock, [this]() { return m_stopping || m_policyChanged; });
+            continue;
+        }
+
+        std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now();
+        std::chrono::milliseconds interval=m_intervalUnit*m_policy.intervalHours;
+        if(lastAttempt && now<*lastAttempt+interval)
+        {
+            m_wake.wait_until(lock, *lastAttempt+interval, [this]() { return m_stopping || m_policyChanged; });
+            continue;
+        }
+
+        lastAttempt=now;
+        lock.unlock();
+        m_checker.check();
+        lock.lock();
+    }
 }
 
 } // namespace server

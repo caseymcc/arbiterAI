@@ -13,7 +13,7 @@ Standalone HTTP server that wraps the ArbiterAI library, providing an OpenAI-com
    - [Telemetry](#34-telemetry)
    - [Storage Management](#35-storage-management)
    - [Logs](#36-logs)
-   - [Health & Version](#37-health--version)
+   - [Health, Version & Updates](#37-health-version--updates)
    - [Dashboard](#38-dashboard)
 4. [Configuration Persistence](#4-configuration-persistence)
 5. [Error Format](#5-error-format)
@@ -90,6 +90,10 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
         "directory": "",
         "rotate_hour": 0,
         "retain_days": 7
+    },
+    "updates": {
+        "check": true,
+        "interval_hours": 24
     }
 }
 ```
@@ -133,6 +137,19 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 | `directory` | `string` | `""` | Directory for log files (empty = console only) |
 | `rotate_hour` | `int` | `0` | Hour of day (0–23) to rotate log files |
 | `retain_days` | `int` | `7` | Number of daily log files to keep |
+
+**`updates` object:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `check` | `bool` | `true` | Check GitHub Releases for a newer server release, at startup and then every `interval_hours` (see [`GET /api/update`](#get-apiupdate)) |
+| `interval_hours` | `int` | `24` | Hours between checks (1–8760) |
+
+Both can be changed without a restart through `PUT /api/server/config` with
+`{"updates": {"check": false, "interval_hours": 6}}`: the change is saved to the config file
+and applied at once. Only these two keys are accepted; any other keys already in the file's
+`updates` block are kept as they are. `GET /api/server/config` returns the current values as
+`updates`. An invalid `updates` block in the file is ignored at startup with a warning (defaults apply).
 
 ### Examples
 
@@ -1131,7 +1148,7 @@ The ring buffer holds the most recent 1000 entries. Entries are returned in chro
 
 ---
 
-### 3.7 Health & Version
+### 3.7 Health, Version & Updates
 
 #### `GET /health` (or `/v1/health`)
 
@@ -1153,6 +1170,49 @@ Library version.
   "patch": 5
 }
 ```
+
+#### `GET /api/update`
+
+The result of the last check for a newer `arbiterAI-server` release. The server checks
+GitHub Releases of the repository compiled into it (CMake `ARBITERAI_UPDATE_REPO`, default
+`caseymcc/arbiterAI`; never a runtime setting) on its own thread: at startup and then every
+`updates.interval_hours` while `updates.check` is on. Requests never wait on a check, and a
+check sends the last `ETag` as `If-None-Match`, so an unchanged list (304) does not count
+against GitHub's unauthenticated limit of 60 requests an hour.
+
+The latest release is the highest version among releases that are neither drafts nor
+prereleases and are tagged exactly `vX.Y.Z`; other tags are ignored. A failed check (offline,
+rate limit, an HTTP error, a body that is not a release list) logs one warning, sets
+`last_error` and keeps the previous result.
+
+**Response:**
+
+```json
+{
+  "current": "0.1.15",
+  "latest": "0.1.16",
+  "update_available": true,
+  "release_url": "https://github.com/caseymcc/arbiterAI/releases/tag/v0.1.16",
+  "release_notes": "## What's changed\n...",
+  "published_at": "2026-11-20T12:00:00Z",
+  "checked_at": "2026-11-23T08:00:00Z",
+  "last_error": null
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `current` | The running server's version |
+| `latest` | The latest release's version, `null` before the first successful check or when there is none |
+| `update_available` | `latest` is newer than `current` |
+| `release_url`, `release_notes`, `published_at` | The latest release's page, notes (Markdown) and publish time; `null` with `latest` |
+| `checked_at` | When a check last got an answer (UTC), `null` before that |
+| `last_error` | Why the last check failed, `null` when it succeeded |
+
+#### `POST /api/update/check`
+
+Checks now, on the request's thread, whatever `updates.check` says, and returns the same
+object as `GET /api/update`. It gives up after 15 seconds when GitHub does not answer.
 
 ---
 
