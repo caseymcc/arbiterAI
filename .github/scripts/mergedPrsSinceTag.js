@@ -44,12 +44,13 @@ module.exports = async ({ github, context, core, cwd = process.cwd() }) => {
     let found = assoc.data.filter(isMergedHere);
 
     // A squash merge's commit ends in "(#N)" and the association can lag behind it.
+    // Only the PR whose merge commit this is counts, not one a subject merely names.
     if (found.length === 0) {
       const match = [...subject.matchAll(/\(#(\d+)\)/g)].pop();
       if (match) {
         try {
           const { data } = await github.rest.pulls.get({ owner, repo, pull_number: parseInt(match[1], 10) });
-          if (isMergedHere(data)) {
+          if (isMergedHere(data) && data.merge_commit_sha === sha) {
             found = [data];
           }
         } catch (e) {

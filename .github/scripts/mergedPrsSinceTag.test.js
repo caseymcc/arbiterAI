@@ -44,12 +44,13 @@ function fakeGithub(prsByCommit, prsByNumber) {
   };
 }
 
-function pr(number, title, mergedAt, base = 'main') {
+function pr(number, title, mergedAt, base = 'main', mergeCommitSha = null) {
   return {
     number,
     title,
     html_url: `https://github.com/o/r/pull/${number}`,
     merged_at: mergedAt,
+    merge_commit_sha: mergeCommitSha,
     base: { ref: base },
   };
 }
@@ -70,14 +71,14 @@ const tests = {
     commit(dir, 'chore: bump version to v0.1.15 [skip ci]');
     git(dir, 'tag', 'v0.1.15');
     const a = commit(dir, 'Sherpa onnx audio provider (#25)');
-    commit(dir, 'build: enable vibevoice TTS by default (#26)');
+    const b = commit(dir, 'build: enable vibevoice TTS by default (#26)');
     commit(dir, 'chore: bump arbiterAI_config submodule');
 
     const github = fakeGithub(
       { [a]: [pr(25, 'Sherpa onnx audio provider', '2026-11-20T10:00:00Z')] },
       {
         25: pr(25, 'Sherpa onnx audio provider', '2026-11-20T10:00:00Z'),
-        26: pr(26, 'build: enable vibevoice TTS by default', '2026-11-21T10:00:00Z'),
+        26: pr(26, 'build: enable vibevoice TTS by default', '2026-11-21T10:00:00Z', 'main', b),
       });
     const { result, outputs } = await run(dir, github);
 
@@ -143,15 +144,29 @@ const tests = {
     const dir = makeRepo();
     commit(dir, 'base');
     git(dir, 'tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
-    commit(dir, 'Revert "Feature (#12)" (#15)');
+    const revert = commit(dir, 'Revert "Feature (#12)" (#15)');
     const github = fakeGithub({}, {
       12: pr(12, 'Feature', '2026-11-20T10:00:00Z'),
-      15: pr(15, 'Revert "Feature (#12)"', '2026-11-22T10:00:00Z'),
+      15: pr(15, 'Revert "Feature (#12)"', '2026-11-22T10:00:00Z', 'main', revert),
     });
     const { result, outputs } = await run(dir, github);
 
     assert.deepStrictEqual(result.prs.map(p => p.number), [15]);
     assert.strictEqual(outputs.last_tag, 'v0.1.0');
+  },
+
+  // A direct push of 'Revert "Feature (#12)"' names a merged PR, but #12's merge
+  // commit is an older one: nothing new is released.
+  async subjectNamingAnOlderPrDoesNotRelease() {
+    const dir = makeRepo();
+    const feature = commit(dir, 'Feature (#12)');
+    git(dir, 'tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
+    commit(dir, 'Revert "Feature (#12)"');
+    const github = fakeGithub({}, { 12: pr(12, 'Feature', '2026-11-20T10:00:00Z', 'main', feature) });
+    const { result, outputs } = await run(dir, github);
+
+    assert.strictEqual(outputs.should_release, 'false');
+    assert.deepStrictEqual(result.prs, []);
   },
 };
 

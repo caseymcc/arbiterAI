@@ -72,11 +72,6 @@ jobs:
         git tag -a "v${{ steps.bump.outputs.new_version }}" -m "v${{ steps.bump.outputs.new_version }}"
         echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Push commit and tag
-      if: steps.merged_prs.outputs.should_release == 'true'
-      run: |
-        git push --atomic origin HEAD "refs/tags/v${{ steps.bump.outputs.new_version }}"
-
     # --- Build ---
 
     - name: Extract Docker version
@@ -199,6 +194,15 @@ jobs:
         docker build -f docker/server.Dockerfile --build-arg VERSION="${VERSION}" -t "${IMAGE}:v${VERSION}" dist
         ./scripts/checkServerImage.sh "${IMAGE}:v${VERSION}" "${VERSION}"
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+
+    # Pushed only once the build and the image check have passed: a run that fails
+    # earlier leaves no tag, so re-running it still finds the PRs since the last one.
+    # If the branch moved meanwhile the push is rejected; the run queued for that
+    # newer push then releases everything since the last tag.
+    - name: Push commit and tag
+      if: steps.merged_prs.outputs.should_release == 'true'
+      run: |
+        git push --atomic origin HEAD "refs/tags/v${{ steps.bump.outputs.new_version }}"
 
     - name: Push the server image
       if: steps.merged_prs.outputs.should_release == 'true'

@@ -44,20 +44,7 @@ void ModelRuntime::reset()
 {
     ModelRuntime &rt=instance();
 
-    // Signal all background download threads to stop waiting
-    {
-        std::lock_guard<std::mutex> lock(rt.m_mutex);
-        rt.m_shuttingDown=true;
-        rt.m_downloadCv.notify_all();
-    }
-
-    for(std::thread &t:rt.m_downloadThreads)
-    {
-        if(t.joinable())
-        {
-            t.join();
-        }
-    }
+    rt.stopDownloadThreads();
 
     std::lock_guard<std::mutex> lock(rt.m_mutex);
 
@@ -94,6 +81,12 @@ ModelRuntime::ModelRuntime()
 ModelRuntime::~ModelRuntime()
 {
     // A std::thread still joinable at destruction calls std::terminate.
+    stopDownloadThreads();
+}
+
+void ModelRuntime::stopDownloadThreads()
+{
+    // Wake queued downloads so they give up waiting for a slot.
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_shuttingDown=true;

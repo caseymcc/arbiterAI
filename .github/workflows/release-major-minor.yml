@@ -78,10 +78,6 @@ jobs:
         git tag -a "v${{ steps.version.outputs.new_version }}" -m "v${{ steps.version.outputs.new_version }}"
         echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Push branch and tag
-      run: |
-        git push --atomic origin "${{ steps.version.outputs.branch }}" "refs/tags/v${{ steps.version.outputs.new_version }}"
-
     # --- Build artifacts ---
 
     - name: Extract Docker version
@@ -194,6 +190,12 @@ jobs:
         docker build -f docker/server.Dockerfile --build-arg VERSION="${VERSION}" -t "${IMAGE}:v${VERSION}" dist
         ./scripts/checkServerImage.sh "${IMAGE}:v${VERSION}" "${VERSION}"
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+
+    # Pushed only once the build and the image check have passed, so a failed run
+    # leaves no release branch or tag behind and can be re-run.
+    - name: Push branch and tag
+      run: |
+        git push --atomic origin "${{ steps.version.outputs.branch }}" "refs/tags/v${{ steps.version.outputs.new_version }}"
 
     - name: Push the server image
       run: |

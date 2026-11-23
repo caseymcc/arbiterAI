@@ -525,6 +525,16 @@ private:
     bool m_shuttingDown=false;
 };
 
+/// Exits without static destruction: ~ModelRuntime would join downloads that
+/// are still running, and detached startup pollers could call into singletons
+/// being torn down. Saves storage state and the logs first.
+[[noreturn]] void exitServer(int code)
+{
+    arbiterAI::StorageManager::instance().shutdown();
+    spdlog::default_logger()->flush();
+    std::_Exit(code);
+}
+
 void printUsage()
 {
     std::cout<<"Usage: arbiterAI-server [options]\n"
@@ -1052,8 +1062,7 @@ int main(int argc, char *argv[])
         if(!drained&&!stopSignals.waitForShutdown(std::chrono::seconds(5)))
         {
             spdlog::error("Requests still running after the drain timeout, exiting without unloading models");
-            spdlog::default_logger()->flush();
-            std::_Exit(1);
+            exitServer(1);
         }
     });
 
@@ -1071,7 +1080,7 @@ int main(int argc, char *argv[])
     if(!listenOk)
     {
         spdlog::error("Failed to start server on {}:{}", host, port);
-        return 1;
+        exitServer(1);
     }
 
     for(const arbiterAI::LoadedModel &model:arbiterAI::ModelRuntime::instance().getModelStates())
@@ -1085,15 +1094,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    // ~ModelRuntime joins the download threads; one still running after the
-    // drain timeout would hold the exit, so skip static destruction.
-    bool downloadsRunning=!arbiterAI::ModelRuntime::instance().getActiveDownloadSnapshots().empty();
-    if(downloadsRunning)
+    if(!arbiterAI::ModelRuntime::instance().getActiveDownloadSnapshots().empty())
         spdlog::warn("Downloads still running after the drain timeout, abandoning them");
 
     spdlog::info("shutdown complete");
-    spdlog::default_logger()->flush();
-    if(downloadsRunning)
-        std::_Exit(0);
-    return 0;
+    exitServer(0);
 }

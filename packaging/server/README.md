@@ -115,7 +115,9 @@ Things to know before you run it as a service:
   directory: an update replaces the install directory.
 - **Stopping.** On `SIGTERM` or `SIGINT` the server answers new requests with `503`, gives running
   requests, inference jobs and downloads up to `updates.drain_timeout_s` seconds, unloads its models,
-  logs `shutdown complete` and exits `0`. A second signal exits at once.
+  logs `shutdown complete` and exits `0`. A second signal exits at once. A signal that arrives
+  before the server is listening (during startup or `--self-test`) exits at once with `128+signal`
+  (`143` for `SIGTERM`, `130` for `SIGINT`).
 
 ## Running under systemd
 

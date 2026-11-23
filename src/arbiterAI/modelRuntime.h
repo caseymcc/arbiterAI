@@ -240,6 +240,9 @@ private:
     ModelRuntime(const ModelRuntime &)=delete;
     ModelRuntime &operator=(const ModelRuntime &)=delete;
 
+    /// Wake queued downloads and join every download thread.
+    void stopDownloadThreads();
+
     /// Select the best variant for a model given current hardware.
     std::string selectBestVariant(const ModelInfo &model) const;
 
