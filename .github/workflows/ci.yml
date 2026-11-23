@@ -20,6 +20,9 @@ jobs:
       with:
         fetch-depth: 0 # Fetch all history for version comparison
 
+    - name: Test release scripts
+      run: node .github/scripts/mergedPrsSinceTag.test.js
+
     - name: Extract Docker version
       id: docker_version
       run: |
