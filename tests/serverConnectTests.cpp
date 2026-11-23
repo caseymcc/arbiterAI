@@ -133,9 +133,17 @@ protected:
         info.maxTokens=4096;
         ModelManager::instance().addModel(info);
 
-        // Create an ArbiterAI instance and wire up the OpenAI provider
-        // pointed at the remote arbiterAI server.
-        m_ai=std::make_unique<ArbiterAI>();
+        // Wire the OpenAI provider, pointed at the remote arbiterAI server,
+        // into the singleton: completion() and getProvider() read its state.
+        m_ai=&ArbiterAI::instance();
+        m_wasInitialized=m_ai->initialized;
+
+        auto it=m_ai->providers.find("openai");
+        if(it!=m_ai->providers.end())
+        {
+            m_savedProvider=std::move(it->second);
+            m_ai->providers.erase(it);
+        }
 
         auto provider=std::make_unique<OpenAI>();
         provider->setApiUrl(SERVER_API_URL);
@@ -147,12 +155,23 @@ protected:
 
     void TearDown() override
     {
-        m_ai.reset();
+        if(m_ai)
+        {
+            m_ai->providers.erase("openai");
+            if(m_savedProvider)
+            {
+                m_ai->providers["openai"]=std::move(m_savedProvider);
+            }
+            m_ai->initialized=m_wasInitialized;
+            m_ai=nullptr;
+        }
         ModelManager::reset();
     }
 
     std::string m_remoteModel;
-    std::unique_ptr<ArbiterAI> m_ai;
+    ArbiterAI *m_ai=nullptr;
+    std::unique_ptr<BaseProvider> m_savedProvider;
+    bool m_wasInitialized=false;
 };
 
 // ── Health ────────────────────────────────────────────────────
