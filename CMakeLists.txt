@@ -288,6 +288,7 @@ endif()
         tests/telemetryCollectorTests.cpp
         tests/storageManagerTests.cpp
         tests/serverConnectTests.cpp
+        tests/dashboardAssetsTests.cpp
     )
 
     if(ARBITERAI_ENABLE_LLAMA)
@@ -328,12 +329,20 @@ endif()
         )
     endif()
     
+    find_package(ZLIB REQUIRED)
     target_link_libraries(arbiterai_tests
         PRIVATE
             arbiterai
+            arbiterai_dashboard_assets
             GTest::gtest
             GTest::gmock
+            ZLIB::ZLIB
     )
+    target_include_directories(arbiterai_tests PRIVATE ${PICOSHA2_INCLUDE_DIRS})
+    if(ARBITERAI_WEB_DASHBOARD)
+        target_compile_definitions(arbiterai_tests PRIVATE
+            ARBITERAI_DASHBOARD_ASSET_DIR="${ARBITERAI_DASHBOARD_ASSET_DIR}")
+    endif()
 endif()
 
 add_executable(arbiterAI-cli
@@ -371,6 +380,7 @@ target_include_directories(arbiterAI-server
 target_link_libraries(arbiterAI-server
     PRIVATE
         arbiterai
+        arbiterai_dashboard_assets
         httplib::httplib
         spdlog::spdlog
 )
