@@ -755,8 +755,8 @@ TEST_F(ModelRuntimeTest, ResetClearsDownloadState)
     std::filesystem::remove_all("rt_test_models");
 }
 
-// A finished download thread must not abort the process at exit (the server's
-// graceful stop returns from main and runs static destruction).
+// A finished download thread must not abort the process at exit (a library
+// user that returns from main runs static destruction; the server _Exits).
 TEST_F(ModelRuntimeTest, ExitAfterDownloadDoesNotAbort)
 {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
