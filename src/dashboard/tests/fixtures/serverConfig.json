@@ -53,5 +53,15 @@
       "devices": [],
       "api_format": ""
     }
-  ]
+  ],
+  "updates": {
+    "check": true,
+    "interval_hours": 24,
+    "allow_apply": true,
+    "auto_apply": false,
+    "auto_apply_scope": "patch",
+    "auto_apply_delay_hours": 24,
+    "auto_apply_window": "",
+    "idle_minutes": 10
+  }
 }

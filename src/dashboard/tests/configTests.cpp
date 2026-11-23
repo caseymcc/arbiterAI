@@ -433,3 +433,56 @@ TEST_F(ConfigTest, SaveAndLoadStatusFollowsItsEntryWhenAnEarlierOneIsRemoved)
     EXPECT_EQ(config().entries()[0].status->getText(), "Model loaded successfully.");
     EXPECT_FALSE(config().entries()[0].save->isDisabled());
 }
+
+TEST_F(DashboardTest, TheUpdatesCardShowsTheSupervisorTheAutoStatusAndThePolicy)
+{
+    m_data.setJson("/api/update", loadFixture("updateInProgress.json"));
+    start("/dashboard/config");
+    arbiterAI::dashboard::UpdateSettings &updates=m_app->config().updates();
+
+    EXPECT_EQ(updates.supervisorText(), "Restart on crash: systemd");
+    EXPECT_EQ(updates.autoText(), "Auto-update: installing v0.1.16");
+    EXPECT_EQ(updates.applyText(), "Installing from the dashboard: allowed (updates.allow_apply, set in the config file)");
+    EXPECT_FALSE(updates.autoApply()->checkBox()->isChecked());
+    EXPECT_EQ(updates.delay()->getText(), "24");
+    EXPECT_EQ(updates.idle()->getText(), "10");
+
+    m_app->config().scroll()->scrollToBottom();
+    frames(4);
+    shot("config-updates");
+}
+
+TEST_F(DashboardTest, TheUpdatesCardSaysWhenNoSupervisorIsDeclared)
+{
+    m_data.setJson("/api/update", loadFixture("updateBlocked.json"));
+    start("/dashboard/config");
+    EXPECT_EQ(m_app->config().updates().supervisorText(), "Restart on crash: none (no supervisor declared, see README)");
+}
+
+TEST_F(DashboardTest, SavingTheUpdatesCardPutsThePolicy)
+{
+    m_data.setJson("/api/update", loadFixture("updateCanApply.json"));
+    m_data.setJson("/api/server/config", loadFixture("serverConfig.json"), "PUT");
+    start("/dashboard/config");
+    arbiterAI::dashboard::UpdateSettings &updates=m_app->config().updates();
+
+    updates.autoApply()->checkBox()->setChecked(true);
+    updates.scope()->selectItemByName("minor", false);
+    updates.window()->setText("02:00-04:00");
+    updates.idle()->setText("30");
+    m_app->config().scroll()->scrollToBottom();
+    frames(4);
+    click(updates.saveButton());
+
+    ASSERT_EQ(m_data.count("/api/server/config", "PUT"), 1u);
+    nlohmann::json body;
+    for(const auto &request:m_data.requests())
+    {
+        if(request.method=="PUT")
+            body=request.body;
+    }
+    EXPECT_EQ(body, (nlohmann::json{{"updates", {{"auto_apply", true}, {"auto_apply_scope", "minor"},
+        {"auto_apply_delay_hours", 24}, {"auto_apply_window", "02:00-04:00"}, {"idle_minutes", 30}}}}));
+    EXPECT_FALSE(body["updates"].contains("allow_apply"));
+    EXPECT_EQ(updates.message(), "Saved; auto-update uses it at its next check");
+}

@@ -6,6 +6,7 @@
 #include "panels/logPanel.h"
 #include "panels/overviewPanel.h"
 #include "panels/storagePanel.h"
+#include "panels/updateControls.h"
 
 #include <gweni/controls.h>
 
@@ -37,8 +38,8 @@ Route routeForUrl(const std::string &url);
 std::string pathForTab(Tab tab);
 
 /// The whole dashboard on a canvas: a header with the version, a badge when a
-/// newer server release is out and the connection status, the tabs, and the
-/// log panel under them. It polls the
+/// newer server release is out (with the Update button, UpdateControls) and
+/// the connection status, the tabs, and the log panel under them. It polls the
 /// server every PollSeconds through \p data, natively or in a page alike.
 class DashboardApp {
 public:
@@ -48,9 +49,12 @@ public:
 
     /// \p url the page's URL, which picks the tab; \p pushPath is told the
     /// path of each tab the user switches to (the page's history).
-    /// \p now the clock the Storage tab's age colours are measured against
+    /// \p now the clock the Storage tab's age colours are measured against;
+    /// \p reload reloads the page, once the server restarted into another
+    /// version after an update (its own dashboard)
     DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, const std::string &url,
-        std::function<void(const std::string &path)> pushPath=nullptr, std::function<std::time_t()> now=nullptr);
+        std::function<void(const std::string &path)> pushPath=nullptr, std::function<std::time_t()> now=nullptr,
+        std::function<void()> reload=nullptr);
     ~DashboardApp();
 
     /// The page's URL changed (back, forward): show its tab, pushing nothing.
@@ -70,6 +74,8 @@ public:
     /// a click opens its release notes
     gweni::controls::Base *updateBadge() const { return m_update; }
     const std::string &updateText() const { return m_update->getText(); }
+    /// the Update button, the install's progress and the strip under the header
+    UpdateControls &updates() { return *m_updates; }
     bool connected() const { return m_connected; }
 
     OverviewPanel &overview() { return *m_overview; }
@@ -93,6 +99,7 @@ private:
     gweni::controls::Label *m_version;
     gweni::controls::LabelClickable *m_update;
     std::string m_releaseUrl;
+    std::unique_ptr<UpdateControls> m_updates;
     gweni::controls::Label *m_status;
     gweni::controls::TabControl *m_tabs;
     gweni::controls::TabButton *m_tabButtons[3];
@@ -105,6 +112,7 @@ private:
     bool m_haveVersion=false;
     int m_pollsUntilUpdate=0;
     bool m_connected=false;
+    bool m_everConnected=false;
     bool m_navigating=false;
 };
 

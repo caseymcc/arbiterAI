@@ -27,6 +27,7 @@ struct ApplierConfig {
     std::filesystem::path configPath;
     std::filesystem::path cwd;
     std::chrono::milliseconds selfTestTimeout=std::chrono::minutes(2);
+    int drainTimeoutSeconds=60;///< reported for the dashboard's confirm dialog
 };
 
 /// Installs the latest release (POST /api/update/apply) or goes back to
@@ -61,7 +62,8 @@ public:
 
     bool busy() const;
 
-    /// state, progress, prev_version, update_error, rollback_available, rollback_version.
+    /// state, progress, prev_version, update_error, rollback_available,
+    /// rollback_version, drain_timeout_s.
     nlohmann::json statusJson() const;
 
     /// Waits for the worker thread (tests).

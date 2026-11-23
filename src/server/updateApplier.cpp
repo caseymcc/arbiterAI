@@ -185,6 +185,7 @@ nlohmann::json UpdateApplier::statusJson() const
     std::string previous=hasPrevious(m_config.root)?previousVersion(m_config.root):std::string();
     result["rollback_available"]=!busy && hasPrevious(m_config.root);
     result["rollback_version"]=previous.empty()?nlohmann::json(nullptr):nlohmann::json(previous);
+    result["drain_timeout_s"]=m_config.drainTimeoutSeconds;
     return result;
 }
 

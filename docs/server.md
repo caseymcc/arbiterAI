@@ -1345,6 +1345,7 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
   "update_error": null,
   "rollback_available": true,
   "rollback_version": "0.1.15",
+  "drain_timeout_s": 60,
   "auto": {
     "enabled": true,
     "status": "waiting for the window 02:00-04:00 (local time)",
@@ -1370,6 +1371,7 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
 | `update_error` | Why the last update attempt failed (or that a new version failed to start and was rolled back), from `update-history.json`; `null` after a successful update. Separate from `last_error`, which is about the release check |
 | `rollback_available` | `<root>/bin.prev` exists and nothing is running: [`POST /api/update/rollback`](#post-apiupdaterollback) can go back to it |
 | `rollback_version` | The version in `bin.prev`, `null` when there is none |
+| `drain_timeout_s` | `updates.drain_timeout_s`: how long an apply or rollback waits for running requests before it restarts |
 | `auto.enabled` | `updates.auto_apply` is on and nothing turns it off (`allow_apply`, a supervisor) |
 | `auto.status` | What auto-update is doing or waiting for, e.g. `"off"`, `"off: no supervisor declared (see README)"`, `"up to date"`, `"waiting: v0.1.16 installs 24 h after it was published"`, `"waiting for the server to be idle (1 HTTP request(s) running)"`, `"skipping v0.1.16: it failed here before …"`, `"installing v0.1.16"` |
 | `auto.next_attempt` | When the condition it waits for next holds (UTC), when that is known; `null` otherwise |
@@ -1483,6 +1485,26 @@ When [`GET /api/update`](#get-apiupdate) reports a newer release, the header sho
 `v0.1.15 → v0.1.16 available` next to the version on every tab; a click opens the release notes
 (`release_url`) in a new tab. The app asks for it on its first poll and every 30 seconds after;
 with no update (or a server without the check) the header shows the plain version.
+
+Installing it (see [`POST /api/update/apply`](#post-apiupdateapply)):
+
+- **Update to vX** next to the badge, while `can_apply` is true. It opens a dialog first that
+  lists the loaded models (loaded again after the restart), the active jobs (drained for up to
+  `drain_timeout_s`, then cut off) and whether a crash would be rolled back (`supervisor`).
+- While `can_apply` is false, a line under the header gives `apply_blocked_reason` and the steps to
+  update by hand instead of the button.
+- While the install runs, the header shows its stage and progress (`state`, `progress`), and
+  `/api/update` is asked for on every poll. Once the server restarts, the page reloads by
+  itself: when `/api/version` reports another version, or when the restarted server answers
+  `state: idle` (a rollback to the same version), because the new server serves its own
+  dashboard.
+- After an update, the line under the header says "Updated from vX" (`prev_version`) with a
+  **Roll back to vX** button while `rollback_available`, or gives `update_error` after a failure.
+- The Config tab's **Updates** card shows "Restart on crash: systemd / docker / none (no
+  supervisor declared, see README)", the auto-update status (`auto.status`, `auto.next_attempt`),
+  whether `allow_apply` is on (set in the file only), and the auto-update policy
+  (`auto_apply`, `auto_apply_scope`, `auto_apply_delay_hours`, `auto_apply_window`,
+  `idle_minutes`), saved with `PUT /api/server/config`.
 
 - **Overview** — performance (prompt/generation tokens/s, active requests, total inferences,
   model swaps), system memory and CPU, a tokens/s chart (prompt on the left axis, generation on

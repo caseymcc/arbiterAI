@@ -1173,6 +1173,7 @@ int main(int argc, char *argv[])
     applierConfig.currentVersion=ARBITERAI_VERSION_STRING;
     applierConfig.configPath=configPath;
     applierConfig.cwd=applyContext.cwd;
+    applierConfig.drainTimeoutSeconds=drainTimeoutSec;
     arbiterAI::server::UpdateApplier applier(applierConfig,
         std::make_unique<arbiterAI::server::CprDownloader>(),
         arbiterAI::server::loadedModelsSnapshot,

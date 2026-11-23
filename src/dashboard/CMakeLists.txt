@@ -31,6 +31,10 @@ add_library(dashboard_core STATIC
     panels/vramOverride.cpp
     panels/configPanel.h
     panels/configPanel.cpp
+    panels/updateControls.h
+    panels/updateControls.cpp
+    panels/updateSettings.h
+    panels/updateSettings.cpp
 )
 target_include_directories(dashboard_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dashboard_core PUBLIC gweni::gweni nlohmann_json::nlohmann_json)

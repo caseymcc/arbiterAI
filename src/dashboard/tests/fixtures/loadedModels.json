@@ -1,0 +1,22 @@
+{
+    "models": [
+        {
+            "model": "gpt-oss-120b",
+            "variant": "Q4_K_M",
+            "state": "Loaded",
+            "pinned": true
+        },
+        {
+            "model": "qwen3-8b",
+            "variant": "Q8_0",
+            "state": "Ready",
+            "pinned": false
+        },
+        {
+            "model": "llama-3.1-8b",
+            "variant": "Q4_K_M",
+            "state": "Loaded",
+            "pinned": false
+        }
+    ]
+}

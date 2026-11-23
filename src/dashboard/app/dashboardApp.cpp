@@ -82,7 +82,8 @@ std::string pathForTab(Tab tab)
 }
 
 DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, const std::string &url,
-    std::function<void(const std::string &path)> pushPath, std::function<std::time_t()> now):
+    std::function<void(const std::string &path)> pushPath, std::function<std::time_t()> now,
+    std::function<void()> reload):
     m_data(data),
     m_pushPath(std::move(pushPath)),
     m_canvas(canvas)
@@ -119,6 +120,8 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
         if(!m_releaseUrl.empty())
             gweni::platform::openUrl(m_releaseUrl);
     });
+
+    m_updates=std::make_unique<UpdateControls>(header, m_root, m_data, std::move(reload), [this]() { pollUpdate(); });
 
     m_status=header->newChild<gweni::controls::Label>();
     m_status->setDock(gweni::DockPosition::Center);
@@ -212,7 +215,13 @@ void DashboardApp::poll()
         });
     }
 
-    if(m_pollsUntilUpdate--==0)
+    // while an update installs or restarts, its progress is asked for every poll
+    if(m_updates->active())
+    {
+        pollUpdate();
+        m_updates->pollRestart();
+    }
+    else if(m_pollsUntilUpdate--==0)
     {
         m_pollsUntilUpdate=UpdatePollEvery-1;
         pollUpdate();
@@ -285,6 +294,10 @@ void DashboardApp::pollUpdate()
 {
     m_data.getJson("/api/update", [this](const Response &response)
     {
+        const nlohmann::json status=response.ok && response.json.is_object()?response.json:nlohmann::json::object();
+        m_updates->update(status);
+        m_config->updates().updateStatus(status);
+
         // a server without the check (404) or one that failed keeps the plain header
         if(!response.ok || !response.json.is_object() || !flag(response.json, "update_available"))
         {
@@ -314,6 +327,10 @@ void DashboardApp::showTab(Tab tab)
 
 void DashboardApp::setConnected(bool connected, const std::string &error)
 {
+    // back after a restart: the version may have changed
+    if(connected && !m_connected && m_everConnected)
+        m_haveVersion=false;
+    m_everConnected=m_everConnected || connected;
     m_connected=connected;
     if(connected)
     {

@@ -309,6 +309,7 @@ TEST_F(UpdateApplierTest, RollbackSwapsPrevBackAndAsksForARestart)
     nlohmann::json before=updated.statusJson();
     EXPECT_EQ(before["rollback_available"], true);
     EXPECT_EQ(before["rollback_version"], "1.0.0");
+    EXPECT_EQ(before["drain_timeout_s"], 60);
 
     ASSERT_EQ(updated.rollback(allowed, message), UpdateApplier::Start::Started)<<message;
     updated.wait();

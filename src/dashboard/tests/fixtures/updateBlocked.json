@@ -1,0 +1,25 @@
+{
+    "current": "0.1.15",
+    "latest": "0.1.16",
+    "update_available": true,
+    "release_url": "https://github.com/caseymcc/arbiterAI/releases/tag/v0.1.16",
+    "release_notes": "## What's changed\n- Install arbiterAI-server updates from the dashboard",
+    "published_at": "2026-11-20T12:00:00Z",
+    "checked_at": "2026-11-22T23:30:00Z",
+    "last_error": null,
+    "can_apply": false,
+    "apply_blocked_reason": "the install root /opt/arbiterAI is part of the container image: mount a volume at /opt/arbiterAI (see compose.yaml) or pull the new image",
+    "supervisor": null,
+    "state": "idle",
+    "progress": null,
+    "prev_version": null,
+    "update_error": null,
+    "rollback_available": false,
+    "rollback_version": null,
+    "drain_timeout_s": 60,
+    "auto": {
+        "enabled": false,
+        "status": "off",
+        "next_attempt": null
+    }
+}

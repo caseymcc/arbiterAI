@@ -2,6 +2,7 @@
 #define _ARBITERAI_DASHBOARD_CONFIGPANEL_H_
 
 #include "data/dataSource.h"
+#include "panels/updateSettings.h"
 #include "panels/vramOverride.h"
 
 #include <gweni/controls.h>
@@ -13,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,7 +53,8 @@ ContextFit contextFit(const nlohmann::json &option, double vramMb);
 /// The Config tab (the old Configuration page): the startup models, each with
 /// its model and variant, context size, compute devices, API format and
 /// runtime options (KV cache types, flash attention, no host-visible VRAM),
-/// saved to /api/server/config and loaded at once; and the VRAM overrides.
+/// saved to /api/server/config and loaded at once; the VRAM overrides; and
+/// the update settings (UpdateSettings).
 /// It loads once (load()) and is not polled, so edits are never overwritten.
 class ConfigPanel {
 public:
@@ -119,6 +122,7 @@ public:
     };
     const std::vector<GpuRow> &gpuRows() const { return m_gpuRows; }
     VramOverride &vram() { return m_vram; }
+    UpdateSettings &updates() { return *m_updates; }
     gweni::controls::ScrollControl *scroll() const { return m_scroll; }
 
 private:
@@ -150,6 +154,7 @@ private:
     gweni::controls::Base *m_list;
     gweni::controls::Base *m_gpuCard;
     gweni::controls::Base *m_gpuList;
+    std::unique_ptr<UpdateSettings> m_updates;
 
     std::vector<StartupModel> m_models;
     std::vector<Entry> m_entries;

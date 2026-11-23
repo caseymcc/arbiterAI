@@ -182,6 +182,8 @@ ConfigPanel::ConfigPanel(gweni::controls::Base *page, DataSource &data):
     m_gpuList=m_gpuCard->newChild<gweni::controls::Base>();
     m_gpuList->setDock(gweni::DockPosition::Top);
 
+    m_updates=std::make_unique<UpdateSettings>(m_content, m_data);
+
     renderModels();
     renderGpus();
 }
@@ -235,6 +237,8 @@ void ConfigPanel::updateConfig(const nlohmann::json &config)
         for(const nlohmann::json &entry:config["startup_models"])
             addEntry(StartupModel::fromJson(entry));
     }
+    if(config.contains("updates"))
+        m_updates->updateConfig(config["updates"]);
     renderModels();
 }
 
@@ -739,8 +743,10 @@ void ConfigPanel::renderModels()
 void ConfigPanel::layoutContent()
 {
     // the scrolled content is as tall as its parts: the intro card, the
-    // message, the header, the models and the GPU card, with their margins
-    m_content->setHeight(60+12+(m_message->getText().empty()?0:RowHeight)+RowHeight+8+m_listHeight+m_gpuCardHeight+12);
+    // message, the header, the models, the GPU card and the updates card,
+    // with their margins
+    m_content->setHeight(60+12+(m_message->getText().empty()?0:RowHeight)+RowHeight+8+m_listHeight+m_gpuCardHeight+12
+        +UpdateSettings::Height+12);
 }
 
 void ConfigPanel::renderGpus()

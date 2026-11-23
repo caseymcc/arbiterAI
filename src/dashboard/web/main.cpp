@@ -4,6 +4,8 @@
 #include <gweni/app/window.h>
 #include <gweni/platforms/platform.h>
 
+#include <emscripten.h>
+
 int main()
 {
     gweni::app::ShellOptions options;
@@ -20,7 +22,8 @@ int main()
 
     auto *data=new arbiterAI::dashboard::FetchDataSource();
     auto *app=new arbiterAI::dashboard::DashboardApp(window->canvas(), *data, gweni::platform::currentUrl(),
-        [](const std::string &path) { gweni::platform::pushUrl(path); });
+        [](const std::string &path) { gweni::platform::pushUrl(path); }, nullptr,
+        []() { emscripten_run_script("window.location.reload()"); });
     gweni::platform::setUrlChangedHandler([app](const gweni::String &url) { app->navigate(url); });
 
     window->run();
