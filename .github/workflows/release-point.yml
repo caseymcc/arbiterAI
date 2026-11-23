@@ -170,7 +170,7 @@ jobs:
 
     - name: Build project
       if: steps.check_pr.outputs.is_pr_merge == 'true'
-      run: ./runDocker.sh --ci ./build.sh
+      run: ./runDocker.sh --ci ./build.sh release
       env:
         VCPKG_CACHE_PATH: ${{ github.workspace }}/vcpkg_cache
 
@@ -189,17 +189,17 @@ jobs:
         mkdir -p "${LIB_DIR}/share/arbiterAI/schemas"
 
         # Static library
-        cp build/linux_x64_debug/libarbiterai.a "${LIB_DIR}/lib/"
+        cp build/linux_x64_release/libarbiterai.a "${LIB_DIR}/lib/"
 
         # Public headers
         for header in src/arbiterAI/*.h; do
           cp "$header" "${LIB_DIR}/include/arbiterAI/"
         done
-        cp build/linux_x64_debug/generated/arbiterAI/version.h "${LIB_DIR}/include/arbiterAI/"
+        cp build/linux_x64_release/generated/arbiterAI/version.h "${LIB_DIR}/include/arbiterAI/"
 
         # CMake package config
-        cp build/linux_x64_debug/cmake/arbiterAIConfig.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
-        cp build/linux_x64_debug/cmake/arbiterAIConfigVersion.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
+        cp build/linux_x64_release/cmake/arbiterAIConfig.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
+        cp build/linux_x64_release/cmake/arbiterAIConfigVersion.cmake "${LIB_DIR}/lib/cmake/arbiterAI/" 2>/dev/null || true
 
         # JSON schema
         cp schemas/model_config.schema.json "${LIB_DIR}/share/arbiterAI/schemas/"
@@ -217,81 +217,8 @@ jobs:
       id: package_server
       run: |
         VERSION="${{ steps.bump.outputs.new_version }}"
-        SRV_DIR="arbiterAI-server-v${VERSION}-linux-x64"
-
-        mkdir -p "${SRV_DIR}/bin"
-        mkdir -p "${SRV_DIR}/share/arbiterAI/schemas"
-
-        # Server binary
-        cp build/linux_x64_debug/arbiterAI-server "${SRV_DIR}/bin/"
-
-        # JSON schema for config validation
-        cp schemas/model_config.schema.json "${SRV_DIR}/share/arbiterAI/schemas/"
-
-        cp LICENSE "${SRV_DIR}/"
-
-        # README with config instructions
-        cat > "${SRV_DIR}/README.md" << 'READMEEOF'
-        # ArbiterAI Server
-
-        ## Quick Start
-
-        ```bash
-        ./bin/arbiterAI-server --port 8080 --config ./config
-        ```
-
-        ## Configuration
-
-        The server loads model configurations from the path(s) given via `--config`.
-
-        ### Downloading Model Configurations
-
-        Default model configurations are maintained in the
-        [arbiterAI_config](https://github.com/caseymcc/arbiterAI_config) repository.
-        Clone it to get started:
-
-        ```bash
-        git clone https://github.com/caseymcc/arbiterAI_config.git config
-        ```
-
-        The server will automatically discover model definitions from the cloned
-        directory. To update configurations later:
-
-        ```bash
-        cd config && git pull
-        ```
-
-        ### Environment Variables
-
-        Set API keys for cloud providers as environment variables:
-
-        | Variable             | Provider   |
-        |----------------------|------------|
-        | `OPENAI_API_KEY`     | OpenAI     |
-        | `ANTHROPIC_API_KEY`  | Anthropic  |
-        | `DEEPSEEK_API_KEY`   | DeepSeek   |
-        | `OPENROUTER_API_KEY` | OpenRouter |
-
-        ## Command-Line Options
-
-        ```
-        --port, -p        HTTP port (default: 8080)
-        --host, -H        Bind address (default: 0.0.0.0)
-        --config, -c      Model config path(s) (default: config)
-        --model, -m       Default model to load on startup
-        --variant, -v     Default variant (e.g., Q4_K_M)
-        --ram-budget      Ready model RAM budget in MB (default: auto)
-        --log-level       Log level: trace, debug, info, warn, error (default: info)
-        ```
-
-        ## Dashboard
-
-        Open `http://localhost:8080/dashboard` in a browser for the live monitoring dashboard.
-        READMEEOF
-
-        SRV_TARBALL="arbiterAI-server-v${VERSION}-linux-x64.tar.gz"
-        tar -czf "${SRV_TARBALL}" "${SRV_DIR}"
-        echo "tarball=${SRV_TARBALL}" >> $GITHUB_OUTPUT
+        ./runDocker.sh --ci ./scripts/packageServer.sh build/linux_x64_release "${VERSION}" dist
+        echo "tarball=dist/arbiterAI-server-v${VERSION}-linux-x64.tar.gz" >> $GITHUB_OUTPUT
 
     # --- Create release ---
 
@@ -311,14 +238,16 @@ jobs:
           | Package | Description |
           |---------|-------------|
           | `arbiterAI-lib-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz` | Library, headers, and CMake config for linking |
-          | `arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz` | Standalone server binary |
+          | `arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz` | Standalone server: stripped release binary, install marker, README |
 
-          ### Server Configuration
+          ### Server
 
-          Download model configurations from [arbiterAI_config](https://github.com/caseymcc/arbiterAI_config):
+          The server tarball is a stripped release build for Linux x86-64 (glibc 2.38+: Ubuntu 24.04+, Debian 13+).
+          Its `README.md` covers the requirements, the configuration file and the command line:
           ```bash
-          git clone https://github.com/caseymcc/arbiterAI_config.git config
-          ./bin/arbiterAI-server --config ./config
+          tar -xzf arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64.tar.gz
+          ./arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64/bin/arbiterAI-server --self-test -c server.json
+          ./arbiterAI-server-v${{ steps.bump.outputs.new_version }}-linux-x64/bin/arbiterAI-server -c server.json
           ```
         draft: false
         prerelease: false
