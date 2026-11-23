@@ -165,11 +165,12 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 |-------|------|---------|-------------|
 | `check` | `bool` | `true` | Check GitHub Releases for a newer server release, at startup and then every `interval_hours` (see [`GET /api/update`](#get-apiupdate)) |
 | `interval_hours` | `int` | `24` | Hours between checks (1–8760) |
+| `allow_apply` | `bool` | `true` | Allow installing the latest release from the dashboard (see `can_apply` in [`GET /api/update`](#get-apiupdate)). Read from the file only: `PUT /api/server/config` refuses it |
 | `drain_timeout_s` | `int` | `60` | Seconds a graceful stop waits for in-flight work (see [Stopping the Server](#stopping-the-server)) |
 
 `check` and `interval_hours` can be changed without a restart through `PUT /api/server/config` with
 `{"updates": {"check": false, "interval_hours": 6}}`: the change is saved to the config file
-and applied at once. Only these two keys are accepted (`drain_timeout_s` is read from the file at startup); any other keys already in the file's
+and applied at once. Only these two keys are accepted (`drain_timeout_s` is read from the file at startup); a request that sets `allow_apply` is refused with 400; any other keys already in the file's
 `updates` block are kept as they are. `GET /api/server/config` returns the current values as
 `updates`. An invalid `updates` block in the file is ignored at startup with a warning (defaults apply).
 
@@ -1319,7 +1320,10 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
   "release_notes": "## What's changed\n...",
   "published_at": "2026-11-20T12:00:00Z",
   "checked_at": "2026-11-23T08:00:00Z",
-  "last_error": null
+  "last_error": null,
+  "can_apply": false,
+  "apply_blocked_reason": "the working directory (/opt/arbiterAI/bin) is inside /opt/arbiterAI/bin, which an update replaces: move it out of the install",
+  "supervisor": "systemd"
 }
 ```
 
@@ -1331,6 +1335,9 @@ rate limit, an HTTP error, a body that is not a release list) logs one warning, 
 | `release_url`, `release_notes`, `published_at` | The latest release's page, notes (Markdown) and publish time; `null` with `latest` |
 | `checked_at` | When a check last got an answer (UTC), `null` before that |
 | `last_error` | Why the last check failed, `null` when it succeeded |
+| `can_apply` | The server can install the latest release itself. Only when every one of these holds: it runs from a release tarball's install (`share/arbiterAI/install.json` next to `bin/`), `updates.allow_apply` is on, the install root is writable, in a container the install root is a mount point (a volume), and neither the working directory nor a path the config names (`--config`, `model_config_paths`, `models_dir`, `override_path`, `injected_config_dir`, `logging.directory`) is inside `<root>/bin` or `<root>/share`, which an update replaces |
+| `apply_blocked_reason` | The first condition of `can_apply` that fails, naming the path or config key; `null` when `can_apply` is true |
+| `supervisor` | What restarts the server after a crash (and so rolls back a bad update): `"systemd"` when `ARBITERAI_SUPERVISOR=systemd` and systemd set `INVOCATION_ID`, `"docker"` when `ARBITERAI_SUPERVISOR=docker` and `/.dockerenv` or `/run/.containerenv` exists, otherwise `null`. The variable alone, copied into a shell, does not count |
 
 #### `POST /api/update/check`
 

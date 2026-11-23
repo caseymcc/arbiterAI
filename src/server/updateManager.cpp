@@ -311,12 +311,29 @@ bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::
         result.intervalHours=static_cast<int>(hours);
     }
 
+    nlohmann::json::const_iterator allowApply=updates.find("allow_apply");
+    if(allowApply != updates.end())
+    {
+        if(!allowApply->is_boolean())
+        {
+            error="'updates.allow_apply' must be a boolean";
+            return false;
+        }
+        result.allowApply=allowApply->get<bool>();
+    }
+
     policy=result;
     return true;
 }
 
 bool mergeUpdatesConfig(nlohmann::json &cfg, const nlohmann::json &body, UpdatePolicy &policy, std::string &error)
 {
+    if(body.is_object() && body.contains("allow_apply"))
+    {
+        error="'updates.allow_apply' can only be set in the config file";
+        return false;
+    }
+
     UpdatePolicy requested;
     if(!readUpdatePolicy(body, requested, error))
         return false;
@@ -342,7 +359,8 @@ nlohmann::json updatePolicyJson(const UpdatePolicy &policy)
 {
     return {
         {"check", policy.check},
-        {"interval_hours", policy.intervalHours}
+        {"interval_hours", policy.intervalHours},
+        {"allow_apply", policy.allowApply}
     };
 }
 

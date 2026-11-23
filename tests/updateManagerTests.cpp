@@ -524,6 +524,33 @@ TEST(UpdatePolicyTest, MergeKeepsOtherUpdateKeys)
     EXPECT_EQ(result.intervalHours, 6);
 }
 
+TEST(UpdatePolicyTest, ReadsAllowApplyFromTheFile)
+{
+    UpdatePolicy result;
+    std::string error;
+    EXPECT_TRUE(result.allowApply);
+    ASSERT_TRUE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"allow_apply", false}}), result, error));
+    EXPECT_FALSE(result.allowApply);
+    EXPECT_FALSE(arbiterAI::server::readUpdatePolicy(nlohmann::json::object({{"allow_apply", "no"}}), result, error));
+    EXPECT_EQ(error, "'updates.allow_apply' must be a boolean");
+}
+
+TEST(UpdatePolicyTest, MergeRefusesAllowApply)
+{
+    nlohmann::json cfg={{"updates", {{"allow_apply", false}}}};
+    nlohmann::json original=cfg;
+    UpdatePolicy result;
+    std::string error;
+    EXPECT_FALSE(arbiterAI::server::mergeUpdatesConfig(cfg, {{"allow_apply", true}}, result, error));
+    EXPECT_EQ(error, "'updates.allow_apply' can only be set in the config file");
+    EXPECT_EQ(cfg, original);
+
+    // The file's value stays in force through a PUT of other keys.
+    ASSERT_TRUE(arbiterAI::server::mergeUpdatesConfig(cfg, {{"check", false}}, result, error))<<error;
+    EXPECT_FALSE(result.allowApply);
+    EXPECT_EQ(cfg["updates"]["allow_apply"], false);
+}
+
 TEST(UpdatePolicyTest, MergeRejectsBadValuesAndLeavesConfig)
 {
     nlohmann::json cfg={{"updates", {{"check", true}}}};

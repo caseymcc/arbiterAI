@@ -1044,6 +1044,26 @@ int main(int argc, char *argv[])
         arbiterAI::getVersion().toString());
     arbiterAI::server::setUpdateManager(&updates);
     updates.start(updatePolicy);
+
+    arbiterAI::server::ApplyContext applyContext;
+    applyContext.root=arbiterAI::server::runningInstallRoot();
+    std::error_code cwdError;
+    applyContext.cwd=std::filesystem::current_path(cwdError);
+    applyContext.allowApply=updatePolicy.allowApply;
+    applyContext.configPaths.push_back({"--config", configPath});
+    for(const std::string &path:modelConfigPaths)
+        applyContext.configPaths.push_back({"model_config_paths", path});
+    applyContext.configPaths.push_back({"models_dir", modelsDir});
+    applyContext.configPaths.push_back({"override_path", overridePath});
+    applyContext.configPaths.push_back({"injected_config_dir", injectedConfigDir});
+    applyContext.configPaths.push_back({"logging.directory", logDir});
+    std::shared_ptr<arbiterAI::server::SystemEnvironment> environment=std::make_shared<arbiterAI::server::SystemEnvironment>();
+    arbiterAI::server::setApplyContext(applyContext, environment);
+    arbiterAI::server::ApplyCheck applyCheck=arbiterAI::server::checkCanApply(applyContext, *environment);
+    nlohmann::json supervisor=arbiterAI::server::supervisorJson(arbiterAI::server::detectSupervisor(*environment));
+    spdlog::info("Update apply: {}; restart on crash: {}",
+        applyCheck.canApply?std::string("available"):"blocked, "+applyCheck.blockedReason,
+        supervisor.is_null()?std::string("none (no supervisor declared)"):supervisor.get<std::string>());
     spdlog::info("Release check for {}: {}", ARBITERAI_UPDATE_REPO,
         updatePolicy.check?"every "+std::to_string(updatePolicy.intervalHours)+" h":std::string("off"));
 

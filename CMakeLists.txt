@@ -293,6 +293,7 @@ endif()
         tests/updateManagerTests.cpp
         tests/drainControllerTests.cpp
         tests/installerTests.cpp
+        tests/installEnvironmentTests.cpp
         src/server/drainController.cpp
     )
 
@@ -388,6 +389,8 @@ add_library(arbiterai_server_updates STATIC
     src/server/updateRoutes.cpp
     src/server/installer.h
     src/server/installer.cpp
+    src/server/installEnvironment.h
+    src/server/installEnvironment.cpp
 )
 target_include_directories(arbiterai_server_updates PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/server")
 target_link_libraries(arbiterai_server_updates

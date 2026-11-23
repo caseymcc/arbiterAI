@@ -134,9 +134,10 @@ private:
 struct UpdatePolicy {
     bool check=true;
     int intervalHours=24;
+    bool allowApply=true;///< from the config file only, never over REST
 };
 
-/// Reads check and interval_hours from an "updates" object, keeping the
+/// Reads check, interval_hours and allow_apply from an "updates" object, keeping the
 /// defaults in \p policy for keys it lacks. False with \p error on a wrong type
 /// or an interval_hours under 1.
 bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::string &error);
@@ -144,7 +145,8 @@ bool readUpdatePolicy(const nlohmann::json &updates, UpdatePolicy &policy, std::
 /// Puts the check and interval_hours of \p body (a PUT /api/server/config
 /// "updates" object) into the "updates" object of \p cfg, leaving its other
 /// keys alone; \p policy is the merged block's. False with \p error, and \p cfg
-/// unchanged, when the request or the merged block is invalid.
+/// unchanged, when the request or the merged block is invalid, or the request
+/// sets allow_apply.
 bool mergeUpdatesConfig(nlohmann::json &cfg, const nlohmann::json &body, UpdatePolicy &policy, std::string &error);
 
 /// The "updates" object of GET /api/server/config.
