@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG DOCKER_VERSION=1.2.2
+ARG DOCKER_VERSION=1.3.0
 FROM ubuntu:24.04
 
 # Install basic build tools, Python 3, and GPU libraries.
@@ -30,6 +30,11 @@ RUN apt-get update && apt-get install -y \
     libxrandr-dev \
     libxinerama-dev \
     libglu1-mesa-dev \
+    libgl1-mesa-dev \
+    libgl1-mesa-dri \
+    libopengl-dev \
+    libegl1 \
+    libegl-mesa0 \
     vulkan-tools \
     libvulkan-dev \
     mesa-vulkan-drivers \
@@ -58,6 +63,33 @@ ENV CMAKE_PREFIX_PATH="${ROCM_PATH}:${CMAKE_PREFIX_PATH}"
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
+
+# Emscripten for the web dashboard (src/dashboard, ARBITERAI_WEB_DASHBOARD), the
+# version gweni is tested against. contrib.glfw3 (gweni::app on the web) is
+# fetched into the cache now so a build needs no network; the cache is owned by
+# the build user because Emscripten builds its system libraries into it lazily.
+# Playwright's Chromium headless shell gives a WebGL 2 browser for checking and
+# capturing the dashboard.
+ARG EMSDK_VERSION=6.0.13
+ARG PLAYWRIGHT_VERSION=1.65.0
+ENV EMSDK=/opt/emsdk
+ENV EMSDK_NODE=${EMSDK}/node/current/bin/node
+ENV PATH=${EMSDK}:${EMSDK}/upstream/emscripten:${PATH}
+ENV NODE_PATH=/opt/playwright/node_modules
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright/browsers
+RUN git clone --depth 1 --branch ${EMSDK_VERSION} https://github.com/emscripten-core/emsdk.git ${EMSDK} && \
+    ${EMSDK}/emsdk install ${EMSDK_VERSION} && \
+    ${EMSDK}/emsdk activate ${EMSDK_VERSION} && \
+    ln -s $(dirname $(dirname $(ls ${EMSDK}/node/*/bin/node | head -1))) ${EMSDK}/node/current && \
+    rm -rf ${EMSDK}/downloads ${EMSDK}/.git && \
+    embuilder build contrib.glfw3 && \
+    mkdir -p /opt/playwright && \
+    PATH=${EMSDK}/node/current/bin:${PATH} npm install --prefix /opt/playwright --no-audit --no-fund playwright@${PLAYWRIGHT_VERSION} && \
+    PATH=${EMSDK}/node/current/bin:${PATH} /opt/playwright/node_modules/.bin/playwright install chromium-headless-shell && \
+    apt-get update && \
+    PATH=${EMSDK}/node/current/bin:${PATH} /opt/playwright/node_modules/.bin/playwright install-deps chromium-headless-shell && \
+    rm -rf /var/lib/apt/lists/* && \
+    chown -R ubuntu:ubuntu ${EMSDK} /opt/playwright
 
 # Setup Python environment
 ENV PYTHONUNBUFFERED=1
