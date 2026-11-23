@@ -209,7 +209,14 @@ server, each of which restarts it when it crashes:
 - **Docker**: the image `ghcr.io/caseymcc/arbiterai-server:vX.Y.Z` / `:latest`, built from the tarball by
   [`docker/server.Dockerfile`](../docker/server.Dockerfile), run with
   [`docker/compose.yaml`](../docker/compose.yaml) (also in the tarball as `share/arbiterAI/docker/compose.yaml`)
-  and the example config `share/arbiterAI/examples/server.docker.json`.
+  and the example config `share/arbiterAI/examples/server.docker.json`. The image's release sits
+  in `/opt/arbiterAI-dist`; the server runs from the install volume `/opt/arbiterAI`, which the
+  entrypoint (`share/arbiterAI/docker/entrypoint.sh`, under tini) brings up to the image with
+  `arbiterAI-server --seed /opt/arbiterAI` before every start. `--seed <root>` first rolls back a
+  version that crashed during its probation, then copies the image into an empty root, or swaps a
+  newer image in (with `bin.prev` and a probation of its own) unless that version is in `failed`,
+  and otherwise leaves the root alone. So an update from the dashboard survives a new container,
+  `docker compose pull` of a newer image still updates, and an older image never downgrades.
 
 The install steps are in the tarball's README ([`packaging/server/README.md`](../packaging/server/README.md)):
 "Running under systemd" and "Running under Docker". Both declare their restart policy to the server
@@ -226,8 +233,9 @@ docker build -f docker/server.Dockerfile --build-arg VERSION="$(./scripts/versio
 ```
 
 `scripts/checkServerImage.sh` is the image check CI runs on every PR: `--version`, `--self-test` on a
-read-only `/config`, a start followed by a clean `docker stop`, and a crash that the restart policy
-recovers.
+read-only `/config`, a start followed by a clean `docker stop`, a crash that the restart policy
+recovers, and an install volume that is seeded on the first start (with tini as PID 1 and apply
+allowed under `supervisor: docker`) and kept by the next container.
 
 #### Checking a service install by hand
 

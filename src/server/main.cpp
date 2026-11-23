@@ -633,6 +633,10 @@ void printUsage()
         "                        Binds no port, loads no models and writes nothing; uses the\n"
         "                        arbiterAI_config checkout in the working directory as it is.\n"
         "                        Exits 0 if the start would succeed, non-zero with the reason if not.\n"
+        "      --seed <root>     Bring the install at <root> up to this binary's own install\n"
+        "                        (the Docker image's entrypoint does this for the install volume):\n"
+        "                        copy it into an empty <root>, or swap it in when it is newer\n"
+        "                        and has not failed there before; then exit. Needs no --config.\n"
         "      --version         Print the version and exit\n"
         "  -h, --help            Print this help message\n"
         "\n"
@@ -649,6 +653,7 @@ int main(int argc, char *argv[])
 
     // ── Parse CLI ────────────────────────────────────────────────
     std::string configPath;
+    std::string seedRoot;
     bool selfTest=false;
 
     for(int i=1; i<argc; ++i)
@@ -670,6 +675,10 @@ int main(int argc, char *argv[])
         {
             selfTest=true;
         }
+        else if(arg=="--seed"&&i+1<argc)
+        {
+            seedRoot=argv[++i];
+        }
         else if((arg=="-c"||arg=="--config")&&i+1<argc)
         {
             configPath=argv[++i];
@@ -684,6 +693,19 @@ int main(int argc, char *argv[])
             printUsage();
             return 1;
         }
+    }
+
+    if(!seedRoot.empty())
+    {
+        std::filesystem::path imageRoot=arbiterAI::server::runningInstallRoot();
+        arbiterAI::server::SeedResult seed=arbiterAI::server::seedInstall(imageRoot, seedRoot);
+        if(seed.outcome==arbiterAI::server::SeedOutcome::Failed)
+        {
+            std::cerr<<"Seed failed: "<<seed.message<<"\n";
+            return 1;
+        }
+        std::cout<<"Seed: "<<seed.message<<"\n";
+        return 0;
     }
 
     if(configPath.empty())

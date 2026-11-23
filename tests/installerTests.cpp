@@ -345,4 +345,139 @@ TEST_F(InstallerTest, HealthTimerStoppedEarlyMarksNothing)
     EXPECT_TRUE(stateExists());
 }
 
+class SeedTest:public InstallerTest {
+protected:
+    void SetUp() override
+    {
+        InstallerTest::SetUp();
+        m_image=m_root/"image";
+        m_volume=m_root/"volume";
+        makeInstall(m_image, "1.1.0");
+        fs::permissions(m_image/"bin"/"arbiterAI-server", fs::perms::owner_all);
+    }
+
+    arbiterAI::server::SeedResult seed()
+    {
+        return arbiterAI::server::seedInstall(m_image, m_volume);
+    }
+
+    fs::path m_image;
+    fs::path m_volume;
+};
+
+TEST_F(SeedTest, EmptyVolumeGetsACopyOfTheImage)
+{
+    arbiterAI::server::SeedResult result=seed();
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::Installed)<<result.message;
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.1.0");
+    EXPECT_EQ(readFile(m_volume/"bin"/"arbiterAI-server"), "binary 1.1.0");
+    EXPECT_NE(fs::status(m_volume/"bin"/"arbiterAI-server").permissions()&fs::perms::owner_exec, fs::perms::none);
+    EXPECT_FALSE(fs::exists(m_volume/".update"));
+    EXPECT_FALSE(fs::exists(m_volume/"update-state.json"));
+    EXPECT_FALSE(arbiterAI::server::hasPrevious(m_volume));
+
+    // The image is copied, not moved.
+    EXPECT_EQ(readFile(m_image/"bin"/"arbiterAI-server"), "binary 1.1.0");
+}
+
+TEST_F(SeedTest, NewerImageIsSwappedInWithPrevAndProbation)
+{
+    makeInstall(m_volume, "1.0.0");
+
+    arbiterAI::server::SeedResult result=seed();
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::Updated)<<result.message;
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.1.0");
+    EXPECT_EQ(readFile(m_volume/"bin.prev"/"arbiterAI-server"), "binary 1.0.0");
+    EXPECT_FALSE(fs::exists(m_volume/".update"));
+    EXPECT_TRUE(fs::exists(m_image/"bin"/"arbiterAI-server"));
+
+    std::string error;
+    std::optional<UpdateState> state=arbiterAI::server::readUpdateState(m_volume, error);
+    ASSERT_TRUE(state.has_value())<<error;
+    EXPECT_EQ(state->from, "1.0.0");
+    EXPECT_EQ(state->to, "1.1.0");
+    EXPECT_EQ(state->attempt, 0);
+    EXPECT_TRUE(state->loadedModels.empty());
+}
+
+TEST_F(SeedTest, OlderImageLeavesTheVolumeAlone)
+{
+    makeInstall(m_volume, "1.2.0");
+
+    arbiterAI::server::SeedResult result=seed();
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::Kept)<<result.message;
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.2.0");
+    EXPECT_FALSE(arbiterAI::server::hasPrevious(m_volume));
+    EXPECT_FALSE(fs::exists(m_volume/"update-state.json"));
+}
+
+TEST_F(SeedTest, SameVersionLeavesTheVolumeAlone)
+{
+    makeInstall(m_volume, "1.1.0");
+    writeFile(m_volume/"bin"/"arbiterAI-server", "binary 1.1.0 on the volume");
+
+    EXPECT_EQ(seed().outcome, arbiterAI::server::SeedOutcome::Kept);
+    EXPECT_EQ(readFile(m_volume/"bin"/"arbiterAI-server"), "binary 1.1.0 on the volume");
+}
+
+TEST_F(SeedTest, FailedVersionIsNotSeededAgain)
+{
+    makeInstall(m_volume, "1.0.0");
+    UpdateHistory history;
+    history.addFailed("1.1.0");
+    std::string error;
+    ASSERT_TRUE(arbiterAI::server::writeUpdateHistory(m_volume, history, error))<<error;
+
+    arbiterAI::server::SeedResult result=seed();
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::KeptFailed)<<result.message;
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.0.0");
+    EXPECT_FALSE(fs::exists(m_volume/"update-state.json"));
+}
+
+TEST_F(SeedTest, PendingRollbackIsDoneFirstAndNotUndone)
+{
+    // The volume was seeded to 1.1.0, which then crashed during probation.
+    makeInstall(m_volume, "1.0.0");
+    ASSERT_EQ(seed().outcome, arbiterAI::server::SeedOutcome::Updated);
+    ASSERT_EQ(arbiterAI::server::checkProbation(m_volume, "1.1.0", true).outcome, ProbationOutcome::Started);
+
+    arbiterAI::server::SeedResult result=seed();
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::KeptFailed)<<result.message;
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.0.0");
+    EXPECT_EQ(readFile(m_volume/"bin"/"arbiterAI-server"), "binary 1.0.0");
+    EXPECT_FALSE(fs::exists(m_volume/"update-state.json"));
+    EXPECT_TRUE(arbiterAI::server::readUpdateHistory(m_volume).isFailed("1.1.0"));
+}
+
+TEST_F(SeedTest, AttemptZeroIsLeftForTheServer)
+{
+    makeInstall(m_volume, "1.0.0");
+    ASSERT_EQ(seed().outcome, arbiterAI::server::SeedOutcome::Updated);
+
+    // The container restarts before the server ever ran: seed runs again.
+    EXPECT_EQ(seed().outcome, arbiterAI::server::SeedOutcome::Kept);
+    std::string error;
+    std::optional<UpdateState> state=arbiterAI::server::readUpdateState(m_volume, error);
+    ASSERT_TRUE(state.has_value())<<error;
+    EXPECT_EQ(state->attempt, 0);
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_volume), "1.1.0");
+}
+
+TEST_F(SeedTest, UnfinishedCopyIsRedone)
+{
+    // share/ (with the marker) went in, bin/ never did.
+    writeFile(m_volume/"share"/"arbiterAI"/"install.json", "{\"version\": \"1.1.0\"}");
+
+    EXPECT_EQ(seed().outcome, arbiterAI::server::SeedOutcome::Installed);
+    EXPECT_EQ(readFile(m_volume/"bin"/"arbiterAI-server"), "binary 1.1.0");
+}
+
+TEST_F(SeedTest, WithoutAnImageInstallItFails)
+{
+    arbiterAI::server::SeedResult result=arbiterAI::server::seedInstall(m_root/"nothing", m_volume);
+    EXPECT_EQ(result.outcome, arbiterAI::server::SeedOutcome::Failed);
+    EXPECT_EQ(result.message.rfind("no release install at ", 0), 0u)<<result.message;
+    EXPECT_FALSE(fs::exists(m_volume/"bin"));
+}
+
 } // anonymous namespace

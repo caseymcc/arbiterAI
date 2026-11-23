@@ -14,6 +14,7 @@ share/arbiterAI/systemd/arbiterai-server.service   systemd unit (see "Running un
 share/arbiterAI/examples/server.systemd.json  example config for the systemd unit
 share/arbiterAI/examples/server.docker.json   example config for the Docker image
 share/arbiterAI/docker/compose.yaml           Docker Compose file (see "Running under Docker")
+share/arbiterAI/docker/entrypoint.sh          the Docker image's entrypoint (seeds the install volume)
 README.md
 LICENSE
 ```
@@ -180,11 +181,26 @@ never fetches.
 
 ## Running under Docker
 
-The image `ghcr.io/caseymcc/arbiterai-server` holds this same release, unpacked at `/opt/arbiterAI`,
-on Ubuntu 24.04 with the runtime libraries and the Mesa Vulkan drivers. Tags: `vX.Y.Z` per release
-and `latest`.
+The image `ghcr.io/caseymcc/arbiterai-server` holds this same release, unpacked at
+`/opt/arbiterAI-dist`, on Ubuntu 24.04 with the runtime libraries and the Mesa Vulkan drivers. Tags:
+`vX.Y.Z` per release and `latest`.
 
 - PID 1 is `tini`, which forwards `SIGTERM` to the server for its drain and reaps child processes.
+- The server runs from `/opt/arbiterAI`, the **install volume**. On every start the entrypoint runs
+  `/opt/arbiterAI-dist/bin/arbiterAI-server --seed /opt/arbiterAI`, then the server from the
+  volume:
+  - an empty volume gets a copy of the image's release;
+  - a newer image (after `docker compose pull`) is swapped in, with the previous version kept as
+    `bin.prev`/`share.prev`; if it crashes before it has served for 60 s it is rolled back on the
+    next start, and that version is not seeded again;
+  - the same or an older image leaves the volume alone: pulling an older tag never downgrades.
+    To go back to the image's version, delete the volume (`docker compose down`, then
+    `docker volume rm <project>_install`).
+
+  The dashboard's Update button and auto-update replace the install on the volume, so an update
+  survives `docker compose down && docker compose up`. Without a volume at `/opt/arbiterAI` the
+  install is part of the container, and the dashboard says to mount one instead of offering the
+  button.
 - The working directory is `/config`, a volume: the `arbiterAI_config` clone, `server.json`, model
   overrides and injected configs live there and survive a new container. Model files go in the
   `/models` volume.
@@ -202,7 +218,8 @@ docker compose logs -f
 ```
 
 The compose file publishes port 8080, sets `restart: unless-stopped` (a crashed server is
-restarted) and `ARBITERAI_SUPERVISOR=docker`, and gives `docker stop` 90 s
+restarted, which is what rolls back an update that crashes) and `ARBITERAI_SUPERVISOR=docker`,
+mounts the `install` volume at `/opt/arbiterAI`, and gives `docker stop` 90 s
 (`stop_grace_period`), longer than the server's drain. API keys go in its `environment:` block.
 
 GPU access is off until you uncomment one of the blocks at the end of the compose file:
@@ -217,7 +234,7 @@ Without compose:
 ```bash
 docker run -d --name arbiterai-server --restart unless-stopped --stop-timeout 90 \
     -e ARBITERAI_SUPERVISOR=docker -p 8080:8080 \
-    -v "$PWD/config:/config" -v "$PWD/models:/models" \
+    -v "$PWD/config:/config" -v "$PWD/models:/models" -v arbiterai-install:/opt/arbiterAI \
     ghcr.io/caseymcc/arbiterai-server:latest
 ```
 

@@ -136,6 +136,30 @@ ProbationResult runStartupProbation(const std::filesystem::path &root, const std
 /// "to" is \p version and records the update. False when there was none.
 bool markHealthy(const std::filesystem::path &root, const std::string &version);
 
+enum class SeedOutcome
+{
+    Installed, ///< the volume was empty: the image's install was copied in
+    Updated,   ///< the image is newer: swapped in with .prev, in probation
+    Kept,      ///< the volume has the same or a newer version
+    KeptFailed,///< the image's version failed on this volume before
+    Failed     ///< nothing could be done; see message
+};
+
+struct SeedResult {
+    SeedOutcome outcome=SeedOutcome::Failed;
+    std::string imageVersion;
+    std::string volumeVersion;///< before seeding
+    std::string message;
+};
+
+/// --seed: brings the install at \p root (the Docker volume) up to the one at
+/// \p image (the image's own install). First rolls back a version that
+/// failed its probation (attempt >= 1; an attempt 0 is left for the server).
+/// Then an empty volume gets a copy; a newer image, unless its version is in
+/// failed, is swapped in with .prev and an attempt 0 state, so a crash rolls
+/// it back; anything else is left alone.
+SeedResult seedInstall(const std::filesystem::path &image, const std::filesystem::path &root);
+
 /// markHealthy() once the server has served for a while.
 class HealthTimer {
 public:

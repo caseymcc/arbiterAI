@@ -15,6 +15,9 @@
 #      the server dies, tini exits with it.
 #      (Not "docker kill -s SEGV": that signals tini, which does not forward
 #      synchronous signals, and as PID 1 without a handler it ignores them.)
+#   5. With a volume at /opt/arbiterAI the entrypoint seeds it from the image,
+#      tini stays PID 1, /api/update allows apply with supervisor "docker",
+#      and a new container on the same volume keeps it.
 
 set -euo pipefail
 
@@ -30,11 +33,12 @@ PORT=18080
 ID="arbiterai-image-check-$$"
 CONFIG_VOLUME="${ID}-config"
 MODELS_VOLUME="${ID}-models"
+INSTALL_VOLUME="${ID}-install"
 WORK="$(mktemp -d)"
 
 cleanup() {
-    docker rm -f "${ID}-run" "${ID}-crash" >/dev/null 2>&1 || true
-    docker volume rm -f "$CONFIG_VOLUME" "$MODELS_VOLUME" >/dev/null 2>&1 || true
+    docker rm -f "${ID}-run" "${ID}-crash" "${ID}-install" >/dev/null 2>&1 || true
+    docker volume rm -f "$CONFIG_VOLUME" "$MODELS_VOLUME" "$INSTALL_VOLUME" >/dev/null 2>&1 || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -105,5 +109,31 @@ done
 waitForHealth || fail "server did not come back after the restart"
 docker logs "${ID}-crash" 2>&1 | grep "FATAL SIGNAL" >/dev/null || fail "no crash log line before the restart"
 echo "restarted ${RESTARTS} time(s) after SIGSEGV"
+
+docker rm -f "${ID}-crash" >/dev/null
+
+echo "== 5. the install volume"
+docker volume create "$INSTALL_VOLUME" >/dev/null
+runOnInstallVolume() {
+    docker run -d --name "${ID}-install" -p "127.0.0.1:${PORT}:8080" -e ARBITERAI_SUPERVISOR=docker \
+        -v "${CONFIG_VOLUME}:/config" -v "${MODELS_VOLUME}:/models" -v "${INSTALL_VOLUME}:/opt/arbiterAI" \
+        "$IMAGE" >/dev/null
+    waitForHealth || { docker logs "${ID}-install" | tail -50; fail "server on the install volume did not answer /health"; }
+}
+
+runOnInstallVolume
+docker logs "${ID}-install" 2>&1 | grep "Seed: installed v${VERSION}" >/dev/null \
+    || { docker logs "${ID}-install" | head -20; fail "the empty install volume was not seeded"; }
+[ "$(docker exec "${ID}-install" cat /proc/1/comm)" = "tini" ] || fail "PID 1 is not tini"
+UPDATE="$(curl -sf "http://127.0.0.1:${PORT}/api/update")"
+echo "$UPDATE" | grep '"can_apply":true' >/dev/null || fail "apply is blocked on the install volume: ${UPDATE}"
+echo "$UPDATE" | grep '"supervisor":"docker"' >/dev/null || fail "supervisor is not docker: ${UPDATE}"
+docker stop -t 30 "${ID}-install" >/dev/null
+docker rm "${ID}-install" >/dev/null
+
+runOnInstallVolume
+docker logs "${ID}-install" 2>&1 | grep "Seed: kept v${VERSION}" >/dev/null \
+    || { docker logs "${ID}-install" | head -20; fail "a new container did not keep the install volume"; }
+echo "seeded, apply allowed under docker, kept by a new container"
 
 echo "image ${IMAGE}: all checks passed"

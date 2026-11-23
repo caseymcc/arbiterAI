@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "updateManager.h"
 
 #include <spdlog/spdlog.h>
 
@@ -529,6 +530,129 @@ bool markHealthy(const fs::path &root, const std::string &version)
         return false;
     }
     return true;
+}
+
+namespace
+{
+
+/// Copies <image>/bin and <image>/share to <root>/.update/seed, keeping modes.
+bool copyInstall(const fs::path &image, const fs::path &root, fs::path &seed, std::string &error)
+{
+    seed=root/".update"/"seed";
+    if(!removeTree(root/".update", error))
+        return false;
+
+    std::error_code ec;
+    fs::create_directories(seed, ec);
+    for(const char *dir:{"bin", "share"})
+    {
+        if(ec)
+            break;
+        fs::copy(image/dir, seed/dir, fs::copy_options::recursive|fs::copy_options::copy_symlinks, ec);
+    }
+    if(ec)
+    {
+        error="cannot copy "+image.string()+" to "+seed.string()+": "+ec.message();
+        std::string cleanupError;
+        removeTree(root/".update", cleanupError);
+        return false;
+    }
+    return true;
+}
+
+} // anonymous namespace
+
+SeedResult seedInstall(const fs::path &image, const fs::path &root)
+{
+    SeedResult result;
+    result.imageVersion=installedVersion(image);
+    std::optional<SemVer> imageVersion=SemVer::parse(result.imageVersion, false);
+    if(!imageVersion || !fs::exists(installedBinaryPath(image)))
+    {
+        result.message=image.empty()
+            ?"this binary is not in a release install's bin/ directory"
+            :"no release install at "+image.string()+" (bin/, share/arbiterAI/install.json)";
+        return result;
+    }
+
+    std::error_code ec;
+    fs::create_directories(root, ec);
+    if(ec)
+    {
+        result.message="cannot create "+root.string()+": "+ec.message();
+        return result;
+    }
+
+    // The rollback half of probation; attempt 0 stays for the server.
+    std::string volume=installedVersion(root);
+    if(!volume.empty())
+    {
+        ProbationResult probation=checkProbation(root, volume, false);
+        if(probation.outcome != ProbationOutcome::None)
+            spdlog::info("Seed: {}", probation.message);
+    }
+
+    // A marker without a binary is a copy that never finished.
+    bool installed=fs::exists(installedBinaryPath(root)) && !installedVersion(root).empty();
+    result.volumeVersion=installed?installedVersion(root):std::string();
+
+    std::string error;
+    fs::path seed;
+    if(!installed)
+    {
+        if(!copyInstall(image, root, seed, error)
+            || !removeTree(root/"bin", error) || !removeTree(root/"share", error)
+            || !moveAll({{seed/"share", root/"share"}, {seed/"bin", root/"bin"}}, error))
+        {
+            result.message=error;
+            return result;
+        }
+        removeTree(root/".update", error);
+        result.outcome=SeedOutcome::Installed;
+        result.message="installed v"+result.imageVersion+" into "+root.string();
+        return result;
+    }
+
+    std::optional<SemVer> volumeVersion=SemVer::parse(result.volumeVersion, false);
+    if(volumeVersion && !(*volumeVersion<*imageVersion))
+    {
+        result.outcome=SeedOutcome::Kept;
+        result.message="kept v"+result.volumeVersion+" (the image has v"+result.imageVersion+")";
+        return result;
+    }
+    if(readUpdateHistory(root).isFailed(result.imageVersion))
+    {
+        result.outcome=SeedOutcome::KeptFailed;
+        result.message="kept v"+result.volumeVersion+": v"+result.imageVersion+" failed here before";
+        return result;
+    }
+
+    if(!copyInstall(image, root, seed, error))
+    {
+        result.message=error;
+        return result;
+    }
+
+    UpdateState state;
+    state.from=result.volumeVersion;
+    state.to=result.imageVersion;
+    state.attempt=0;
+    bool swapped=writeUpdateState(root, state, error) && swapIn(root, seed, error);
+    if(!swapped)
+    {
+        std::string removeError;
+        removeUpdateState(root, removeError);
+    }
+    removeTree(root/".update", error);
+    if(!swapped)
+    {
+        result.message="cannot install v"+result.imageVersion+": "+error;
+        return result;
+    }
+
+    result.outcome=SeedOutcome::Updated;
+    result.message="updated v"+result.volumeVersion+" to v"+result.imageVersion+" (v"+result.volumeVersion+" kept as .prev)";
+    return result;
 }
 
 HealthTimer::~HealthTimer()

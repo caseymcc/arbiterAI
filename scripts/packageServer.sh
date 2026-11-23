@@ -70,6 +70,8 @@ cp "${PACKAGING_DIR}/systemd/arbiterai-server.service" "${STAGE}/share/arbiterAI
 cp "${PACKAGING_DIR}/examples/"*.json "${STAGE}/share/arbiterAI/examples/"
 mkdir -p "${STAGE}/share/arbiterAI/docker"
 cp "${REPO_ROOT}/docker/compose.yaml" "${STAGE}/share/arbiterAI/docker/"
+cp "${PACKAGING_DIR}/docker/entrypoint.sh" "${STAGE}/share/arbiterAI/docker/"
+chmod 755 "${STAGE}/share/arbiterAI/docker/entrypoint.sh"
 
 cp "${PACKAGING_DIR}/README.md" "${STAGE}/README.md"
 cp "${REPO_ROOT}/LICENSE" "${STAGE}/LICENSE"

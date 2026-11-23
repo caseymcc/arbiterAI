@@ -30,6 +30,9 @@ services:
       - ./config:/config
       # downloaded model files
       - ./models:/models
+      # the installed server: the image seeds it, the dashboard's Update button
+      # replaces it. Delete the volume to go back to the image's version.
+      - install:/opt/arbiterAI
 
     # --- GPU: uncomment one block ---
 
@@ -40,3 +43,6 @@ services:
     # AMD / Intel (Vulkan through Mesa)
     # devices:
     #   - /dev/dri:/dev/dri
+
+volumes:
+  install:
