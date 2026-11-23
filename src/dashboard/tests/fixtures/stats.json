@@ -1,0 +1,9 @@
+{
+    "hardware": {},
+    "models": [],
+    "avg_tokens_per_second": 120.0,
+    "avg_prompt_tokens_per_second": 812.5,
+    "avg_generation_tokens_per_second": 41.75,
+    "active_requests": 2,
+    "modality": {}
+}

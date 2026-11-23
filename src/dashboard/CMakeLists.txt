@@ -53,8 +53,13 @@ else()
     find_package(GTest CONFIG REQUIRED)
     add_executable(dashboard_tests
         tests/main.cpp
-        tests/smokeTests.cpp
+        tests/dashboardTest.h
+        tests/dashboardTest.cpp
+        tests/appTests.cpp
     )
     target_link_libraries(dashboard_tests PRIVATE dashboard_core gweni::app GTest::gtest)
+    target_include_directories(dashboard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_compile_definitions(dashboard_tests PRIVATE
+        DASHBOARD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     gweni_add_resources(dashboard_tests)
 endif()

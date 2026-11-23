@@ -66,9 +66,9 @@ public:
 
     OverviewPanel &overview() { return *m_overview; }
     LogPanel &logPanel() { return *m_logPanel; }
+    gweni::controls::TabButton *tabButton(Tab tab) const;
 
 private:
-    gweni::controls::TabButton *tabButton(Tab tab) const;
     void showTab(Tab tab);
     void setConnected(bool connected, const std::string &error=std::string());
 

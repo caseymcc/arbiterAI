@@ -97,7 +97,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: vcpkg_cache
-        key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'src/dashboard/vcpkg*.json', 'src/dashboard/ports/**') }}
         restore-keys: |
           ${{ runner.os }}-vcpkg-
 
@@ -105,6 +105,18 @@ jobs:
       run: ./runDocker.sh --ci ./build.sh
       env:
         VCPKG_CACHE_PATH: ${{ github.workspace }}/vcpkg_cache
+
+    - name: Run dashboard tests
+      # the web dashboard rendered headless from fixtures (llvmpipe, no GPU)
+      run: ./runDocker.sh --ci ./build/linux_x64_debug/dashboard/native/dashboard_tests --shots /app/build/dashboard-shots
+
+    - name: Upload dashboard screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dashboard-shots
+        path: build/dashboard-shots
+        if-no-files-found: ignore
 
     - name: Print vcpkg build logs on failure
       if: failure()

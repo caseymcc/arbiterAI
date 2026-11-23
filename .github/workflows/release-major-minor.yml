@@ -126,7 +126,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: vcpkg_cache
-        key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'src/dashboard/vcpkg*.json', 'src/dashboard/ports/**') }}
         restore-keys: |
           ${{ runner.os }}-vcpkg-
 
