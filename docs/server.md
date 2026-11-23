@@ -300,6 +300,79 @@ host with systemd or Docker.
    curl -s localhost:8080/api/hardware        # "gpus" lists the card, with its VRAM
    ```
 
+#### Checking self-update by hand
+
+These need two published releases: **A**, one with self-update, and a newer **B** (say `0.1.20`
+and `0.1.21`). Replace `A` and `B` in the commands. `POST /api/update/check` makes the server see B
+at once instead of at its next daily check. Each check below says what to look for.
+
+**systemd** (A installed from its tarball as in the README's "Running under systemd"):
+
+1. The Update button installs B in place, with no restart that systemd sees:
+   ```bash
+   curl -s -X POST localhost:8080/api/update/check | jq '{latest, can_apply, supervisor}'   # "B", true, "systemd"
+   PID=$(systemctl show -p MainPID --value arbiterai-server)
+   # dashboard: Update to vB, then OK in the dialog (or: curl -X POST localhost:8080/api/update/apply -d '{"version":"B"}')
+   until [ "$(curl -s localhost:8080/api/version | jq -r .version)" = B ]; do sleep 1; done
+   systemctl show -p MainPID -p NRestarts arbiterai-server   # MainPID=$PID, NRestarts=0
+   curl -s localhost:8080/api/update | jq '{current, prev_version, rollback_available}'      # "B", "A", true
+   journalctl -u arbiterai-server -n 300 | grep -E "Update:|Restarting as"
+   ```
+   The dashboard page reloads by itself and shows "Updated from vA" under the header.
+2. A crash during probation, the first 60 s after the restart, is rolled back. Roll back by hand
+   first (step 3), or install B again: the manual button still offers it.
+   ```bash
+   curl -s -X POST localhost:8080/api/update/apply -d '{"version":"B"}'
+   until [ "$(curl -s localhost:8080/api/version | jq -r .version)" = B ]; do sleep 1; done
+   kill -SEGV "$(systemctl show -p MainPID --value arbiterai-server)"     # within 60 s
+   sleep 10
+   curl -s localhost:8080/api/version | jq -r .version                      # A
+   curl -s localhost:8080/api/update | jq '{update_error, auto}'           # "vB failed to start, rolled back"
+   ls /opt/arbiterAI                                                        # no bin.prev, no update-state.json
+   ```
+3. Roll back by hand. After a good update has run for a minute, "Roll back to vA" under the header,
+   or the command below. The PID stays the same, as in step 1.
+   ```bash
+   curl -s -X POST localhost:8080/api/update/rollback
+   ```
+4. A clean restart during probation keeps B: `systemctl restart arbiterai-server` within 60 s of an
+   update, and `/api/version` still says B afterwards.
+
+**Docker Compose** (as in the README's "Running under Docker", with
+`image: ghcr.io/caseymcc/arbiterai-server:vA` in `compose.yaml`):
+
+1. The first start seeds the install volume, and the Update button installs B there:
+   ```bash
+   docker compose up -d
+   docker compose logs arbiterai-server | grep "Seed: installed vA"
+   curl -s -X POST localhost:8080/api/update/check | jq '{latest, can_apply, supervisor}'   # "B", true, "docker"
+   # dashboard: Update to vB, OK
+   until [ "$(curl -s localhost:8080/api/version | jq -r .version)" = B ]; do sleep 1; done
+   docker inspect -f '{{.RestartCount}}' "$(docker compose ps -q arbiterai-server)"            # 0
+   docker compose exec arbiterai-server cat /proc/1/comm                                      # tini
+   ```
+2. The volume survives a new container: `docker compose down && docker compose up -d`, then
+   `/api/version` says B and the logs say `Seed: kept vB (the image has vA)`.
+3. A crash during probation is rolled back on the restart Docker does (install B again first, as for
+   systemd, then within 60 s):
+   ```bash
+   docker compose exec arbiterai-server sh -c \
+       'for p in /proc/[0-9]*; do [ "$(cat $p/comm)" = arbiterAI-serve ] && kill -SEGV ${p#/proc/}; done; true'
+   sleep 10
+   curl -s localhost:8080/api/version | jq -r .version                      # A
+   curl -s localhost:8080/api/update | jq .update_error                     # "vB failed to start, rolled back"
+   ```
+4. `docker compose pull` of a newer image updates the volume. Start from an empty volume on A
+   (`docker compose down`, `docker volume rm <project>_install`, `docker compose up -d`), then
+   change the image tag to `vB` (or `latest`):
+   ```bash
+   docker compose pull && docker compose up -d
+   docker compose logs arbiterai-server | grep "Seed: updated vA to vB"
+   curl -s localhost:8080/api/version | jq -r .version                      # B
+   ```
+   Going back to `vA` in `compose.yaml` leaves the volume on B (`Seed: kept vB`). Deleting the
+   volume resets it.
+
 ---
 
 ## 3. API Reference
