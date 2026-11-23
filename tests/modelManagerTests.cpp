@@ -2,6 +2,9 @@
 #include <gtest/gtest.h>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <set>
+#include <unistd.h>
+#include <string>
 
 namespace arbiterAI
 {
@@ -800,6 +803,71 @@ TEST_F(ModelManagerTest, SplitVariantSerializationRoundTrip)
     // Verify download field is also present (backward compat)
     ASSERT_TRUE(outputJson["variants"][0].contains("download"));
     EXPECT_EQ(outputJson["variants"][0]["download"]["filename"].get<std::string>(), "shard-00001-of-00003.gguf");
+}
+
+/// Runs each test in an empty temporary working directory, the way a
+/// self-test runs next to a live server's arbiterAI_config checkout.
+class ModelManagerConfigSyncTest : public ::testing::Test
+{
+protected:
+    std::filesystem::path m_previousCwd;
+    std::filesystem::path m_cwd;
+
+    void SetUp() override
+    {
+        ModelManager::reset();
+        m_previousCwd=std::filesystem::current_path();
+        m_cwd=std::filesystem::temp_directory_path()/("modelManagerConfigSync_"+std::to_string(::getpid()));
+        std::filesystem::remove_all(m_cwd);
+        std::filesystem::create_directories(m_cwd/"local"/"models");
+        std::ofstream(m_cwd/"local"/"models"/"local.json")<<R"({"models": [{"model": "local-model", "provider": "mock"}]})";
+        std::filesystem::current_path(m_cwd);
+    }
+
+    void TearDown() override
+    {
+        std::filesystem::current_path(m_previousCwd);
+        std::filesystem::remove_all(m_cwd);
+        ModelManager::reset();
+    }
+
+    static std::set<std::string> listTree(const std::filesystem::path &root)
+    {
+        std::set<std::string> entries;
+        for(const std::filesystem::directory_entry &entry:std::filesystem::recursive_directory_iterator(root))
+        {
+            std::string line=entry.path().string();
+            if(entry.is_regular_file())
+                line+=" "+std::to_string(entry.file_size())+" "+std::to_string(entry.last_write_time().time_since_epoch().count());
+            entries.insert(line);
+        }
+        return entries;
+    }
+};
+
+TEST_F(ModelManagerConfigSyncTest, SyncOffDoesNotCloneIntoCwd)
+{
+    ModelManager &manager=ModelManager::instance();
+    manager.setConfigSync(false);
+
+    EXPECT_TRUE(manager.initialize({m_cwd/"local"}));
+    EXPECT_TRUE(manager.getModelInfo("local-model").has_value());
+    EXPECT_FALSE(std::filesystem::exists(m_cwd/"arbiterAI_config"));
+}
+
+TEST_F(ModelManagerConfigSyncTest, SyncOffReadsCachedCheckoutAsIs)
+{
+    std::filesystem::path checkout=m_cwd/"arbiterAI_config";
+    std::filesystem::create_directories(checkout/"configs"/"defaults"/"models");
+    std::ofstream(checkout/"configs"/"defaults"/"models"/"cached.json")<<R"({"models": [{"model": "cached-model", "provider": "mock"}]})";
+    std::set<std::string> before=listTree(checkout);
+
+    ModelManager &manager=ModelManager::instance();
+    manager.setConfigSync(false);
+
+    EXPECT_TRUE(manager.initialize({}));
+    EXPECT_TRUE(manager.getModelInfo("cached-model").has_value());
+    EXPECT_EQ(listTree(checkout), before);
 }
 
 } // namespace arbiterAI

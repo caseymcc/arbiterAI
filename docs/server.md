@@ -46,12 +46,30 @@ The server supports:
 
 ### CLI Options
 
-The server accepts only two command-line options:
-
 | Option | Description |
 |--------|-------------|
-| `-c, --config <path>` | Path to server configuration JSON file (**required**) |
+| `-c, --config <path>` | Path to server configuration JSON file (**required**, except with `--version` / `--help`) |
+| `--self-test` | With `-c`: check that the server would start, then exit (see below) |
+| `--version` | Print `arbiterAI-server <version>` and the llama.cpp build, exit `0` |
 | `-h, --help` | Print usage |
+
+#### Self-test
+
+`arbiterAI-server --self-test -c <config>` runs the normal startup up to, but not including, `listen()`:
+it parses the config file, loads the model configs (`ArbiterAI::initialize`) and detects hardware. It
+exits `0` and prints `self-test passed: …` when a real start would get that far, or exits `1` with the
+reason on stderr (config file missing, invalid JSON, no model config loadable).
+
+It is safe to run next to a live server, in that server's working directory:
+
+- **No network sync of `arbiterAI_config`.** A normal start clones or fetches the
+  [`arbiterAI_config`](https://github.com/caseymcc/arbiterAI_config) repository into
+  `./arbiterAI_config` in the working directory. The self-test turns that off
+  (`ModelManager::setConfigSync(false)`): it reads the existing checkout as it is, and if there is none it
+  skips the remote configs and relies on `model_config_paths` alone. It never clones, fetches or checks out.
+- **Nothing else is written.** No log files (output goes to stderr only), no `models_dir`,
+  `injected_config_dir` or log directory is created, and the storage manager is not initialized.
+- **No port and no background work.** It loads no models, starts no scheduler or cleanup timer and binds no port.
 
 ### Configuration File
 
@@ -171,6 +189,11 @@ A second signal exits at once. If requests are still running 5 seconds after the
 
 # Short form
 ./arbiterAI-server -c server_config.json
+
+# Check a config (or a new binary) without starting the server
+./arbiterAI-server --self-test -c server_config.json
+
+./arbiterAI-server --version
 ```
 
 ---

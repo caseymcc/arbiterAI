@@ -31,6 +31,11 @@ public:
         const std::filesystem::path &localPath,
         const std::string &version="main");
 
+    /// Use an existing checkout as it is, without cloning, fetching or writing.
+    /// refresh() does nothing afterwards.
+    /// @return FallbackToCache if the checkout has configs, NotInitialized otherwise.
+    ConfigDownloadStatus openCached(const std::filesystem::path &localPath);
+
     /// Re-sync the config repository if the refresh interval has elapsed.
     /// @return Status of the refresh operation, or Success if no refresh was needed.
     ConfigDownloadStatus refresh();

@@ -50,6 +50,14 @@ ConfigDownloadStatus ConfigDownloader::initialize(
     return m_status;
 }
 
+ConfigDownloadStatus ConfigDownloader::openCached(const std::filesystem::path &localPath)
+{
+    m_localPath=localPath;
+    m_initialized=false;
+    m_status=hasCachedConfig()?ConfigDownloadStatus::FallbackToCache:ConfigDownloadStatus::NotInitialized;
+    return m_status;
+}
+
 ConfigDownloadStatus ConfigDownloader::refresh()
 {
     if(!m_initialized)

@@ -98,7 +98,9 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
     const std::string remoteUrl="https://github.com/caseymcc/arbiterAI_config.git";
     std::filesystem::path remotePath=std::filesystem::current_path()/"arbiterAI_config";
 
-    ConfigDownloadStatus dlStatus=m_configDownloader.initialize(remoteUrl, remotePath);
+    ConfigDownloadStatus dlStatus=m_configSync
+        ?m_configDownloader.initialize(remoteUrl, remotePath)
+        :m_configDownloader.openCached(remotePath);
     if(dlStatus==ConfigDownloadStatus::Success||dlStatus==ConfigDownloadStatus::FallbackToCache)
     {
         // Load configs from the downloaded repository
@@ -127,7 +129,10 @@ bool ModelManager::initialize(const std::vector<std::filesystem::path> &configPa
     }
     else
     {
-        spdlog::warn("Config download failed (status {}), skipping remote configs", static_cast<int>(dlStatus));
+        if(m_configSync)
+            spdlog::warn("Config download failed (status {}), skipping remote configs", static_cast<int>(dlStatus));
+        else
+            spdlog::warn("Config sync is off and there is no cached config at {}, skipping remote configs", remotePath.string());
     }
 
     // Process additional local directories from configPaths

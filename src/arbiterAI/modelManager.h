@@ -161,6 +161,10 @@ public:
     static void reset(); // For testing
 
     bool initialize(const std::vector<std::filesystem::path> &configPaths={}, const std::filesystem::path &localOverridePath="");
+
+    /// When false, initialize() reads the arbiterAI_config checkout in the
+    /// current directory as it is and never clones or fetches it. Default: true.
+    void setConfigSync(bool enabled) { m_configSync=enabled; }
     std::optional<std::string> getProvider(const std::string &model) const;
     std::optional<ModelInfo> getModelInfo(const std::string &model) const;
     std::vector<ModelInfo> getModels(const std::string &provider) const;
@@ -218,6 +222,7 @@ private:
     std::set<std::string> m_runtimeModels;
     std::vector<GpuBackendRule> m_gpuBackendRules;
     ConfigDownloader m_configDownloader;
+    bool m_configSync{ true };
     std::filesystem::path m_injectedConfigDir;
     bool m_initialized{ false };
 

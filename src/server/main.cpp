@@ -4,6 +4,7 @@
 #include "drainController.h"
 
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/version.h"
 #include "arbiterAI/hardwareDetector.h"
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelRuntime.h"
@@ -518,6 +519,12 @@ void printUsage()
         "\n"
         "Options:\n"
         "  -c, --config <path>   Path to server configuration JSON file (required)\n"
+        "      --self-test       Check that the server would start with --config, then exit:\n"
+        "                        parse the config, load model configs, detect hardware.\n"
+        "                        Binds no port, loads no models and writes nothing; uses the\n"
+        "                        arbiterAI_config checkout in the working directory as it is.\n"
+        "                        Exits 0 if the start would succeed, 1 with the reason if not.\n"
+        "      --version         Print the version and exit\n"
         "  -h, --help            Print this help message\n"
         "\n"
         "See examples/server_config.json for the configuration file format.\n";
@@ -531,8 +538,9 @@ int main(int argc, char *argv[])
     static StopSignals stopSignals;
     stopSignals.block();
 
-    // ── Parse CLI — only --config and --help ──────────────────────
+    // ── Parse CLI ────────────────────────────────────────────────
     std::string configPath;
+    bool selfTest=false;
 
     for(int i=1; i<argc; ++i)
     {
@@ -543,7 +551,17 @@ int main(int argc, char *argv[])
             printUsage();
             return 0;
         }
-        if((arg=="-c"||arg=="--config")&&i+1<argc)
+        if(arg=="--version")
+        {
+            std::cout<<"arbiterAI-server "<<ARBITERAI_VERSION_STRING<<"\n"
+                "llama.cpp build "<<ARBITERAI_LLAMACPP_BUILD<<"\n";
+            return 0;
+        }
+        if(arg=="--self-test")
+        {
+            selfTest=true;
+        }
+        else if((arg=="-c"||arg=="--config")&&i+1<argc)
         {
             configPath=argv[++i];
         }
@@ -666,13 +684,22 @@ int main(int argc, char *argv[])
     else if(logLevel=="error")  spdlog::set_level(spdlog::level::err);
     else                        spdlog::set_level(spdlog::level::info);
 
-    auto consoleSink=std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    auto bufferSink=std::make_shared<arbiterAI::server::LogBufferSink>(1000);
-    arbiterAI::server::logBufferSinkInstance()=bufferSink;
+    std::vector<spdlog::sink_ptr> sinks;
 
-    std::vector<spdlog::sink_ptr> sinks{consoleSink, bufferSink};
+    if(selfTest)
+    {
+        // Report on stderr only; the live server owns the log files.
+        sinks.push_back(std::make_shared<spdlog::sinks::stderr_color_sink_mt>());
+    }
+    else
+    {
+        auto bufferSink=std::make_shared<arbiterAI::server::LogBufferSink>(1000);
+        arbiterAI::server::logBufferSinkInstance()=bufferSink;
+        sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+        sinks.push_back(bufferSink);
+    }
 
-    if(!logDir.empty())
+    if(!logDir.empty()&&!selfTest)
     {
         std::filesystem::create_directories(logDir);
         std::string logPath=logDir+"/arbiterAI-server.log";
@@ -702,7 +729,7 @@ int main(int argc, char *argv[])
 
     spdlog::info("Loaded config from: {}", configPath);
 
-    if(!logDir.empty())
+    if(!logDir.empty()&&!selfTest)
     {
         spdlog::info("File logging enabled: dir={}, rotate at {:02d}:00, retain {} days",
             logDir, logRotateHour, logRetainDays);
@@ -717,19 +744,26 @@ int main(int argc, char *argv[])
 
     spdlog::info("Initializing ArbiterAI...");
 
+    // The self-test may run next to a live server in its working directory:
+    // read that server's arbiterAI_config checkout, never fetch into it.
+    if(selfTest)
+        arbiterAI::ModelManager::instance().setConfigSync(false);
+
     arbiterAI::ArbiterAI &ai=arbiterAI::ArbiterAI::instance();
     arbiterAI::ErrorCode err=ai.initialize(fsPaths);
 
     if(err!=arbiterAI::ErrorCode::Success)
     {
-        spdlog::error("Failed to initialize ArbiterAI (error={})", static_cast<int>(err));
+        spdlog::error("Failed to initialize ArbiterAI (error={}): no model config could be loaded from model_config_paths or {}",
+            static_cast<int>(err), (std::filesystem::current_path()/"arbiterAI_config").string());
         return 1;
     }
 
     spdlog::info("ArbiterAI initialized successfully");
 
     // ── Restore injected model configs ───────────────────────────
-    if(!injectedConfigDir.empty())
+    // setInjectedConfigDir() creates a missing directory.
+    if(!injectedConfigDir.empty()&&(!selfTest||std::filesystem::exists(injectedConfigDir)))
     {
         arbiterAI::ModelManager::instance().setInjectedConfigDir(injectedConfigDir);
         int restored=arbiterAI::ModelManager::instance().loadInjectedConfigs();
@@ -756,7 +790,9 @@ int main(int argc, char *argv[])
     int64_t storageLimitBytes=parseStorageLimit(storageLimitStr);
 
     arbiterAI::StorageManager &storage=arbiterAI::StorageManager::instance();
-    storage.initialize(modelsDir);
+    // initialize() creates models_dir and starts the cleanup timer.
+    if(!selfTest)
+        storage.initialize(modelsDir);
 
     // ── Models directory for ModelRuntime ─────────────────────────
     arbiterAI::ModelRuntime::instance().setModelsDir(modelsDir);
@@ -798,6 +834,13 @@ int main(int argc, char *argv[])
     // ── Load startup models ─────────────────────────────────────
     arbiterAI::HardwareDetector::instance().refresh();
     arbiterAI::SystemInfo startupHardware=arbiterAI::HardwareDetector::instance().getSystemInfo();
+
+    if(selfTest)
+    {
+        std::cout<<"self-test passed: "<<arbiterAI::ModelManager::instance().getModelsByRanking().size()
+            <<" model configs, "<<startupHardware.gpus.size()<<" GPU(s)\n";
+        return 0;
+    }
 
     // New format: startup_models array (preferred)
     std::vector<StartupModelEntry> startupModels=parseStartupModels(cfg);
