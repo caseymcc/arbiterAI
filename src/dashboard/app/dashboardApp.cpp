@@ -37,11 +37,8 @@ Route routeForUrl(const std::string &url)
     Route route;
     std::string path=pathOf(url);
 
-    // the new dashboard is at /dashboard/next until it replaces the old pages
-    if(path=="/dashboard/next" || path.rfind("/dashboard/next/", 0)==0)
-        route.base="/dashboard/next";
-
-    std::string rest=path.size()>route.base.size()?path.substr(route.base.size()):std::string();
+    const std::string base="/dashboard";
+    std::string rest=path.rfind(base, 0)==0?path.substr(base.size()):std::string();
     if(rest=="/storage")
         route.tab=Tab::Storage;
     else if(rest=="/config")
@@ -51,16 +48,16 @@ Route routeForUrl(const std::string &url)
     return route;
 }
 
-std::string pathForTab(const std::string &base, Tab tab)
+std::string pathForTab(Tab tab)
 {
     switch(tab)
     {
     case Tab::Storage:
-        return base+"/storage";
+        return "/dashboard/storage";
     case Tab::Config:
-        return base+"/config";
+        return "/dashboard/config";
     default:
-        return base;
+        return "/dashboard";
     }
 }
 
@@ -71,7 +68,6 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
     m_canvas(canvas)
 {
     Route route=routeForUrl(url);
-    m_base=route.base;
 
     m_root=canvas->newChild<gweni::controls::Base>();
     m_root->setDock(gweni::DockPosition::Center);
@@ -109,7 +105,7 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
         m_tabButtons[i]->onPressCaller.addCallback(m_tabButtons[i], [this, i](gweni::event::Handler &, gweni::event::Info)
         {
             if(!m_navigating && m_pushPath)
-                m_pushPath(pathForTab(m_base, static_cast<Tab>(i)));
+                m_pushPath(pathForTab(static_cast<Tab>(i)));
             // the Storage tab polls only while it shows: fill it now
             if(static_cast<Tab>(i)==Tab::Storage && m_storage)
                 pollStorage();

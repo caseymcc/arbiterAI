@@ -102,11 +102,6 @@ void handleGetCleanupConfig(const httplib::Request &req, httplib::Response &res)
 void handleSetCleanupConfig(const httplib::Request &req, httplib::Response &res);
 void handleGetActiveDownloads(const httplib::Request &req, httplib::Response &res);
 
-// ========== Dashboard ==========
-
-void handleDashboard(const httplib::Request &req, httplib::Response &res);
-void handleDashboardConfig(const httplib::Request &req, httplib::Response &res);
-void handleDashboardStorage(const httplib::Request &req, httplib::Response &res);
 
 } // namespace server
 } // namespace arbiterAI

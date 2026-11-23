@@ -27,18 +27,16 @@ enum class Tab
 };
 
 /// Where a dashboard path leads: /dashboard, /dashboard/storage,
-/// /dashboard/config, /dashboard/logs (the Overview with the log expanded),
-/// under the base the page was served at (/dashboard, or /dashboard/next).
+/// /dashboard/config, /dashboard/logs (the Overview with the log expanded).
 struct Route
 {
-    std::string base="/dashboard";
     Tab tab=Tab::Overview;
     bool logs=false;
 };
 
 /// \p url a path or a whole URL; its query and fragment are ignored.
 Route routeForUrl(const std::string &url);
-std::string pathForTab(const std::string &base, Tab tab);
+std::string pathForTab(Tab tab);
 
 /// The whole dashboard on a canvas: a header with the version and the
 /// connection status, the tabs, and the log panel under them. It polls the
@@ -82,7 +80,6 @@ private:
 
     DataSource &m_data;
     std::function<void(const std::string &path)> m_pushPath;
-    std::string m_base;
 
     gweni::controls::Canvas *m_canvas;
     gweni::controls::Base *m_root;

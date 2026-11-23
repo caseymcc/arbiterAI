@@ -85,7 +85,7 @@ curl -X POST http://localhost:8080/api/models/config \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o-mini", "provider": "openai", "ranking": 80}'
 
-# Live dashboard
+# Live dashboard (a WebAssembly app: Overview, Storage, Config, server log)
 open http://localhost:8080/dashboard
 ```
 

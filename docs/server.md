@@ -32,7 +32,7 @@ The server supports:
 - **Runtime model config injection** — Add, update, or remove model configurations via REST without restarting
 - **Storage management** — Track downloaded model files, set hot ready / protected flags, configure automated cleanup, monitor disk usage and download progress with speed and ETA
 - **Telemetry** — System snapshots, inference history, swap history, active scheduler jobs, and hardware info
-- **Live dashboard** — Browser-based UI at `/dashboard` with storage bar, download progress, and model management
+- **Live dashboard** — A WebAssembly app at `/dashboard` (Overview, Storage and Config tabs, and the server log), embedded in the server binary
 - **CORS** — All responses include permissive CORS headers
 
 ---
@@ -1158,19 +1158,86 @@ Library version.
 
 ### 3.8 Dashboard
 
-#### `GET /dashboard`
+The dashboard is one WebAssembly app, written in C++ on [gweni](https://github.com/caseymcc/gweni)
+(WebGL 2) and embedded in the server binary. It reads the same `/api/*` endpoints documented above;
+it has no API of its own.
 
-Returns an HTML page with a live-updating dashboard showing:
+#### Routes
 
-- System info (GPU names, VRAM, RAM, CPU)
-- Loaded models with state, variant, context size, GPU assignment
-- Performance charts (tokens/sec, memory usage)
-- Model management controls (load/unload/pin)
-- **Downloaded models** — Storage bar (used/limit), table of all downloaded GGUF files with size, download date, last used, usage count, runtime state, and toggle buttons for hot ready / protected flags
-- **Download progress** — Active downloads with progress bar, bytes transferred, speed (MB/s), and ETA
-- **Row age coloring** — Fresh (green, <14 days), stale (yellow, 14–30 days), old (red, >30 days)
-- Model deletion (guarded variants show disabled delete button with tooltip)
-- **Server log panel** — Collapsible live-scrolling log viewer with level filtering (trace/debug/info/warning/error/critical) and auto-scroll toggle. Polls `/api/logs` every 2 seconds.
+| Route | Serves |
+|---|---|
+| `GET /dashboard` | the app's page, on the **Overview** tab |
+| `GET /dashboard/storage` | the same page, on the **Storage** tab |
+| `GET /dashboard/config` | the same page, on the **Config** tab |
+| `GET /dashboard/logs` | the same page, on the Overview with the **server log** open |
+| `GET /dashboard/app.js`, `app.wasm`, `app.data` | the app (Emscripten's loader, the module, and the skin's fonts and images) |
+
+Switching tabs updates the URL (history `pushState`), so reloads, bookmarks and back/forward
+keep the tab. Every file is sent with its MIME type (`application/wasm` for the module), gzipped
+when the request's `Accept-Encoding` allows gzip (raw otherwise), with an `ETag` (a SHA-256 of
+its bytes made at build time), `Cache-Control: no-cache` and `Vary: Accept-Encoding`; a matching
+`If-None-Match` gets `304 Not Modified`, so a reload transfers nothing until the server is
+rebuilt.
+
+#### What it shows
+
+The app polls the server every 2 seconds. While the server restarts the header shows
+**Disconnected** with the reason and the page keeps working; failed actions show a toast, and
+questions use gweni dialogs (no browser `alert`/`confirm`/`prompt`).
+
+- **Overview** — performance (prompt/generation tokens/s, active requests, total inferences,
+  model swaps), system memory and CPU, a tokens/s chart (prompt on the left axis, generation on
+  the right, the last two minutes, 0 while idle), the GPUs (memory bar, unified-memory figures,
+  the Vulkan heap breakdown as a tooltip, CUDA utilisation, the models on each GPU, VRAM override
+  set/clear), the loaded models (load/unload/pin/unpin, the per-device allocation as a tooltip),
+  active requests with the downloads in progress, and the last ten inferences and swaps.
+- **Storage** — the storage bar (used against the limit, or the free space), auto-cleanup and the
+  cleanup preview, active downloads (progress, size, speed, ETA), and the model files with size,
+  download and last-use dates, uses and state, coloured by age (green up to 14 days, amber up to
+  30, red older or never used), Hot Ready / Protected toggles, and a delete that is disabled for
+  a guarded variant and asks for confirmation. It polls only while it shows.
+- **Config** — the startup models (model and variant, context size with the fit on the chosen
+  devices, compute devices, API format, KV cache types, flash attention, no host-visible VRAM),
+  **Save & Load** (saves `/api/server/config`, then loads the model; the outcome is shown on the
+  entry) and **Remove**, and the VRAM overrides. It loads when first opened and is not polled, so
+  edits are not overwritten.
+- **Server log** — a panel under every tab: the last 200 entries of `/api/logs`, a level filter,
+  **Live** (off freezes the view so lines can be selected while the server keeps logging), and
+  **Copy selected** to the clipboard.
+
+The page needs WebGL 2. Being drawn on a canvas, it has no browser find (Ctrl-F), no screen-reader
+access and no free text selection (log lines are selected and copied in the log panel); text is
+greyscale-antialiased.
+
+#### Size
+
+| File | Raw | gzip |
+|---|---|---|
+| `app.wasm` | 2.8 MB | 1.1 MB |
+| `app.data` | 1.3 MB | 0.7 MB |
+| `app.js` | 170 KB | 43 KB |
+| page | 1.3 KB | 0.7 KB |
+
+About 1.9 MB over the wire on the first load, then a `304` per file. The raw and gzipped copies
+add about 6 MB to `arbiterAI-server`.
+
+#### Building
+
+The app lives in `src/dashboard/`, a CMake project of its own with its own vcpkg manifest (gweni
+comes from the overlay port in `src/dashboard/ports/gweni`, pinned to a gweni commit, until gweni
+publishes its vcpkg registry). The main build runs it twice (`cmake/webDashboard.cmake`):
+
+- for `wasm32-emscripten`, always Release, giving the assets, which
+  `cmake/embedDashboardAssets.cmake` gzips, hashes and embeds (`.incbin`) in `arbiterAI-server`;
+- for `x64-linux`, giving `build/<tree>/dashboard/native/dashboard_tests`: the same panels rendered
+  headless (surfaceless EGL on Mesa llvmpipe, no GPU, no server) from the JSON fixtures in
+  `src/dashboard/tests/fixtures/`. `--shots <dir>` writes a PNG per tab. CI runs it after the
+  build and keeps the PNGs as the `dashboard-shots` artifact.
+
+`ARBITERAI_WEB_DASHBOARD` turns this on; it defaults to ON when `EMSDK` names an emsdk, as the
+Docker image's does (emsdk 6.0.13). A build without emsdk (`-DARBITERAI_WEB_DASHBOARD=OFF`, or no
+`EMSDK`) still builds the server, which then answers `/dashboard` with a short "Dashboard not
+built" page; `-DARBITERAI_WEB_DASHBOARD=ON` without emsdk is a configure error.
 
 Open in a browser: `http://localhost:8080/dashboard`
 

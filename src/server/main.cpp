@@ -835,8 +835,11 @@ int main(int argc, char *argv[])
     spdlog::info("  GET  /api/storage/cleanup/preview - Preview cleanup");
     spdlog::info("  POST /api/storage/cleanup/run     - Run cleanup");
     spdlog::info("  GET  /api/downloads          - Active downloads");
-    spdlog::info("  GET  /dashboard              - Live dashboard");
-    spdlog::info("  GET  /dashboard/config       - Startup configuration");
+    spdlog::info("  GET  /dashboard              - Live dashboard (Overview tab)");
+    spdlog::info("  GET  /dashboard/storage      - Dashboard: downloaded models");
+    spdlog::info("  GET  /dashboard/config       - Dashboard: startup configuration");
+    spdlog::info("  GET  /dashboard/logs         - Dashboard with the server log open");
+    spdlog::info("  GET  /dashboard/app.*        - The dashboard's WebAssembly app (js, wasm, data)");
 
     spdlog::info("Starting server on {}:{}", host, port);
     spdlog::info("Dashboard: http://{}:{}/dashboard", host=="0.0.0.0"?"localhost":host, port);

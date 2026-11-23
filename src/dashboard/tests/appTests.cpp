@@ -20,14 +20,13 @@ TEST(Route, TabFromThePath)
     EXPECT_FALSE(routeForUrl("/dashboard").logs);
 }
 
-TEST(Route, BaseIsKeptForTheNextPages)
+TEST(Route, EachTabHasItsPath)
 {
-    Route route=routeForUrl("/dashboard/next/config");
-    EXPECT_EQ(route.base, "/dashboard/next");
-    EXPECT_EQ(route.tab, Tab::Config);
-    EXPECT_EQ(routeForUrl("/dashboard/config").base, "/dashboard");
-    EXPECT_EQ(arbiterAI::dashboard::pathForTab("/dashboard/next", Tab::Storage), "/dashboard/next/storage");
-    EXPECT_EQ(arbiterAI::dashboard::pathForTab("/dashboard", Tab::Overview), "/dashboard");
+    EXPECT_EQ(arbiterAI::dashboard::pathForTab(Tab::Overview), "/dashboard");
+    EXPECT_EQ(arbiterAI::dashboard::pathForTab(Tab::Storage), "/dashboard/storage");
+    EXPECT_EQ(arbiterAI::dashboard::pathForTab(Tab::Config), "/dashboard/config");
+    // another page's path is the Overview
+    EXPECT_EQ(routeForUrl("/elsewhere/storage").tab, Tab::Overview);
 }
 
 TEST_F(DashboardTest, ShowsTheServerVersion)
@@ -119,15 +118,15 @@ TEST_F(DashboardTest, LogsPathExpandsTheLogPanel)
 
 TEST_F(DashboardTest, ClickingATabShowsItAndPushesItsPath)
 {
-    start("/dashboard/next");
+    start("/dashboard");
     click(m_app->tabButton(Tab::Storage));
     EXPECT_EQ(m_app->currentTab(), Tab::Storage);
     ASSERT_EQ(m_pushed.size(), 1u);
-    EXPECT_EQ(m_pushed[0], "/dashboard/next/storage");
+    EXPECT_EQ(m_pushed[0], "/dashboard/storage");
 
     click(m_app->tabButton(Tab::Overview));
     ASSERT_EQ(m_pushed.size(), 2u);
-    EXPECT_EQ(m_pushed[1], "/dashboard/next");
+    EXPECT_EQ(m_pushed[1], "/dashboard");
 }
 
 TEST_F(DashboardTest, NavigatingShowsTheTabWithoutPushing)

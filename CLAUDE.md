@@ -25,13 +25,16 @@ are managed by vcpkg (`vcpkg.json`).
 ```
 
 Build output: `build/${OS}_${ARCH}_${BUILD_TYPE}`, default `build/linux_x64_debug/`.
-Targets: `arbiterai` (library), `arbiterai_tests`, `arbiterAI-cli`, `arbiterAI-proxy`, `arbiterAI-server`.
+Targets: `arbiterai` (library), `arbiterai_tests`, `arbiterAI-cli`, `arbiterAI-proxy`, `arbiterAI-server`,
+and (with emsdk, `ARBITERAI_WEB_DASHBOARD`) the dashboard's `dashboard_web` (wasm, embedded in the server) and
+`dashboard_native` (`dashboard/native/dashboard_tests`).
 
 ### Tests (Google Test)
 
 ```bash
 ./runDocker.sh ./build/linux_x64_debug/arbiterai_tests
 ./runDocker.sh ./build/linux_x64_debug/arbiterai_tests --gtest_filter='ModelManager*'   # single suite/test
+./runDocker.sh ./build/linux_x64_debug/dashboard/native/dashboard_tests --shots /tmp/shots  # dashboard, headless
 ```
 
 ### Working rules
@@ -79,7 +82,8 @@ Distinct from the cloud providers, this is the heavier piece:
 Separate CMake target linking `arbiterai` + cpp-httplib (httplib is a server-only dependency, kept out of
 the core library). `routes.cpp` defines the OpenAI-compatible endpoints (`/v1/chat/completions`,
 `/v1/models`, `/v1/embeddings` with SSE streaming), model management, telemetry (`/api/stats`), and config
-injection. `dashboard.h`/`dashboardConfig.h` are embedded HTML/JS for the `/dashboard` UI. The server takes a
+injection. `dashboardAssets.{h,cpp}` serve the `/dashboard` UI, a gweni WebAssembly app built from `src/dashboard/`
+(see `docs/server.md` §3.8) and embedded in the binary. The server takes a
 single required config file: `arbiterAI-server -c <config.json>`. See `docs/server.md`.
 
 ### Testing without API keys

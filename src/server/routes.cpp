@@ -1,6 +1,4 @@
 #include "routes.h"
-#include "dashboard.h"
-#include "dashboardConfig.h"
 #include "dashboardAssets.h"
 #include "logBuffer.h"
 
@@ -1562,10 +1560,6 @@ void registerRoutes(httplib::Server &server)
     server.Get("/api/downloads", handleGetActiveDownloads);
 
     // Dashboard
-    server.Get("/dashboard/config", handleDashboardConfig);
-    server.Get("/dashboard/storage", handleDashboardStorage);
-    server.Get("/dashboard", handleDashboard);
-    // The gweni web dashboard, beside the pages above until it replaces them
     registerDashboardRoutes(server);
 
     spdlog::info("Registered all HTTP routes");
@@ -4550,23 +4544,6 @@ void handleGetLogs(const httplib::Request &req, httplib::Response &res)
     }
 
     res.set_content(nlohmann::json{{"logs", logs}}.dump(), "application/json");
-}
-
-// ========== Dashboard ==========
-
-void handleDashboard(const httplib::Request &, httplib::Response &res)
-{
-    res.set_content(DASHBOARD_HTML, "text/html");
-}
-
-void handleDashboardConfig(const httplib::Request &, httplib::Response &res)
-{
-    res.set_content(DASHBOARD_CONFIG_HTML, "text/html");
-}
-
-void handleDashboardStorage(const httplib::Request &, httplib::Response &res)
-{
-    res.set_content(DASHBOARD_STORAGE_HTML, "text/html");
 }
 
 } // namespace server

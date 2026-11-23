@@ -104,12 +104,12 @@ TEST(DashboardAssetHandler, UnknownAssetIsNotFound)
 
 #ifdef ARBITERAI_DASHBOARD_ASSET_DIR
 
-TEST_F(DashboardServingTest, ShellIsServedAtNext)
+TEST_F(DashboardServingTest, ShellIsServedAtDashboard)
 {
     const arbiterAI::server::DashboardAsset *shell=findAsset("shell.html");
     ASSERT_NE(shell, nullptr);
 
-    httplib::Result result=get("/dashboard/next");
+    httplib::Result result=get("/dashboard");
     ASSERT_TRUE(result);
     EXPECT_EQ(result->status, 200);
     EXPECT_EQ(result->get_header_value("Content-Type"), "text/html; charset=utf-8");
@@ -122,12 +122,22 @@ TEST_F(DashboardServingTest, ShellIsServedAtEachTabPath)
     const arbiterAI::server::DashboardAsset *shell=findAsset("shell.html");
     ASSERT_NE(shell, nullptr);
 
-    for(const char *path:{"/dashboard/next/storage", "/dashboard/next/config", "/dashboard/next/logs"})
+    for(const char *path:{"/dashboard/storage", "/dashboard/config", "/dashboard/logs", "/dashboard/"})
     {
         httplib::Result result=get(path);
         ASSERT_TRUE(result)<<path;
         EXPECT_EQ(result->status, 200)<<path;
         EXPECT_EQ(result->body, bytes(shell->data, shell->size))<<path;
+    }
+}
+
+TEST_F(DashboardServingTest, TheInterimNextPathIsGone)
+{
+    for(const char *path:{"/dashboard/next", "/dashboard/next/storage", "/dashboard/other"})
+    {
+        httplib::Result result=get(path);
+        ASSERT_TRUE(result)<<path;
+        EXPECT_EQ(result->status, 404)<<path;
     }
 }
 
@@ -154,7 +164,7 @@ TEST_F(DashboardServingTest, BrowserAcceptEncodingGetsTheGzipCopyOnce)
         const arbiterAI::server::DashboardAsset *asset=findAsset(name);
         ASSERT_NE(asset, nullptr)<<name;
 
-        std::string path=std::string(name)=="shell.html"?"/dashboard/next":std::string("/dashboard/")+name;
+        std::string path=std::string(name)=="shell.html"?"/dashboard":std::string("/dashboard/")+name;
         httplib::Result result=get(path, {{"Accept-Encoding", "gzip, deflate, br"}});
         ASSERT_TRUE(result)<<name;
         EXPECT_EQ(result->status, 200)<<name;
@@ -217,7 +227,7 @@ TEST_F(DashboardServingTest, MatchingIfNoneMatchGets304)
 TEST_F(DashboardServingTest, NotBuiltPageWithoutTheWebDashboard)
 {
     // identity: httplib compresses this page itself for a client that takes br
-    httplib::Result result=get("/dashboard/next", {{"Accept-Encoding", "identity"}});
+    httplib::Result result=get("/dashboard", {{"Accept-Encoding", "identity"}});
     ASSERT_TRUE(result);
     EXPECT_EQ(result->status, 200);
     EXPECT_EQ(result->get_header_value("Content-Type"), "text/html; charset=utf-8");

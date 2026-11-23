@@ -377,7 +377,6 @@ add_executable(arbiterAI-server
     src/server/main.cpp
     src/server/routes.h
     src/server/routes.cpp
-    src/server/dashboard.h
 )
 
 target_include_directories(arbiterAI-server
