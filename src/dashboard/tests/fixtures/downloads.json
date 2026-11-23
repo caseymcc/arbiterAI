@@ -1,0 +1,13 @@
+{
+  "downloads": [
+    {
+      "model": "qwen3-32b",
+      "variant": "Q4_K_M",
+      "percent_complete": 42.5,
+      "bytes_downloaded": 8589934592,
+      "total_bytes": 20212254720,
+      "speed_mbps": 95.3,
+      "eta_seconds": 122
+    }
+  ]
+}

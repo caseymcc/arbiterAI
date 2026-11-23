@@ -1,0 +1,17 @@
+[
+  {
+    "from": "",
+    "to": "gpt-oss-120b",
+    "time_ms": 1234.5
+  },
+  {
+    "from": "qwen3-8b",
+    "to": "llama-3.1-8b",
+    "time_ms": 1235.5
+  },
+  {
+    "from": "qwen3-8b",
+    "to": "gpt-oss-120b",
+    "time_ms": 1236.5
+  }
+]

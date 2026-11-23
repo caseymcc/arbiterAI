@@ -1,0 +1,122 @@
+[
+  {
+    "job_id": 100,
+    "model": "llama-3.1-8b",
+    "prompt_tokens": 1200,
+    "completion_tokens": 300,
+    "prompt_tokens_per_second": 800.0,
+    "generation_tokens_per_second": 40.0,
+    "latency_ms": 350.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 101,
+    "model": "gpt-oss-120b",
+    "prompt_tokens": 1210,
+    "completion_tokens": 301,
+    "prompt_tokens_per_second": 801.0,
+    "generation_tokens_per_second": 40.1,
+    "latency_ms": 351.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 102,
+    "model": "llama-3.1-8b",
+    "prompt_tokens": 1220,
+    "completion_tokens": 302,
+    "prompt_tokens_per_second": 802.0,
+    "generation_tokens_per_second": 40.2,
+    "latency_ms": 352.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 103,
+    "model": "gpt-oss-120b",
+    "prompt_tokens": 1230,
+    "completion_tokens": 303,
+    "prompt_tokens_per_second": 803.0,
+    "generation_tokens_per_second": 40.3,
+    "latency_ms": 353.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 104,
+    "model": "llama-3.1-8b",
+    "prompt_tokens": 1240,
+    "completion_tokens": 304,
+    "prompt_tokens_per_second": 804.0,
+    "generation_tokens_per_second": 40.4,
+    "latency_ms": 354.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 105,
+    "model": "gpt-oss-120b",
+    "prompt_tokens": 1250,
+    "completion_tokens": 305,
+    "prompt_tokens_per_second": 805.0,
+    "generation_tokens_per_second": 40.5,
+    "latency_ms": 355.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 106,
+    "model": "llama-3.1-8b",
+    "prompt_tokens": 1260,
+    "completion_tokens": 306,
+    "prompt_tokens_per_second": 806.0,
+    "generation_tokens_per_second": 40.6,
+    "latency_ms": 356.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 107,
+    "model": "gpt-oss-120b",
+    "prompt_tokens": 1270,
+    "completion_tokens": 307,
+    "prompt_tokens_per_second": 807.0,
+    "generation_tokens_per_second": 40.7,
+    "latency_ms": 357.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 108,
+    "model": "llama-3.1-8b",
+    "prompt_tokens": 1280,
+    "completion_tokens": 308,
+    "prompt_tokens_per_second": 808.0,
+    "generation_tokens_per_second": 40.8,
+    "latency_ms": 358.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 109,
+    "model": "gpt-oss-120b",
+    "prompt_tokens": 1290,
+    "completion_tokens": 309,
+    "prompt_tokens_per_second": 809.0,
+    "generation_tokens_per_second": 40.9,
+    "latency_ms": 359.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 110,
+    "model": "llama-3.1-8b",
+    "prompt_tokens": 1300,
+    "completion_tokens": 310,
+    "prompt_tokens_per_second": 810.0,
+    "generation_tokens_per_second": 41.0,
+    "latency_ms": 360.0,
+    "cancelled": false
+  },
+  {
+    "job_id": 111,
+    "model": "gpt-oss-120b",
+    "prompt_tokens": 1310,
+    "completion_tokens": 311,
+    "prompt_tokens_per_second": 811.0,
+    "generation_tokens_per_second": 41.1,
+    "latency_ms": 361.0,
+    "cancelled": true
+  }
+]

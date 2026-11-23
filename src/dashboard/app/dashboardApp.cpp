@@ -112,7 +112,7 @@ DashboardApp::DashboardApp(gweni::controls::Canvas *canvas, DataSource &data, co
                 m_pushPath(pathForTab(m_base, static_cast<Tab>(i)));
         });
     }
-    m_overview=std::make_unique<OverviewPanel>(tabButton(Tab::Overview)->getPage());
+    m_overview=std::make_unique<OverviewPanel>(tabButton(Tab::Overview)->getPage(), m_data, [this]() { poll(); });
     addHeading(tabButton(Tab::Storage)->getPage(), "Downloaded models: coming with the Storage panel");
     addHeading(tabButton(Tab::Config)->getPage(), "Startup configuration: coming with the Config panel");
 
@@ -179,6 +179,30 @@ void DashboardApp::poll()
         }
         setConnected(true);
         m_overview->updateStats(response.json);
+    });
+    m_data.getJson("/api/hardware", [this](const Response &response)
+    {
+        if(response.ok)
+            m_overview->updateHardware(response.json);
+    });
+    m_data.getJson("/api/stats/history?minutes=5", [this](const Response &response)
+    {
+        if(response.ok)
+            m_overview->updateHistory(response.json);
+    });
+    m_data.getJson("/api/stats/swaps", [this](const Response &response)
+    {
+        if(response.ok)
+            m_overview->updateSwaps(response.json);
+    });
+    m_data.getJson("/api/scheduler/jobs", [this](const Response &response)
+    {
+        if(response.ok)
+            m_overview->updateJobs(response.json);
+    });
+    m_data.getJson("/api/downloads", [this](const Response &response)
+    {
+        m_overview->updateDownloads(response.ok?response.json:nlohmann::json::object());
     });
 }
 

@@ -1,0 +1,18 @@
+[
+  {
+    "id": 113,
+    "model": "gpt-oss-120b",
+    "stage": "inferring",
+    "prompt_tokens": 15234,
+    "completion_tokens": 412,
+    "elapsed_ms": 8300
+  },
+  {
+    "id": 114,
+    "model": "llama-3.1-8b",
+    "stage": "queued",
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "elapsed_ms": 120
+  }
+]

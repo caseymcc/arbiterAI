@@ -41,9 +41,9 @@ TEST_F(DashboardTest, ShowsStatsFromTheServer)
     start();
     EXPECT_TRUE(m_app->connected());
     EXPECT_EQ(m_app->status(), "Connected");
-    EXPECT_EQ(m_app->overview().promptSpeed(), "812.5 t/s");
-    EXPECT_EQ(m_app->overview().generationSpeed(), "41.8 t/s");
-    EXPECT_EQ(m_app->overview().activeRequests(), "2");
+    EXPECT_EQ(m_app->overview().stat("Prompt Speed"), "812.5 t/s");
+    EXPECT_EQ(m_app->overview().stat("Generation Speed"), "41.8 t/s");
+    EXPECT_EQ(m_app->overview().stat("Active Requests"), "2");
 }
 
 TEST_F(DashboardTest, PollsEveryTwoSeconds)
@@ -67,7 +67,7 @@ TEST_F(DashboardTest, NewStatsReplaceTheOldOnTheNextPoll)
     stats["active_requests"]=7;
     m_data.setJson("/api/stats", stats);
     frames(125);
-    EXPECT_EQ(m_app->overview().activeRequests(), "7");
+    EXPECT_EQ(m_app->overview().stat("Active Requests"), "7");
 }
 
 TEST_F(DashboardTest, FailedFetchShowsDisconnectedAndRecovers)
@@ -86,7 +86,7 @@ TEST_F(DashboardTest, FailedFetchShowsDisconnectedAndRecovers)
     frames(120);
     EXPECT_TRUE(m_app->connected());
     EXPECT_EQ(m_app->status(), "Connected");
-    EXPECT_EQ(m_app->overview().promptSpeed(), "812.5 t/s");
+    EXPECT_EQ(m_app->overview().stat("Prompt Speed"), "812.5 t/s");
 }
 
 TEST_F(DashboardTest, VersionIsAskedAgainUntilItArrives)
@@ -154,6 +154,15 @@ TEST_F(DashboardTest, LogHeaderFoldsAndUnfoldsThePanel)
 TEST_F(DashboardTest, WritesAPngPerTab)
 {
     start();
+    // a few polls of changing speeds, so the chart has lines to show
+    nlohmann::json stats=loadFixture("stats.json");
+    for(int poll=0; poll<12; ++poll)
+    {
+        stats["avg_prompt_tokens_per_second"]=600.0+40.0*(poll%5);
+        stats["avg_generation_tokens_per_second"]=30.0+3.0*(poll%4);
+        m_data.setJson("/api/stats", stats);
+        frames(120);
+    }
     const std::pair<Tab, const char *> tabs[]={{Tab::Overview, "overview"}, {Tab::Storage, "storage"}, {Tab::Config, "config"}};
     for(const auto &[tab, name]:tabs)
     {

@@ -33,6 +33,11 @@ void DashboardTest::SetUp()
 
     m_data.setJson("/api/version", loadFixture("version.json"));
     m_data.setJson("/api/stats", loadFixture("stats.json"));
+    m_data.setJson("/api/hardware", loadFixture("hardware.json"));
+    m_data.setJson("/api/stats/history?minutes=5", loadFixture("history.json"));
+    m_data.setJson("/api/stats/swaps", loadFixture("swaps.json"));
+    m_data.setJson("/api/scheduler/jobs", loadFixture("jobs.json"));
+    m_data.setJson("/api/downloads", loadFixture("downloads.json"));
 }
 
 void DashboardTest::TearDown()
