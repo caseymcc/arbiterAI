@@ -2,6 +2,7 @@
 #include "updateRoutes.h"
 #include "logBuffer.h"
 #include "drainController.h"
+#include "installer.h"
 
 #include "arbiterAI/arbiterAI.h"
 #include "arbiterAI/version.h"
@@ -457,8 +458,11 @@ public:
                 std::unique_lock<std::mutex> lock(m_mutex);
                 if(!m_started)
                 {
+                    std::function<void()> beforeEarlyExit=m_beforeEarlyExit;
                     lock.unlock();
                     spdlog::warn("Received {} before the server was listening, exiting now", strsignal(sig));
+                    if(beforeEarlyExit)
+                        beforeEarlyExit();
                     spdlog::default_logger()->flush();
                     std::_Exit(128+sig);
                 }
@@ -475,6 +479,13 @@ public:
                 m_cv.notify_all();
             }
         }).detach();
+    }
+
+    /// Runs on the signal thread before a signal that came before start() exits.
+    void setBeforeEarlyExit(std::function<void()> hook)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_beforeEarlyExit=std::move(hook);
     }
 
     /// From here on the first signal runs onStop on its own thread; any
@@ -516,6 +527,7 @@ public:
 
 private:
     sigset_t m_signals;
+    std::function<void()> m_beforeEarlyExit;
     std::function<void()> m_onStop;
     std::thread m_stopThread;
     std::mutex m_mutex;
@@ -604,6 +616,41 @@ int main(int argc, char *argv[])
         std::cerr<<"Error: --config <path> is required.\n\n";
         printUsage();
         return 1;
+    }
+
+    // ── Update probation ─────────────────────────────────────────
+    // First, so a crash anywhere in the start below can still be rolled back.
+    // Resolved now: an update moves the running binary to bin.prev.
+    std::filesystem::path installRoot;
+    if(!selfTest)
+        installRoot=arbiterAI::server::runningInstallRoot();
+    if(!installRoot.empty()&&std::filesystem::exists(arbiterAI::server::installMarkerPath(installRoot)))
+    {
+        arbiterAI::server::ExecRestarter restarter;
+        arbiterAI::server::ProbationResult probation=arbiterAI::server::runStartupProbation(
+            installRoot, ARBITERAI_VERSION_STRING, restarter, std::vector<std::string>(argv, argv+argc));
+
+        switch(probation.outcome)
+        {
+        case arbiterAI::server::ProbationOutcome::None:
+            break;
+        case arbiterAI::server::ProbationOutcome::Failed:
+            spdlog::error("Update probation: {}", probation.message);
+            break;
+        default:
+            spdlog::info("Update probation: {}", probation.message);
+            break;
+        }
+
+        // A stop before the server is up is not a crash: keep the new version.
+        stopSignals.setBeforeEarlyExit([installRoot]()
+        {
+            arbiterAI::server::markHealthy(installRoot, ARBITERAI_VERSION_STRING);
+        });
+    }
+    else
+    {
+        installRoot.clear();
     }
 
     // ── Load config file ─────────────────────────────────────────
@@ -1046,8 +1093,17 @@ int main(int argc, char *argv[])
     spdlog::info("Starting server on {}:{}", host, port);
     spdlog::info("Dashboard: http://{}:{}/dashboard", host=="0.0.0.0"?"localhost":host, port);
 
-    stopSignals.start([&drainController, &server, drainTimeoutSec]()
+    // Serving this long without a crash ends an update's probation.
+    arbiterAI::server::HealthTimer healthTimer;
+    if(!installRoot.empty())
+        healthTimer.start(installRoot, ARBITERAI_VERSION_STRING, std::chrono::seconds(60));
+
+    stopSignals.start([&drainController, &server, drainTimeoutSec, installRoot]()
     {
+        // A clean stop is not a crash: a restart right after an update keeps it.
+        if(!installRoot.empty()&&arbiterAI::server::markHealthy(installRoot, ARBITERAI_VERSION_STRING))
+            spdlog::info("Update to v{} kept: stopped cleanly during probation", ARBITERAI_VERSION_STRING);
+
         spdlog::info("Draining: refusing new requests, waiting up to {} s for in-flight work", drainTimeoutSec);
         bool drained=drainController.drain(std::chrono::seconds(drainTimeoutSec));
         if(drained)
@@ -1069,6 +1125,7 @@ int main(int argc, char *argv[])
     bool listenOk=server.listen(host, port);
 
     stopSignals.shuttingDown();
+    healthTimer.stop();
 
     // Stop scheduler worker threads before static destruction tears down
     // the singletons (ModelRuntime, TelemetryCollector) they depend on.
