@@ -196,6 +196,92 @@ A second signal exits at once. If requests are still running 5 seconds after the
 ./arbiterAI-server --version
 ```
 
+### Running as a service
+
+The release tarball (`arbiterAI-server-vX.Y.Z-linux-x64.tar.gz`) ships two supported ways to run the
+server, each of which restarts it when it crashes:
+
+- **systemd**: `share/arbiterAI/systemd/arbiterai-server.service`, with the example config
+  `share/arbiterAI/examples/server.systemd.json`.
+- **Docker**: the image `ghcr.io/caseymcc/arbiterai-server:vX.Y.Z` / `:latest`, built from the tarball by
+  [`docker/server.Dockerfile`](../docker/server.Dockerfile), run with
+  [`docker/compose.yaml`](../docker/compose.yaml) (also in the tarball as `share/arbiterAI/docker/compose.yaml`)
+  and the example config `share/arbiterAI/examples/server.docker.json`.
+
+The install steps are in the tarball's README ([`packaging/server/README.md`](../packaging/server/README.md)):
+"Running under systemd" and "Running under Docker". Both declare their restart policy to the server
+with `ARBITERAI_SUPERVISOR` (`systemd` / `docker`).
+
+To build the tarball and the image from a checkout instead of a release:
+
+```bash
+./runDocker.sh ./build.sh release
+./runDocker.sh ./scripts/packageServer.sh build/linux_x64_release "$(./scripts/version.sh get)" dist
+docker build -f docker/server.Dockerfile --build-arg VERSION="$(./scripts/version.sh get)" \
+    -t ghcr.io/caseymcc/arbiterai-server:latest dist
+./scripts/checkServerImage.sh ghcr.io/caseymcc/arbiterai-server:latest "$(./scripts/version.sh get)"
+```
+
+`scripts/checkServerImage.sh` is the image check CI runs on every PR: `--version`, `--self-test` on a
+read-only `/config`, a start followed by a clean `docker stop`, and a crash that the restart policy
+recovers.
+
+#### Checking a service install by hand
+
+These are the checks for a new install (or a change to the unit, the image or the drain). They need a
+host with systemd or Docker.
+
+**systemd** (clean Ubuntu 24.04 host, following the README's "Running under systemd" steps):
+
+1. The server starts:
+   ```bash
+   systemctl status arbiterai-server          # active (running)
+   curl -s localhost:8080/health              # {"status":"ok",...}
+   ```
+2. A stop drains and exits cleanly, well within `TimeoutStopSec=120`:
+   ```bash
+   time systemctl stop arbiterai-server
+   journalctl -u arbiterai-server -n 20 | grep "shutdown complete"
+   systemctl show arbiterai-server -p ExecMainStatus -p Result   # ExecMainStatus=0, Result=success
+   ```
+3. A crash is restarted after `RestartSec=5`:
+   ```bash
+   systemctl start arbiterai-server
+   OLD=$(systemctl show -p MainPID --value arbiterai-server)
+   kill -SEGV "$OLD"
+   sleep 8
+   journalctl -u arbiterai-server -n 30 | grep "FATAL SIGNAL"
+   systemctl show arbiterai-server -p MainPID -p NRestarts       # a new MainPID, NRestarts=1
+   curl -s localhost:8080/health
+   ```
+
+**Docker Compose** (following the README's "Running under Docker" steps):
+
+1. `docker compose up -d`, then `curl -s localhost:8080/health` answers.
+2. A stop is clean, not Docker's SIGKILL after 10 s:
+   ```bash
+   time docker compose stop                    # a second or two, not 10 s
+   docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq arbiterai-server)"   # 0
+   docker compose logs arbiterai-server | grep "shutdown complete"
+   ```
+3. A crash of the server restarts the container. Signal the server itself: `docker kill -s SEGV`
+   signals PID 1, which is `tini`; tini does not forward synchronous signals such as SIGSEGV, and as
+   PID 1 it ignores them, so nothing happens.
+   ```bash
+   docker compose start
+   docker compose exec arbiterai-server sh -c \
+       'for p in /proc/[0-9]*; do [ "$(cat $p/comm)" = arbiterAI-serve ] && kill -SEGV ${p#/proc/}; done; true'
+   sleep 5
+   docker inspect -f '{{.RestartCount}}' "$(docker compose ps -q arbiterai-server)"   # 1
+   docker compose logs arbiterai-server | grep "FATAL SIGNAL"
+   curl -s localhost:8080/health
+   ```
+4. A GPU is detected, on an NVIDIA or an AMD/Intel host: uncomment the matching GPU block in
+   `compose.yaml`, `docker compose up -d` again, then
+   ```bash
+   curl -s localhost:8080/api/hardware        # "gpus" lists the card, with its VRAM
+   ```
+
 ---
 
 ## 3. API Reference
