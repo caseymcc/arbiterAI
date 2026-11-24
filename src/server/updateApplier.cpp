@@ -90,18 +90,28 @@ UpdateApplier::UpdateApplier(ApplierConfig config, std::unique_ptr<Downloader> d
 
 UpdateApplier::~UpdateApplier()
 {
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_stopping=true;
-    }
-    m_wake.notify_all();
+    stop();
     wait();
+}
+
+void UpdateApplier::stop()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_stopping=true;
+    m_wake.notify_all();
+    // an exit between moveAll's renames would leave no bin/ to start
+    m_swapDone.wait(lock, [this]() { return !m_swapping; });
 }
 
 UpdateApplier::Start UpdateApplier::apply(const std::string &version, const std::optional<ReleaseInfo> &latest,
     const ApplyCheck &check, std::string &message, BusyProbe waitForIdle)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    if(m_stopping)
+    {
+        message="the server is stopping";
+        return Start::Busy;
+    }
     if(m_busy)
     {
         message="an update is already running ("+m_state+")";
@@ -151,6 +161,11 @@ UpdateApplier::Start UpdateApplier::apply(const std::string &version, const std:
 UpdateApplier::Start UpdateApplier::rollback(const ApplyCheck &check, std::string &message)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    if(m_stopping)
+    {
+        message="the server is stopping";
+        return Start::Busy;
+    }
     if(m_busy)
     {
         message="an update is already running ("+m_state+")";
@@ -229,6 +244,23 @@ void UpdateApplier::setState(const std::string &state, std::optional<double> pro
     m_progress=progress;
 }
 
+bool UpdateApplier::beginSwap()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if(m_stopping)
+        return false;
+    m_swapping=true;
+    return true;
+}
+
+bool UpdateApplier::endSwap()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_swapping=false;
+    m_swapDone.notify_all();
+    return !m_stopping;
+}
+
 void UpdateApplier::finishFailed(const std::string &error)
 {
     if(!error.empty())
@@ -294,6 +326,12 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe 
         }
     }
 
+    if(!beginSwap())
+    {
+        removeStaging(m_config.root);
+        finishFailed("update to v"+version+" cancelled, the server is stopping");
+        return;
+    }
     setState("installing", 0.98);
 
     UpdateState state;
@@ -303,36 +341,64 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe 
     state.attempt=0;
 
     std::string error;
-    bool installed=writeUpdateState(m_config.root, state, error);
-    if(installed && !swapIn(m_config.root, staged.staged, error))
+    bool installed=false;
     {
-        installed=false;
-        std::string removeError;
-        removeUpdateState(m_config.root, removeError);
+        // markHealthy reads, records and deletes the state under this lock:
+        // without it a probation ending now would delete the new state.
+        std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
+
+        // In probation the running version is serving, so it is what a
+        // rollback goes back to: its update is recorded before swapIn drops
+        // its own bin.prev and the new state replaces its own.
+        if(markHealthy(m_config.root, m_config.currentVersion))
+            spdlog::info("Update: v{} marked healthy before installing v{}", m_config.currentVersion, version);
+
+        installed=writeUpdateState(m_config.root, state, error);
+        if(installed && !swapIn(m_config.root, staged.staged, error))
+        {
+            installed=false;
+            std::string removeError;
+            removeUpdateState(m_config.root, removeError);
+        }
+        removeStaging(m_config.root);
+
+        if(!installed)
+        {
+            UpdateHistory history=readUpdateHistory(m_config.root);
+            history.lastError="installing v"+version+" failed: "+error;
+            history.updates.push_back({m_config.currentVersion, version, "failed", nowUtc(), history.lastError});
+            std::string writeError;
+            if(!writeUpdateHistory(m_config.root, history, writeError))
+                spdlog::warn("Update: {}", writeError);
+            error=history.lastError;
+        }
     }
-    removeStaging(m_config.root);
+    bool restart=endSwap();
 
     if(!installed)
     {
-        std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
-        UpdateHistory history=readUpdateHistory(m_config.root);
-        history.lastError="installing v"+version+" failed: "+error;
-        history.updates.push_back({m_config.currentVersion, version, "failed", nowUtc(), history.lastError});
-        std::string writeError;
-        if(!writeUpdateHistory(m_config.root, history, writeError))
-            spdlog::warn("Update: {}", writeError);
-        finishFailed(history.lastError);
+        finishFailed(error);
         return;
     }
 
-    spdlog::info("Update: v{} installed in {}, restarting", version, m_config.root.string());
     setState("restarting", 1.0);
+    if(!restart)
+    {
+        spdlog::info("Update: v{} installed in {}; the server is stopping, it starts the next time", version, m_config.root.string());
+        return;
+    }
+    spdlog::info("Update: v{} installed in {}, restarting", version, m_config.root.string());
     if(m_restart)
         m_restart();
 }
 
 void UpdateApplier::runRollback(std::string previous)
 {
+    if(!beginSwap())
+    {
+        finishFailed("rollback to v"+previous+" cancelled, the server is stopping");
+        return;
+    }
     {
         // not held over the restart: the drain must not wait on it
         std::lock_guard<std::recursive_mutex> historyLock(updateHistoryMutex());
@@ -357,15 +423,22 @@ void UpdateApplier::runRollback(std::string previous)
             std::string writeError;
             if(!writeUpdateHistory(m_config.root, history, writeError))
                 spdlog::warn("Update: {}", writeError);
+            endSwap();
             finishFailed(history.lastError);
             return;
         }
         if(!removeUpdateState(m_config.root, error))
             spdlog::warn("Update: {}", error);
     }
+    bool restart=endSwap();
 
-    spdlog::info("Update: rolled back to v{}, restarting", previous);
     setState("restarting", std::nullopt);
+    if(!restart)
+    {
+        spdlog::info("Update: rolled back to v{}; the server is stopping, it starts the next time", previous);
+        return;
+    }
+    spdlog::info("Update: rolled back to v{}, restarting", previous);
     if(m_restart)
         m_restart();
 }

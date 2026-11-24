@@ -297,6 +297,7 @@ endif()
         tests/updateStagingTests.cpp
         tests/updateApplierTests.cpp
         tests/autoUpdateTests.cpp
+        tests/processEndTests.cpp
         src/server/drainController.cpp
     )
 
@@ -400,6 +401,8 @@ add_library(arbiterai_server_updates STATIC
     src/server/updateApplier.cpp
     src/server/autoUpdate.h
     src/server/autoUpdate.cpp
+    src/server/processEnd.h
+    src/server/processEnd.cpp
 )
 target_include_directories(arbiterai_server_updates PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/server")
 target_include_directories(arbiterai_server_updates PRIVATE ${PICOSHA2_INCLUDE_DIRS})

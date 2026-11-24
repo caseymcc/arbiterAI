@@ -72,6 +72,11 @@ public:
 
     bool busy() const;
 
+    /// The server is stopping: refuses apply and rollback, cancels an update
+    /// that has not swapped yet, and returns once a running swap is done.
+    /// Its restart is not asked for. Does not wait for the worker thread.
+    void stop();
+
     /// state, progress, prev_version, update_error, rollback_available,
     /// rollback_version, drain_timeout_s.
     nlohmann::json statusJson() const;
@@ -85,6 +90,10 @@ private:
     bool waitUntilIdle(const BusyProbe &busy, std::string &reason);
     void runRollback(std::string previous);
     void setState(const std::string &state, std::optional<double> progress);
+    /// false once stopping; otherwise stop() waits for endSwap()
+    bool beginSwap();
+    /// false when a stop came in during the swap: the restart is not asked for
+    bool endSwap();
     void finishFailed(const std::string &error);
 
     ApplierConfig m_config;
@@ -97,7 +106,9 @@ private:
     std::string m_state="idle";
     std::optional<double> m_progress;
     bool m_stopping=false;
+    bool m_swapping=false;
     std::condition_variable m_wake;
+    std::condition_variable m_swapDone;
     std::thread m_worker;
 };
 

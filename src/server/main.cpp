@@ -2,6 +2,7 @@
 #include "updateRoutes.h"
 #include "logBuffer.h"
 #include "drainController.h"
+#include "processEnd.h"
 #include "installer.h"
 #include "updateApplier.h"
 
@@ -1169,9 +1170,9 @@ int main(int argc, char *argv[])
     // Asked for on the applier's worker thread once the install is swapped:
     // drain, stop listening, and let main restart from the new bin/.
     std::atomic<bool> restartRequested{false};
-    // Whoever takes it ends the process: the restart worker after its
-    // timeout, or main once listen() returned. The other one does nothing.
-    std::atomic<bool> processEnding{false};
+    // The restart worker, the stop handler and main each end the process;
+    // the first one does, the others leave it alone.
+    arbiterAI::server::ProcessEnd processEnd;
     arbiterAI::server::ApplierConfig applierConfig;
     applierConfig.root=applyContext.root;
     applierConfig.currentVersion=ARBITERAI_VERSION_STRING;
@@ -1181,7 +1182,7 @@ int main(int argc, char *argv[])
     arbiterAI::server::UpdateApplier applier(applierConfig,
         std::make_unique<arbiterAI::server::CprDownloader>(),
         arbiterAI::server::loadedModelsSnapshot,
-        [&restartRequested, &processEnding, &drainController, &server, drainTimeoutSec, &args, applyRoot=applyContext.root]()
+        [&restartRequested, &processEnd, &drainController, &server, drainTimeoutSec, &args, applyRoot=applyContext.root]()
         {
             restartRequested=true;
             spdlog::info("Restarting for the update: refusing new requests, waiting up to {} s for in-flight work", drainTimeoutSec);
@@ -1192,10 +1193,18 @@ int main(int argc, char *argv[])
 
             // listen() joins the request threads; one still running after the
             // drain timeout would hold main, so restart from here instead.
-            if(!stopSignals.waitForShutdown(std::chrono::seconds(5))&&!processEnding.exchange(true))
+            if(stopSignals.waitForShutdown(std::chrono::seconds(5)))
+                return;
+            switch(processEnd.afterRestartTimeout(stopSignals.stopRequested()))
             {
+            case arbiterAI::server::EndAction::Restart:
                 spdlog::error("Requests still running after the drain timeout, restarting without unloading models");
                 restartServer(applyRoot, args);
+            case arbiterAI::server::EndAction::Exit:
+                spdlog::error("Requests still running after the drain timeout and a stop came in, exiting without unloading models");
+                exitServer(1);
+            case arbiterAI::server::EndAction::None:
+                break;
             }
         });
     arbiterAI::server::setUpdateApplier(&applier);
@@ -1285,8 +1294,12 @@ int main(int argc, char *argv[])
     if(!installRoot.empty())
         healthTimer.start(installRoot, ARBITERAI_VERSION_STRING, std::chrono::seconds(60));
 
-    stopSignals.start([&drainController, &server, drainTimeoutSec, installRoot]()
+    stopSignals.start([&drainController, &server, &applier, &processEnd, drainTimeoutSec, installRoot]()
     {
+        // An auto-update would take the drain for idle and swap while the
+        // process exits; one already swapping is let finish first.
+        applier.stop();
+
         // A clean stop is not a crash: a restart right after an update keeps it.
         if(!installRoot.empty()&&arbiterAI::server::markHealthy(installRoot, ARBITERAI_VERSION_STRING))
             spdlog::info("Update to v{} kept: stopped cleanly during probation", ARBITERAI_VERSION_STRING);
@@ -1302,7 +1315,8 @@ int main(int argc, char *argv[])
 
         // listen() joins the request threads, so a request still running
         // after the drain timeout would hold it; do not wait for it.
-        if(!drained&&!stopSignals.waitForShutdown(std::chrono::seconds(5)))
+        if(!drained&&!stopSignals.waitForShutdown(std::chrono::seconds(5))
+            &&processEnd.afterStopTimeout()==arbiterAI::server::EndAction::Exit)
         {
             spdlog::error("Requests still running after the drain timeout, exiting without unloading models");
             exitServer(1);
@@ -1312,9 +1326,13 @@ int main(int argc, char *argv[])
     bool listenOk=server.listen(host, port);
 
     stopSignals.shuttingDown();
-    if(processEnding.exchange(true))
+    applier.stop();
+    // A stop signal during the drain wins: the supervisor (or the operator)
+    // starts the new install from disk.
+    arbiterAI::server::EndAction endAction=processEnd.afterListen(restartRequested, stopSignals.stopRequested());
+    if(endAction==arbiterAI::server::EndAction::None)
     {
-        // the restart worker gave up waiting for this and is replacing the process
+        // the restart worker or the stop handler gave up waiting for this and is ending the process
         for(;;)
             std::this_thread::sleep_for(std::chrono::hours(1));
     }
@@ -1350,9 +1368,7 @@ int main(int argc, char *argv[])
     if(!arbiterAI::ModelRuntime::instance().getActiveDownloadSnapshots().empty())
         spdlog::warn("Downloads still running after the drain timeout, abandoning them");
 
-    // A stop signal during the drain wins: the supervisor (or the operator)
-    // starts the new install from disk.
-    if(restartRequested&&!stopSignals.stopRequested())
+    if(endAction==arbiterAI::server::EndAction::Restart)
         restartServer(applyContext.root, args);
 
     spdlog::info("shutdown complete");

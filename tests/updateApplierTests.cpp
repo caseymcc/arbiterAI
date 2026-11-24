@@ -442,6 +442,111 @@ TEST_F(UpdateApplierTest, PrevVersionComesFromProbationThenTheHistory)
     EXPECT_EQ(updated.statusJson()["prev_version"], "1.0.0");
 }
 
+TEST_F(UpdateApplierTest, TheSwapWaitsForTheHistoryLock)
+{
+    // markHealthy reads the state, writes the history and deletes the state
+    // under this lock; a swap in between would lose the new update's state.
+    std::unique_lock<std::recursive_mutex> historyLock(arbiterAI::server::updateHistoryMutex());
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+
+    ASSERT_TRUE(waitForState(updater, "installing"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(fs::exists(m_root/"update-state.json"));
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+
+    historyLock.unlock();
+    updater.wait();
+    EXPECT_EQ(m_restarts, 1);
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.1.0");
+    EXPECT_TRUE(fs::exists(m_root/"update-state.json"));
+}
+
+TEST_F(UpdateApplierTest, ApplyDuringProbationRecordsTheRunningUpdateFirst)
+{
+    UpdateState probation;
+    probation.from="0.9.0";
+    probation.to="1.0.0";
+    probation.attempt=1;
+    std::string error;
+    ASSERT_TRUE(arbiterAI::server::writeUpdateState(m_root, probation, error))<<error;
+
+    std::string message;
+    ASSERT_EQ(applier().apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    m_applier->wait();
+
+    UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
+    ASSERT_EQ(history.updates.size(), 1u);
+    EXPECT_EQ(history.updates[0].from, "0.9.0");
+    EXPECT_EQ(history.updates[0].to, "1.0.0");
+    EXPECT_EQ(history.updates[0].outcome, "updated");
+    EXPECT_EQ(history.prevVersion, "0.9.0");
+
+    std::optional<UpdateState> state=arbiterAI::server::readUpdateState(m_root, error);
+    ASSERT_TRUE(state.has_value())<<error;
+    EXPECT_EQ(state->from, "1.0.0");
+    EXPECT_EQ(state->to, "1.1.0");
+}
+
+TEST_F(UpdateApplierTest, AStopBeforeTheSwapCancelsTheUpdate)
+{
+    // the stop's drain refuses new requests, so the idle probe sees nothing busy
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message,
+        [this]()
+        {
+            m_applier->stop();
+            return std::string();
+        }), UpdateApplier::Start::Started)<<message;
+    updater.wait();
+
+    EXPECT_EQ(m_restarts, 0);
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+    EXPECT_FALSE(fs::exists(m_root/"update-state.json"));
+    EXPECT_FALSE(fs::exists(m_root/".update"));
+    EXPECT_FALSE(updater.busy());
+}
+
+TEST_F(UpdateApplierTest, StopWaitsForARunningSwapAndSkipsTheRestart)
+{
+    std::unique_lock<std::recursive_mutex> historyLock(arbiterAI::server::updateHistoryMutex());
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    ASSERT_TRUE(waitForState(updater, "installing"));
+
+    std::atomic<bool> stopped{false};
+    std::thread stopper([&updater, &stopped]()
+    {
+        updater.stop();
+        stopped=true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(stopped);
+
+    historyLock.unlock();
+    stopper.join();
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.1.0");
+    EXPECT_TRUE(fs::exists(m_root/"update-state.json"));
+    updater.wait();
+    EXPECT_EQ(m_restarts, 0);
+}
+
+TEST_F(UpdateApplierTest, ApplyAndRollbackAreRefusedOnceStopped)
+{
+    fs::create_directories(m_root/"bin.prev");
+    UpdateApplier &updater=applier();
+    updater.stop();
+
+    std::string message;
+    EXPECT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Busy);
+    EXPECT_EQ(message, "the server is stopping");
+    EXPECT_EQ(updater.rollback(allowed, message), UpdateApplier::Start::Busy);
+    EXPECT_EQ(message, "the server is stopping");
+}
+
 class ListSource:public arbiterAI::server::ReleaseSource {
 public:
     explicit ListSource(nlohmann::json releases):m_releases(std::move(releases)) {}

@@ -174,13 +174,13 @@ TEST_F(CanApplyTest, BlockedWhenAllowApplyIsOff)
     EXPECT_EQ(result.blockedReason, "updates.allow_apply is false in the config file");
 }
 
-TEST_F(CanApplyTest, AnInvalidUpdatesBlockSaysSo)
+TEST_F(CanApplyTest, AnInvalidUpdatesBlockSaysARestartIsNeeded)
 {
     m_context.allowApply=false;
     m_context.updatesError="'updates.idle_minutes' must be an integer";
     ApplyCheck result=check();
     EXPECT_FALSE(result.canApply);
-    EXPECT_EQ(result.blockedReason, "the 'updates' config block is invalid, so apply is off: 'updates.idle_minutes' must be an integer");
+    EXPECT_EQ(result.blockedReason, "the 'updates' config block was invalid when the server started, so apply is off until it restarts: 'updates.idle_minutes' must be an integer");
 }
 
 TEST_F(CanApplyTest, BlockedWhenTheRootIsNotWritable)

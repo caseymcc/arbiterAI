@@ -179,7 +179,7 @@ All server settings are defined in a JSON configuration file. See [`examples/ser
 saved to the config file and applied at once (auto-update reads it at its next check, within
 15 s). Only these keys are accepted (`drain_timeout_s` is read from the file at startup); a request that sets `allow_apply` is refused with 400; any other keys already in the file's
 `updates` block are kept as they are. `GET /api/server/config` returns the current values as
-`updates`. An invalid `updates` block in the file is ignored at startup with a warning: the defaults apply, except that `allow_apply` and `auto_apply` are off, so a typo in any key cannot turn installing back on. `apply_blocked_reason` then names the invalid key.
+`updates`. An invalid `updates` block in the file is ignored at startup with a warning: the defaults apply, except that `allow_apply` and `auto_apply` are off, so a typo in any key cannot turn installing back on. `apply_blocked_reason` then names the invalid key. Fixing the block over `PUT /api/server/config` does not turn apply back on: `allow_apply` is read from the file at startup, so apply stays off, and the reason says so, until the server restarts.
 
 ### Stopping the Server
 
@@ -190,6 +190,8 @@ On `SIGTERM` or `SIGINT` (`systemctl stop`, `docker stop`, Ctrl-C) the server dr
 3. The server stops listening, stops the inference scheduler, unloads every model, logs `shutdown complete` and exits `0`.
 
 A second signal exits at once (`128+signal`). A signal that arrives before the server is listening (while it clones `arbiterAI_config`, loads startup models or runs `--self-test`) also exits at once, with `128+signal`: there is nothing to drain yet. If requests are still running 5 seconds after the drain timeout, the server logs that and exits `1` without unloading models; downloads still running then are abandoned.
+
+A stop also stops self-update: an apply or rollback that has not swapped the install yet is cancelled (`.update/` is removed), and one that is moving directories is let finish before the server exits, so `bin/` is never left half moved. A stop that comes while the server drains to restart into an update wins: the server exits instead of `execv`ing, and the supervisor starts the new install, in probation, the next time it starts the service.
 
 ### Examples
 
@@ -1492,7 +1494,9 @@ the same arguments and working directory. The process ID does not change, so sys
 Docker do not see a restart. The new version reloads the models that were loaded and pins the
 ones that were pinned.
 
-The new version is in probation until it has served for 60 seconds or is stopped cleanly. If
+The new version is in probation until it has served for 60 seconds or is stopped cleanly. An
+apply during probation first records the running version as healthy (it is serving, and it is
+what a rollback of the new update goes back to). If
 it is started again before that (it crashed), it moves `bin.prev`/`share.prev` back, records
 "vX failed to start, rolled back" and the version in `failed`, and `execv`s the old version.
 That needs something to start it again after a crash: systemd or Docker (see `supervisor`).
