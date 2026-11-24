@@ -4511,7 +4511,7 @@ void handleGetRuntimeOptions(const httplib::Request &, httplib::Response &res)
     options.push_back({
         {"name", "reasoning_budget"},
         {"type", "integer"},
-        {"description", "Reasoning token budget (--reasoning-budget). 0 disables reasoning/thinking tokens."},
+        {"description", "Token budget for the <think> block of local models with single-token <think>/</think> (a no-op for other models and harmony). Unset: unlimited; 0: thinking off; N: the block is closed after N tokens. Applies live on a load call to a loaded model."},
         {"default", nullptr}
     });
     options.push_back({

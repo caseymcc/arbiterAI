@@ -47,7 +47,7 @@ struct RuntimeOptions {
     std::optional<std::string> kvCacheTypeK;    // -ctk: KV cache type for keys (e.g. "f16", "q8_0", "q4_0")
     std::optional<std::string> kvCacheTypeV;    // -ctv: KV cache type for values
     std::optional<bool> noMmap;                 // --no-mmap: disable memory mapping
-    std::optional<int> reasoningBudget;         // --reasoning-budget: reasoning token budget (0=disabled)
+    std::optional<int> reasoningBudget;         // <think> token budget (unset=unlimited, 0=off, N=close after N); <think> models only, applied live
     std::optional<bool> swaFull;                // --swa-full: full SWA (sliding window attention)
     std::optional<int> nGpuLayers;              // -ngl: number of GPU layers (99=all)
     std::optional<std::string> overrideTensor;  // -ot: tensor override pattern (e.g. "per_layer_token_embd.weight=CPU")

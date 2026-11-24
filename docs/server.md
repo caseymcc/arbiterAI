@@ -630,7 +630,27 @@ Load a model into VRAM for inference.
 | `variant` | Quantization variant (e.g., `Q4_K_M`). Omit to auto-select. |
 | `context` | Context size. Omit for model default. |
 
-**Response (200):** `{"status": "loaded", "model": "qwen2.5-7b-instruct"}`
+**Request body (optional, JSON; takes precedence over the query string):** `variant`, `context` (or `context_size`), `devices` (array of GPU indices) and `runtime_options` (object). `GET /api/runtime-options` lists the options. A `runtime_options` value given here overrides the same key in the model config's `runtime_options`, and a key that is absent falls back to the config.
+
+**Runtime options on a loaded model.** Most options (`kv_cache_type_k`/`_v`, `flash_attn`, `n_gpu_layers`, `no_mmap`, …) take effect only when the model is loaded. A load call on a model that is already loaded does not change them. `reasoning_budget` is the exception: such a call resolves it again (model config merged with this call's `runtime_options`), and the new value applies from the next request, with no reload. Leaving the key out returns to the config's value. A request that is already generating keeps the budget it started with.
+
+**`reasoning_budget`** limits the `<think>` block of local llama.cpp models:
+
+| Value | Effect |
+|-------|--------|
+| unset | No limit; prompts and output are unchanged. |
+| `0` | Thinking off: an empty `<think>\n\n</think>\n\n` block is appended after the generation prompt (what Qwen3-family templates do for `enable_thinking=false`). |
+| `N` > 0 | After N tokens inside the block the server injects `\n</think>\n\n`, and the model goes on to its answer. The injected text appears in the content and the stream, and its tokens count as completion tokens. |
+
+It applies only to models whose vocabulary has `<think>` and `</think>` as single tokens (e.g. the Qwen3 family), detected at load. For other models (Llama 3, Mistral, Qwen2.5, …) and for `api_format: harmony` models (gpt-oss, which keep `Reasoning: high`), it does nothing, whatever its value. Loading such a model with the option set logs once that it is ignored.
+
+```bash
+curl -X POST http://localhost:8080/api/models/qwen3-8b/load \
+  -H 'Content-Type: application/json' \
+  -d '{"runtime_options": {"reasoning_budget": 1024}}'
+```
+
+**Response (200):** `{"status": "loaded", "model": "qwen2.5-7b-instruct"}`, plus `context_size`, `max_context_size` and the model's active `runtime_options` (which `GET /api/models/loaded` also shows).
 
 **Response (202):** `{"status": "downloading", "model": "qwen2.5-7b-instruct"}` — model file is being downloaded.
 

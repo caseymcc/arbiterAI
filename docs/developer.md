@@ -373,6 +373,20 @@ The provider system abstracts LLM backends using a strategy pattern.
 
 [`Llama`](../src/arbiterAI/providers/llama.h) delegates to [`LlamaInterface`](../src/arbiterAI/providers/llamaInterface.h) for local model inference via llama.cpp. Currently disabled in the build. See the [Local Model Management Task](tasks/local_model_management.md) for the planned refactor into `ModelRuntime` with multi-model and multi-GPU support.
 
+#### Reasoning budget (`<think>` models)
+
+`RuntimeOptions::reasoningBudget` (`runtime_options.reasoning_budget`) limits the `<think>` block of local llama.cpp models:
+
+- **unset:** no limit; prompts and output are unchanged.
+- **`0`:** thinking off. `Llama::tokenizePrompt` appends an empty `<think>\n\n</think>\n\n` block after the generation prompt.
+- **`N` > 0:** [`ReasoningBudget`](../src/arbiterAI/providers/reasoningBudget.h) follows the generated tokens. After N tokens inside the block, both generation loops inject `\n</think>\n\n` (decoded into the KV cache, accepted by the sampler, appended to the result and the stream, counted as completion tokens) and go on sampling.
+
+It applies only to models whose vocabulary has `<think>` and `</think>` as single tokens; `ModelRuntime` detects them at load and stores the ids in `LoadedModel::thinkTokens`. Other models and `api_format: harmony` models ignore it for every value, and the load logs that once.
+
+The value comes from `LoadedModel::activeOptions`, read once when each request starts. `ArbiterAI::loadModel(model, variant, context, &options)` on a model that is already loaded re-resolves only `reasoningBudget` (model config merged with `options`), so a change applies live from the next request. Passing no key returns to the config's value. A call with `optionsOverride == nullptr` (every inference makes one to ensure the model is loaded) leaves it alone. Load-time options (KV types, flash attention, GPU layers, …) are not changed on a loaded model.
+
+Templated prompts are tokenized with special-token parsing, so the template's turn markers (`<|im_start|>`, …) are control tokens.
+
 ### Testing Provider
 
 [`Mock`](../src/arbiterAI/providers/mock.h) provides deterministic responses via `<echo>` tags for testing. See the [Testing Guide](testing.md) for details.
