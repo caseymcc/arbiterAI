@@ -111,6 +111,7 @@ public:
         gweni::controls::ComboBox *kvv=nullptr;
         gweni::controls::ComboBox *flashAttn=nullptr;
         gweni::controls::ComboBox *noHostVisible=nullptr;
+        gweni::controls::ComboBox *reasoningBudget=nullptr;
     };
     const std::vector<Entry> &entries() const { return m_entries; }
     gweni::controls::Button *addButton() const { return m_add; }

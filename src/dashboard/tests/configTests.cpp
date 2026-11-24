@@ -162,7 +162,8 @@ TEST_F(ConfigTest, EditsInTheControlsReachTheSavedBody)
     const nlohmann::json body=config().configBody();
     ASSERT_EQ(body["startup_models"].size(), 2u);
     EXPECT_EQ(body["startup_models"][1], nlohmann::json({{"model", "qwen3-8b"}, {"variant", "Q8_0"}, {"context_size", 20480},
-        {"runtime_options", {{"kv_cache_type_v", "f16"}, {"vulkan_no_host_visible_vram", true}}}, {"devices", {1}}, {"api_format", "harmony"}}));
+        {"runtime_options", {{"kv_cache_type_v", "f16"}, {"vulkan_no_host_visible_vram", true}, {"reasoning_budget", 4096}}},
+        {"devices", {1}}, {"api_format", "harmony"}}));
     EXPECT_EQ(body["startup_models"][0]["runtime_options"], nlohmann::json({{"kv_cache_type_k", "q8_0"}, {"flash_attn", true}}));
 }
 
@@ -186,6 +187,64 @@ TEST_F(ConfigTest, SaveAndLoadSavesTheConfigThenLoadsTheModel)
     EXPECT_TRUE(config().entries()[0].status->getTextColor()==palette::good);
     EXPECT_FALSE(config().entries()[0].save->isDisabled());
     shot("config-saved");
+}
+
+TEST_F(ConfigTest, ReasoningBudgetShowsTheSavedPreset)
+{
+    start("/dashboard/config");
+    EXPECT_EQ(selected(config().entries()[0].reasoningBudget), "");
+    EXPECT_EQ(selected(config().entries()[1].reasoningBudget), "4096");
+    EXPECT_EQ(config().entries()[1].reasoningBudget->getSelectedItem()->getText(), "4K");
+}
+
+TEST_F(ConfigTest, ReasoningBudgetIsSavedAndLoadedAsAnInteger)
+{
+    ok("/api/models/config", "PUT");
+    ok("/api/server/config", "PUT", loadFixture("serverConfig.json"));
+    ok("/api/models/gpt-oss-120b/load", "POST", {{"status", "loaded"}});
+    start("/dashboard/config");
+    config().entries()[0].reasoningBudget->selectItemByName("0");
+    frames(2);
+    click(config().entries()[0].save);
+
+    ASSERT_NE(lastBody("PUT", "/api/server/config"), nullptr);
+    ASSERT_NE(lastBody("POST", "/api/models/gpt-oss-120b/load"), nullptr);
+    const nlohmann::json saved=(*lastBody("PUT", "/api/server/config"))["startup_models"][0]["runtime_options"]["reasoning_budget"];
+    const nlohmann::json loaded=(*lastBody("POST", "/api/models/gpt-oss-120b/load"))["runtime_options"]["reasoning_budget"];
+    EXPECT_TRUE(saved.is_number_integer())<<saved.dump();
+    EXPECT_EQ(saved, 0);
+    EXPECT_TRUE(loaded.is_number_integer())<<loaded.dump();
+    EXPECT_EQ(loaded, 0);
+
+    config().entries()[0].reasoningBudget->selectItemByName("16384");
+    frames(2);
+    EXPECT_EQ(config().configBody()["startup_models"][0]["runtime_options"]["reasoning_budget"], 16384);
+}
+
+TEST_F(ConfigTest, DefaultReasoningBudgetRemovesTheKey)
+{
+    start("/dashboard/config");
+    config().entries()[1].reasoningBudget->selectItemByName("");
+    frames(2);
+
+    const nlohmann::json options=config().configBody()["startup_models"][1]["runtime_options"];
+    EXPECT_FALSE(options.contains("reasoning_budget"))<<options.dump();
+}
+
+TEST_F(ConfigTest, ANonPresetReasoningBudgetShowsAsItselfAndIsKept)
+{
+    nlohmann::json saved=loadFixture("serverConfig.json");
+    saved["startup_models"][1]["runtime_options"]["reasoning_budget"]=2000;
+    m_data.setJson("/api/server/config", saved);
+    start("/dashboard/config");
+
+    gweni::controls::ComboBox *budget=config().entries()[1].reasoningBudget;
+    EXPECT_EQ(selected(budget), "2000");
+    EXPECT_EQ(budget->getSelectedItem()->getText(), "2000 tokens");
+    // an unrelated edit on the same entry keeps it
+    config().entries()[1].kvv->selectItemByName("f16");
+    frames(2);
+    EXPECT_EQ(config().configBody()["startup_models"][1]["runtime_options"]["reasoning_budget"], 2000);
 }
 
 TEST_F(ConfigTest, ADownloadingModelSaysItWillLoadWhenReady)

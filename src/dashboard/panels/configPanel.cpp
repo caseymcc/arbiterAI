@@ -73,6 +73,14 @@ std::string boolOption(const nlohmann::json &options, const char *key)
     return options[key].get<bool>()?"true":"false";
 }
 
+/// an integer option as the combo item name it selects; empty when unset
+std::string intOption(const nlohmann::json &options, const char *key)
+{
+    if(!options.is_object() || !options.contains(key) || !options[key].is_number_integer())
+        return std::string();
+    return std::to_string(options[key].get<int>());
+}
+
 std::string selectedName(gweni::controls::ComboBox *combo)
 {
     gweni::controls::Label *item=combo->getSelectedItem();
@@ -483,6 +491,8 @@ void ConfigPanel::setRuntimeOption(size_t index, const std::string &option, cons
         options.erase(option);
     else if(value=="true" || value=="false")
         options[option]=value=="true";
+    else if(std::all_of(value.begin(), value.end(), [](char c) { return c>='0' && c<='9'; }))
+        options[option]=std::stoi(value);
     else
         options[option]=value;
 }
@@ -597,6 +607,8 @@ void ConfigPanel::renderModels()
     for(const nlohmann::json &option:m_options)
         modelItems.push_back({modelLabel(text(option, "model"), text(option, "variant")), modelKey(text(option, "model"), text(option, "variant"))});
     const std::vector<std::pair<std::string, std::string>> defaults={{"Default", ""}, {"Enabled", "true"}, {"Disabled", "false"}};
+    const std::vector<std::pair<std::string, std::string>> budgets={{"Default", ""}, {"Off", "0"}, {"1K", "1024"},
+        {"4K", "4096"}, {"8K", "8192"}, {"16K", "16384"}};
     std::vector<std::pair<std::string, std::string>> kvTypes={{"Default", ""}};
     for(const char *type:KvTypes)
         kvTypes.push_back({type, type});
@@ -710,9 +722,18 @@ void ConfigPanel::renderModels()
         view.flashAttn=addChoice(view.box, "Flash Attention", defaults, boolOption(options, "flash_attn"));
         view.noHostVisible=addChoice(view.box, "No Host-Visible VRAM", defaults, boolOption(options, "vulkan_no_host_visible_vram"));
         view.noHostVisible->setToolTipText("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM: skip the BAR-mapped heap, device-local memory only");
-        height+=4*(RowHeight+2);
+        const std::string budget=intOption(options, "reasoning_budget");
+        std::vector<std::pair<std::string, std::string>> budgetItems=budgets;
+        // a saved value that is no preset (hand-edited) shows as itself and is kept
+        if(std::none_of(budgetItems.begin(), budgetItems.end(), [&budget](const auto &item) { return item.second==budget; }))
+            budgetItems.push_back({budget+" tokens", budget});
+        view.reasoningBudget=addChoice(view.box, "Reasoning Budget", budgetItems, budget);
+        view.reasoningBudget->setToolTipText("reasoning_budget: caps the <think> block at this many tokens, Off skips thinking; "
+            "<think> models only (ignored with Harmony), applies to a loaded model on Save & Load");
+        height+=5*(RowHeight+2);
         const std::pair<gweni::controls::ComboBox *, const char *> runtime[]={{view.kvk, "kv_cache_type_k"},
-            {view.kvv, "kv_cache_type_v"}, {view.flashAttn, "flash_attn"}, {view.noHostVisible, "vulkan_no_host_visible_vram"}};
+            {view.kvv, "kv_cache_type_v"}, {view.flashAttn, "flash_attn"}, {view.noHostVisible, "vulkan_no_host_visible_vram"},
+            {view.reasoningBudget, "reasoning_budget"}};
         for(const auto &[combo, key]:runtime)
         {
             combo->onSelection.addCallback(combo, [this, i, combo=combo, key=std::string(key)](gweni::event::Handler &, gweni::event::Info)
