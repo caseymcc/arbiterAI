@@ -74,9 +74,10 @@ struct StageRequest {
     std::chrono::milliseconds selfTestTimeout=std::chrono::minutes(2);
     /// Free bytes on the root's filesystem; std::filesystem::space when empty.
     std::function<uintmax_t(const std::filesystem::path &)> freeSpace;
-    /// Asked when a signal killed the self-test: true when the server is
-    /// stopping (its stop signal reached the self-test too), so the release
-    /// is not at fault.
+    /// Asked when the self-test ended by SIGTERM/SIGINT (killed by it, or
+    /// exited 128+signal as the server does before it listens): true when the
+    /// server is stopping (its stop signal reached the self-test too), so the
+    /// release is not at fault. May block (the applier waits up to stopGrace).
     std::function<bool()> stopping;
 };
 
@@ -95,8 +96,8 @@ using StageProgress=std::function<void(StageStep step, double fraction)>;
 /// install.json version and runs the staged --self-test in the server's cwd.
 /// The install is never touched. On a failure .update is removed and the
 /// history gets last_error (and the version in failed when the release
-/// itself is at fault: digest, contents or self-test, unless a signal killed
-/// the self-test while the server was stopping).
+/// itself is at fault: digest, contents or self-test, unless a stop signal
+/// ended the self-test while the server was stopping).
 StageResult stageRelease(const StageRequest &request, Downloader &downloader, const StageProgress &progress);
 
 /// Removes <root>/.update.

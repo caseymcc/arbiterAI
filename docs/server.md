@@ -191,7 +191,7 @@ On `SIGTERM` or `SIGINT` (`systemctl stop`, `docker stop`, Ctrl-C) the server dr
 
 A second signal exits at once (`128+signal`). A signal that arrives before the server is listening (while it clones `arbiterAI_config`, loads startup models or runs `--self-test`) also exits at once, with `128+signal`: there is nothing to drain yet. If requests are still running 5 seconds after the drain timeout, the server logs that and exits `1` without unloading models; downloads still running then are abandoned.
 
-A stop also stops self-update. An apply that reaches the swap after the stop is cancelled (`.update/` is removed), and so is a rollback that has not swapped yet. One that is moving directories is let finish before the server exits, so `bin/` is never left half moved. An apply still downloading, verifying or self-testing is not waited for: the process exits around it, and the `.update/` it leaves is cleared by the next apply. Its release is not marked failed: a self-test that the stop's signal kills (systemd sends it to the whole cgroup) is recorded in `update-history.json` (if it lands before the process exits) as an attempt whose `last_error` says "the server is stopping", but the version is not added to `failed`, so auto-update tries it again after the next start. A signal-killed self-test waits up to 5 s for the server's stop to reach the updater before it counts against the release. A stop that comes while the server drains to restart into an update wins: the server exits instead of `execv`ing, and the supervisor starts the new install, in probation, the next time it starts the service.
+A stop also stops self-update. An apply that reaches the swap after the stop is cancelled (`.update/` is removed), and so is a rollback that has not swapped yet. One that is moving directories is let finish before the server exits, so `bin/` is never left half moved. An apply still downloading, verifying or self-testing is not waited for: the process exits around it, and the `.update/` it leaves is cleared by the next apply. Its release is not marked failed: a self-test that the stop's signal ends (systemd sends it to the whole cgroup; the self-test is then either killed by `SIGTERM`/`SIGINT` or, like any server not yet listening, exits `128+signal`, e.g. 143) is recorded in `update-history.json` (if it lands before the process exits) as an attempt whose `last_error` says "the server is stopping", but the version is not added to `failed`, so auto-update tries it again after the next start. Such a self-test end waits up to 5 s for the server's stop to reach the updater before it counts against the release; any other end (another signal, another exit status) counts at once. A stop that comes while the server drains to restart into an update wins: the server exits instead of `execv`ing, and the supervisor starts the new install, in probation, the next time it starts the service.
 
 ### Examples
 
@@ -1484,9 +1484,9 @@ A failure in any step leaves the install as it was, removes `.update/` and sets
 `update_error`. A failure of the release itself (digest, archive, self-test) also adds the
 version to the `failed` list in `update-history.json`, which auto-update skips; a failed
 download, a full disk (also while unpacking: the archive unpacks to about 3.2x its size) or a
-`tar` that cannot be started does not, and neither does a self-test killed by a signal while the
-server is stopping (under systemd's default `KillMode=control-group` a `systemctl stop` sends
-SIGTERM to the self-test too).
+`tar` that cannot be started does not, and neither does a self-test ended by `SIGTERM`/`SIGINT`
+(killed by it, or exited with status 130/143) while the server is stopping (under systemd's default
+`KillMode=control-group` a `systemctl stop` sends SIGTERM to the self-test too).
 
 On success the server writes `<root>/update-state.json` (`from`, `to`, the loaded models with
 their variant, context, runtime options, devices and pin state, `attempt: 0`), moves `bin/` and

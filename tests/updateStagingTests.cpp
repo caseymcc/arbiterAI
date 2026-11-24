@@ -382,6 +382,44 @@ TEST_F(UpdateStagingTest, FailedSelfTestLeavesTheInstallUntouched)
     EXPECT_EQ(history.updates[0].from, "1.0.0");
 }
 
+TEST_F(UpdateStagingTest, ASelfTestThatExits143WhileStoppingIsNotMarkedFailed)
+{
+    // the real binary sigwait()s SIGTERM and _Exit(128+SIGTERM)s before it listens
+    makeRelease("1.1.0", "exit 143");
+    m_request.stopping=[]() { return true; };
+    StageResult result=stage();
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.step, StageStep::SelfTesting);
+    EXPECT_NE(result.error.find("the server is stopping"), std::string::npos)<<result.error;
+    expectInstallUntouched();
+    EXPECT_FALSE(arbiterAI::server::readUpdateHistory(m_root).isFailed("1.1.0"));
+}
+
+TEST_F(UpdateStagingTest, ASelfTestThatExits143WithoutAStopIsMarkedFailed)
+{
+    makeRelease("1.1.0", "exit 143");
+    m_request.stopping=[]() { return false; };
+    StageResult result=stage();
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.error.find("the server is stopping"), std::string::npos)<<result.error;
+    EXPECT_TRUE(arbiterAI::server::readUpdateHistory(m_root).isFailed("1.1.0"));
+}
+
+TEST_F(UpdateStagingTest, ASelfTestKilledByAnotherSignalWhileStoppingIsMarkedFailed)
+{
+    makeRelease("1.1.0", "kill -KILL $$");
+    bool asked=false;
+    m_request.stopping=[&asked]() { asked=true; return true; };
+    StageResult result=stage();
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(asked);
+    EXPECT_NE(result.error.find("was killed by"), std::string::npos)<<result.error;
+    EXPECT_TRUE(arbiterAI::server::readUpdateHistory(m_root).isFailed("1.1.0"));
+}
+
 TEST_F(UpdateStagingTest, SelfTestRunsInTheServersDirectoryWithItsConfig)
 {
     std::string script="test \"$(pwd)\" = '"+fs::canonical(m_cwd).string()+"' || { echo \"cwd $(pwd)\"; exit 5; }\n"

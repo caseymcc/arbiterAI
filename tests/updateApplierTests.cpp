@@ -553,6 +553,25 @@ TEST_F(UpdateApplierTest, ASelfTestKilledByAStopDoesNotMarkTheReleaseFailed)
     EXPECT_EQ(m_restarts, 0);
 }
 
+TEST_F(UpdateApplierTest, ASelfTestThatExits143OnTheStopSignalIsNotMarkedFailed)
+{
+    // the real binary blocks SIGTERM and sigwait()s it: a stop before it listens is _Exit(128+SIGTERM)
+    fs::path go=m_dir/"go";
+    makeRelease("1.1.0", "trap 'exit 143' TERM\nwhile [ ! -e '"+go.string()+"' ]; do sleep 0.01; done\nkill -TERM $$");
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    ASSERT_TRUE(waitForState(updater, "self_testing"));
+
+    updater.stop();
+    writeFile(go, "");
+    updater.wait();
+
+    UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
+    EXPECT_FALSE(history.isFailed("1.1.0"))<<history.lastError;
+    EXPECT_NE(history.lastError.find("exited with status 143, the server is stopping"), std::string::npos)<<history.lastError;
+}
+
 TEST_F(UpdateApplierTest, ASelfTestKilledJustBeforeTheStopReachesTheApplierIsNotMarkedFailed)
 {
     // the child dies at once; the server's stop handler gets to the applier later

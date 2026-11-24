@@ -429,7 +429,9 @@ StageResult stageRelease(const StageRequest &request, Downloader &downloader, co
         request.cwd, request.selfTestTimeout);
     if(!selfTest.started || selfTest.timedOut || selfTest.signal != 0 || selfTest.exitCode != 0)
     {
-        const bool stopping=selfTest.signal != 0 && request.stopping && request.stopping();
+        const bool stopSignalEnd=selfTest.signal == SIGTERM || selfTest.signal == SIGINT
+            || selfTest.exitCode == 128+SIGTERM || selfTest.exitCode == 128+SIGINT;
+        const bool stopping=stopSignalEnd && request.stopping && request.stopping();
         return fail(StageStep::SelfTesting, label+" --self-test "+describeEnd(selfTest)+(stopping?", the server is stopping":"")
             +": "+outputTail(selfTest.output), !stopping);
     }
