@@ -10,6 +10,7 @@
 
 #include <llama.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -665,11 +666,36 @@ TEST_F(LlamaReasoningBudgetTest, CapClosesTheBlockThenAnswers)
     ASSERT_NE(kv, nullptr);
     EXPECT_EQ(capped.usage.completion_tokens, static_cast<int>(kv->size())-capped.usage.prompt_tokens);
 
-    // streaming runs the other generation loop and shows the same forced close
     EXPECT_EQ(stream(THINK_MODEL_NAME), capped.text);
 
+    // the scheduler runs the other generation loop (runInferenceWithTokens)
     std::shared_ptr<InferenceJob> job=schedule(THINK_MODEL_NAME);
     EXPECT_EQ(job->resultText, capped.text);
+}
+
+TEST_F(LlamaReasoningBudgetTest, TemplateMarkersAreTokenizedAsControlTokens)
+{
+    if(!useModel("NOTHINK_MODEL_PATH", NOTHINK_MODEL_NAME))
+        GTEST_SKIP()<<"NOTHINK_MODEL_PATH not set or file missing";
+    ASSERT_EQ(load(NOTHINK_MODEL_NAME, std::nullopt), ErrorCode::Success);
+
+    llama_model *model=ModelRuntime::instance().getLlamaModel(NOTHINK_MODEL_NAME);
+    const llama_vocab *vocab=llama_model_get_vocab(model);
+    llama_token imStart=0;
+    ASSERT_EQ(llama_tokenize(vocab, "<|im_start|>", 12, &imStart, 1, false, true), 1);
+
+    Llama llama;
+    ReasoningBudget budget;
+    std::vector<int32_t> tokens;
+    std::string formatted;
+    std::optional<ModelInfo> info=ModelManager::instance().getModelInfo(NOTHINK_MODEL_NAME);
+    ASSERT_TRUE(info.has_value());
+    ASSERT_EQ(llama.tokenizePrompt(model, request(NOTHINK_MODEL_NAME), *info, budget, tokens, formatted), ErrorCode::Success);
+    EXPECT_NE(std::find(tokens.begin(), tokens.end(), imStart), tokens.end())<<formatted;
+
+    CompletionResponse response=complete(NOTHINK_MODEL_NAME);
+    EXPECT_EQ(response.text.find("<|im_end|>"), std::string::npos)<<response.text;
+    EXPECT_NE(response.text.find("391"), std::string::npos)<<response.text;
 }
 
 TEST_F(LlamaReasoningBudgetTest, ModelWithoutThinkTokensIgnoresTheBudget)

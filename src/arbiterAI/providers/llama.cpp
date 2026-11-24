@@ -1098,14 +1098,15 @@ ErrorCode Llama::tokenizePrompt(llama_model *model,
         formattedPrompt=applyTemplate(model, request.messages);
     }
 
+    // the template's turn markers (<|im_start|>, ...) are control tokens
     tokens.resize(formattedPrompt.size()+256);
     int nTokens=llama_tokenize(vocab, formattedPrompt.c_str(), formattedPrompt.length(),
-        tokens.data(), tokens.size(), true, harmonyMode);
+        tokens.data(), tokens.size(), true, true);
     if(nTokens<0)
     {
         tokens.resize(-nTokens);
         nTokens=llama_tokenize(vocab, formattedPrompt.c_str(), formattedPrompt.length(),
-            tokens.data(), tokens.size(), true, harmonyMode);
+            tokens.data(), tokens.size(), true, true);
         if(nTokens<0)
         {
             spdlog::error("Failed to tokenize prompt");
