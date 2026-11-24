@@ -33,7 +33,8 @@ struct ApplierConfig {
     std::chrono::milliseconds idleWaitTimeout=std::chrono::minutes(10);
     std::chrono::milliseconds idlePollInterval=std::chrono::seconds(1);
     /// a stop signal reaches a self-test child before stop() is called; a
-    /// self-test killed by a signal waits this long for it
+    /// self-test ended by SIGTERM/SIGINT (killed by it, or exited 128+signal)
+    /// waits this long for it
     std::chrono::milliseconds stopGrace=std::chrono::seconds(5);
 };
 
