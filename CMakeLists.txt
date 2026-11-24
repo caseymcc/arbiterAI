@@ -151,6 +151,8 @@ set(arbiterai_src
     ./src/arbiterAI/providers/deepseek.cpp
     ./src/arbiterAI/providers/mock.h
     ./src/arbiterAI/providers/mock.cpp
+    ./src/arbiterAI/providers/reasoningBudget.h
+    ./src/arbiterAI/providers/reasoningBudget.cpp
    ./src/arbiterAI/providers/openrouter.h
    ./src/arbiterAI/providers/openrouter.cpp
 )
@@ -284,6 +286,7 @@ endif()
         tests/chatClientTests.cpp
         tests/providerTests.cpp
         tests/mockProviderTests.cpp
+        tests/reasoningBudgetTests.cpp
         tests/hardwareDetectorTests.cpp
         tests/telemetryCollectorTests.cpp
         tests/storageManagerTests.cpp
