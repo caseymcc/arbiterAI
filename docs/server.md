@@ -638,9 +638,9 @@ Load a model into VRAM for inference.
 
 | Value | Effect |
 |-------|--------|
-| unset | No limit; prompts and output are unchanged. |
+| unset (or negative) | No limit; prompts and output are unchanged. |
 | `0` | Thinking off: an empty `<think>\n\n</think>\n\n` block is appended after the generation prompt (what Qwen3-family templates do for `enable_thinking=false`). |
-| `N` > 0 | After N tokens inside the block the server injects `\n</think>\n\n`, and the model goes on to its answer. The injected text appears in the content and the stream, and its tokens count as completion tokens. |
+| `N` > 0 | After N tokens inside the block (at the next complete UTF-8 character) the server injects `\n</think>\n\n`, and the model goes on to its answer. The injected text appears in the content and the stream, and its tokens count as completion tokens. |
 
 It applies only to models whose vocabulary has `<think>` and `</think>` as single tokens (e.g. the Qwen3 family), detected at load. For other models (Llama 3, Mistral, Qwen2.5, …) and for `api_format: harmony` models (gpt-oss, which keep `Reasoning: high`), it does nothing, whatever its value. Loading such a model with the option set logs once that it is ignored.
 

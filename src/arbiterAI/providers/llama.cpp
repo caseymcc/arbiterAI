@@ -1075,10 +1075,7 @@ ReasoningBudget Llama::reasoningBudgetFor(const CompletionRequest &request,
     if(modelInfo.apiFormat=="harmony")
         return ReasoningBudget();
 
-    std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(request.model);
-    if(!state)
-        return ReasoningBudget();
-    return ReasoningBudget(state->activeOptions.reasoningBudget, state->thinkTokens);
+    return ModelRuntime::instance().getReasoningBudget(request.model);
 }
 
 ErrorCode Llama::tokenizePrompt(llama_model *model,

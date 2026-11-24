@@ -377,11 +377,11 @@ The provider system abstracts LLM backends using a strategy pattern.
 
 `RuntimeOptions::reasoningBudget` (`runtime_options.reasoning_budget`) limits the `<think>` block of local llama.cpp models:
 
-- **unset:** no limit; prompts and output are unchanged.
+- **unset (or negative):** no limit; prompts and output are unchanged.
 - **`0`:** thinking off. `Llama::tokenizePrompt` appends an empty `<think>\n\n</think>\n\n` block after the generation prompt.
-- **`N` > 0:** [`ReasoningBudget`](../src/arbiterAI/providers/reasoningBudget.h) follows the generated tokens. After N tokens inside the block, both generation loops inject `\n</think>\n\n` (decoded into the KV cache, accepted by the sampler, appended to the result and the stream, counted as completion tokens) and go on sampling.
+- **`N` > 0:** [`ReasoningBudget`](../src/arbiterAI/providers/reasoningBudget.h) follows the generated tokens. After N tokens inside the block (deferred to the end of a multi-byte UTF-8 character), both generation loops inject `\n</think>\n\n` (decoded into the KV cache, accepted by the sampler, appended to the result and the stream, counted as completion tokens) and go on sampling.
 
-It applies only to models whose vocabulary has `<think>` and `</think>` as single tokens; `ModelRuntime` detects them at load and stores the ids in `LoadedModel::thinkTokens`. Other models and `api_format: harmony` models ignore it for every value, and the load logs that once.
+It applies only to models whose vocabulary has `<think>` and `</think>` as single tokens; `ModelRuntime` detects them at load and stores the ids in `LoadedModel::thinkTokens`. A request reads the budget and the ids through `ModelRuntime::getReasoningBudget`, which copies nothing else (the KV token record is written by the generating thread). Generation starts inside a block only when the prompt ends with `<think>`. Other models and `api_format: harmony` models ignore it for every value, and the load logs that once.
 
 The value comes from `LoadedModel::activeOptions`, read once when each request starts. `ArbiterAI::loadModel(model, variant, context, &options)` on a model that is already loaded re-resolves only `reasoningBudget` (model config merged with `options`), so a change applies live from the next request. Passing no key returns to the config's value. A call with `optionsOverride == nullptr` (every inference makes one to ensure the model is loaded) leaves it alone. Load-time options (KV types, flash attention, GPU layers, …) are not changed on a loaded model.
 

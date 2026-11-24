@@ -1081,6 +1081,16 @@ std::optional<LoadedModel> ModelRuntime::getModelState(const std::string &model)
     return std::nullopt;
 }
 
+ReasoningBudget ModelRuntime::getReasoningBudget(const std::string &model) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it=m_models.find(model);
+    if(it==m_models.end())
+        return ReasoningBudget();
+    return ReasoningBudget(it->second.activeOptions.reasoningBudget, it->second.thinkTokens);
+}
+
 std::vector<ModelFit> ModelRuntime::getLocalModelCapabilities() const
 {
     SystemInfo hw=HardwareDetector::instance().getSystemInfo();

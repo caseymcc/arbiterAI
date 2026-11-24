@@ -164,4 +164,34 @@ TEST(ReasoningBudget, ZeroBudgetClosesABlockTheModelOpensAnyway)
     EXPECT_TRUE(budget.observe(thinkTokens.open, "<think>"));
 }
 
+TEST(ReasoningBudget, NegativeBudgetIsUnset)
+{
+    ReasoningBudget budget(-1, thinkTokens);
+
+    EXPECT_FALSE(budget.enabled());
+    EXPECT_FALSE(budget.wantsPrefill());
+    budget.observe(thinkTokens.open, "<think>");
+    EXPECT_EQ(feedWords(budget, 50), 0);
+}
+
+TEST(ReasoningBudget, UnclosedTagEarlierInThePromptIsNotInside)
+{
+    ReasoningBudget budget(2, thinkTokens);
+    budget.observePrompt("<|im_start|>user\nwhat does <think> do?<|im_end|>\n<|im_start|>assistant\n");
+
+    EXPECT_FALSE(budget.inThinking());
+    EXPECT_EQ(feedWords(budget, 20), 0);
+}
+
+TEST(ReasoningBudget, CapWaitsForACompleteCharacter)
+{
+    ReasoningBudget budget(2, thinkTokens);
+
+    budget.observe(thinkTokens.open, "<think>");
+    EXPECT_FALSE(budget.observe(wordToken, " a"));
+    // U+4F60 (E4 BD A0) split across two tokens
+    EXPECT_FALSE(budget.observe(wordToken, "\xE4\xBD"));
+    EXPECT_TRUE(budget.observe(wordToken, "\xA0"));
+}
+
 }//namespace arbiterAI

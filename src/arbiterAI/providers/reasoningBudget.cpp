@@ -3,6 +3,38 @@
 namespace arbiterAI
 {
 
+namespace
+{
+
+bool isSpace(char c)
+{
+    return c==' '||c=='\n'||c=='\r'||c=='\t';
+}
+
+// True when text ends partway through a multi-byte UTF-8 character
+bool endsMidCharacter(const std::string &text)
+{
+    for(size_t back=1; back<=text.size()&&back<=4; ++back)
+    {
+        unsigned char c=static_cast<unsigned char>(text[text.size()-back]);
+
+        if((c&0xC0)==0x80)
+            continue;
+
+        size_t need=1;
+        if((c>>5)==0x6)
+            need=2;
+        else if((c>>4)==0xE)
+            need=3;
+        else if((c>>3)==0x1E)
+            need=4;
+        return need>back;
+    }
+    return false;
+}
+
+}//namespace
+
 ReasoningBudget::ReasoningBudget(std::optional<int> budget, const ThinkTokens &tokens):
     m_budget(budget),
     m_tokens(tokens)
@@ -35,12 +67,12 @@ const std::string &ReasoningBudget::closeText()
 
 bool ReasoningBudget::enabled() const
 {
-    return m_budget.has_value()&&m_tokens.valid();
+    return m_budget.has_value()&&m_budget.value()>=0&&m_tokens.valid();
 }
 
 bool ReasoningBudget::wantsPrefill() const
 {
-    return enabled()&&m_budget.value()<=0;
+    return enabled()&&m_budget.value()==0;
 }
 
 void ReasoningBudget::observePrompt(const std::string &prompt)
@@ -48,13 +80,14 @@ void ReasoningBudget::observePrompt(const std::string &prompt)
     if(!enabled())
         return;
 
-    size_t open=prompt.rfind(openTag());
-    size_t close=prompt.rfind(closeTag());
+    // inside only when the prompt ends with an open tag, e.g. a template
+    // that opens the block itself
+    size_t end=prompt.size();
+    while(end>0&&isSpace(prompt[end-1]))
+        end--;
 
-    if(open!=std::string::npos&&(close==std::string::npos||open>close))
-        m_inThinking=true;
-    else if(close!=std::string::npos)
-        m_inThinking=false;
+    m_inThinking=end>=openTag().size()&&
+        prompt.compare(end-openTag().size(), openTag().size(), openTag())==0;
     m_tail.clear();
 }
 
@@ -81,7 +114,13 @@ bool ReasoningBudget::observe(int32_t token, const std::string &piece)
         if(wasThinking&&m_inThinking)
             m_thinkingTokens++;
     }
-    return m_inThinking&&m_thinkingTokens>=m_budget.value();
+
+    m_utf8Tail+=piece;
+    if(m_utf8Tail.size()>4)
+        m_utf8Tail.erase(0, m_utf8Tail.size()-4);
+
+    // the close waits for a token that completes the character
+    return m_inThinking&&m_thinkingTokens>=m_budget.value()&&!endsMidCharacter(m_utf8Tail);
 }
 
 void ReasoningBudget::injected()
@@ -89,6 +128,7 @@ void ReasoningBudget::injected()
     m_inThinking=false;
     m_injections++;
     m_tail.clear();
+    m_utf8Tail.clear();
 }
 
 void ReasoningBudget::scanText(const std::string &text)

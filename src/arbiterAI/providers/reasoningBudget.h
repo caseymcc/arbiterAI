@@ -21,7 +21,7 @@ struct ThinkTokens {
 /// uses <think> blocks.  Pure bookkeeping: the caller feeds it the prompt and
 /// every generated token and does the prefill/injection itself.
 ///
-/// budget unset, or a model without think tokens: a no-op.  budget 0: the
+/// budget unset or negative, or a model without think tokens: a no-op.  budget 0: the
 /// prompt gets an empty thinking block (prefillText).  budget N: once N tokens
 /// have been generated inside a thinking block, observe() asks for the close
 /// (closeText) to be injected.
@@ -37,12 +37,13 @@ public:
     bool enabled() const;
     bool wantsPrefill() const;
 
-    /// The prompt as tokenized (prefill included), so a prompt ending inside
-    /// a thinking block starts the generation in it.
+    /// The prompt as tokenized (prefill included), so a prompt ending with an
+    /// open tag starts the generation inside the block.
     void observePrompt(const std::string &prompt);
 
     /// One generated token and its text piece; true when the close must be
-    /// injected before the next token is sampled.
+    /// injected before the next token is sampled (never in the middle of a
+    /// UTF-8 character).
     bool observe(int32_t token, const std::string &piece);
 
     /// The caller injected closeText().
@@ -61,6 +62,7 @@ private:
     int m_thinkingTokens=0;
     int m_injections=0;
     std::string m_tail;
+    std::string m_utf8Tail;
 };
 
 }//namespace arbiterAI

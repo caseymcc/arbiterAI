@@ -164,6 +164,11 @@ public:
     /// @return nullopt if the model is not tracked.
     std::optional<LoadedModel> getModelState(const std::string &model) const;
 
+    /// The model's active reasoning_budget and think tokens, read without
+    /// copying the rest of its state (safe while it is generating).
+    /// @return a disabled budget if the model is not tracked.
+    ReasoningBudget getReasoningBudget(const std::string &model) const;
+
     /// Get model fit capabilities for all local models given current hardware.
     std::vector<ModelFit> getLocalModelCapabilities() const;
 
