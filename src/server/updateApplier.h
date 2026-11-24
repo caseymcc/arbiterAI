@@ -32,6 +32,9 @@ struct ApplierConfig {
     /// an automatic apply waits this long after staging for the server to be idle
     std::chrono::milliseconds idleWaitTimeout=std::chrono::minutes(10);
     std::chrono::milliseconds idlePollInterval=std::chrono::seconds(1);
+    /// a stop signal reaches a self-test child before stop() is called; a
+    /// self-test killed by a signal waits this long for it
+    std::chrono::milliseconds stopGrace=std::chrono::seconds(5);
 };
 
 /// Installs the latest release (POST /api/update/apply) or goes back to
@@ -95,6 +98,8 @@ private:
     /// false when a stop came in during the swap: the restart is not asked for
     bool endSwap();
     void finishFailed(const std::string &error);
+    /// true once stop() is called, waiting up to stopGrace for it
+    bool waitForStop();
 
     ApplierConfig m_config;
     std::unique_ptr<Downloader> m_downloader;

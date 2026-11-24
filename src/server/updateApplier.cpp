@@ -271,6 +271,12 @@ void UpdateApplier::finishFailed(const std::string &error)
     m_progress.reset();
 }
 
+bool UpdateApplier::waitForStop()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    return m_wake.wait_for(lock, m_config.stopGrace, [this]() { return m_stopping; });
+}
+
 bool UpdateApplier::waitUntilIdle(const BusyProbe &busy, std::string &reason)
 {
     const std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+m_config.idleWaitTimeout;
@@ -301,6 +307,7 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe 
     request.configPath=m_config.configPath;
     request.cwd=m_config.cwd;
     request.selfTestTimeout=m_config.selfTestTimeout;
+    request.stopping=[this]() { return waitForStop(); };
 
     StageResult staged=stageRelease(request, *m_downloader, [this](StageStep step, double fraction)
     {

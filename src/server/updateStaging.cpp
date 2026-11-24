@@ -429,7 +429,9 @@ StageResult stageRelease(const StageRequest &request, Downloader &downloader, co
         request.cwd, request.selfTestTimeout);
     if(!selfTest.started || selfTest.timedOut || selfTest.signal != 0 || selfTest.exitCode != 0)
     {
-        return fail(StageStep::SelfTesting, label+" --self-test "+describeEnd(selfTest)+": "+outputTail(selfTest.output), true);
+        const bool stopping=selfTest.signal != 0 && request.stopping && request.stopping();
+        return fail(StageStep::SelfTesting, label+" --self-test "+describeEnd(selfTest)+(stopping?", the server is stopping":"")
+            +": "+outputTail(selfTest.output), !stopping);
     }
 
     report(StageStep::Staged, 1.0);

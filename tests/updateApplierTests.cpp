@@ -157,6 +157,7 @@ protected:
         config.selfTestTimeout=std::chrono::seconds(20);
         config.idleWaitTimeout=m_idleWaitTimeout;
         config.idlePollInterval=std::chrono::milliseconds(10);
+        config.stopGrace=m_stopGrace;
 
         std::unique_ptr<FakeDownloader> downloader=std::make_unique<FakeDownloader>();
         downloader->source=m_archive;
@@ -185,6 +186,7 @@ protected:
     FakeDownloader *m_downloader=nullptr;
     std::atomic<int> m_restarts{0};
     std::chrono::milliseconds m_idleWaitTimeout=std::chrono::seconds(20);
+    std::chrono::milliseconds m_stopGrace=std::chrono::seconds(5);
     std::function<nlohmann::json()> m_modelsSnapshot;
 };
 
@@ -527,6 +529,62 @@ TEST_F(UpdateApplierTest, AStopBeforeTheSwapCancelsTheUpdate)
     EXPECT_FALSE(fs::exists(m_root/"update-state.json"));
     EXPECT_FALSE(fs::exists(m_root/".update"));
     EXPECT_FALSE(updater.busy());
+}
+
+TEST_F(UpdateApplierTest, ASelfTestKilledByAStopDoesNotMarkTheReleaseFailed)
+{
+    // systemd's control-group KillMode sends the stop's SIGTERM to the self-test too
+    fs::path go=m_dir/"go";
+    makeRelease("1.1.0", "while [ ! -e '"+go.string()+"' ]; do sleep 0.01; done\nkill -TERM $$");
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    ASSERT_TRUE(waitForState(updater, "self_testing"));
+
+    updater.stop();
+    writeFile(go, "");
+    updater.wait();
+
+    UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
+    EXPECT_FALSE(history.isFailed("1.1.0"));
+    EXPECT_NE(history.lastError.find("the server is stopping"), std::string::npos)<<history.lastError;
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+    EXPECT_FALSE(fs::exists(m_root/".update"));
+    EXPECT_EQ(m_restarts, 0);
+}
+
+TEST_F(UpdateApplierTest, ASelfTestKilledJustBeforeTheStopReachesTheApplierIsNotMarkedFailed)
+{
+    // the child dies at once; the server's stop handler gets to the applier later
+    fs::path killed=m_dir/"killed";
+    makeRelease("1.1.0", "touch '"+killed.string()+"'\nkill -TERM $$");
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+
+    std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
+    while(!fs::exists(killed) && std::chrono::steady_clock::now()<deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_TRUE(fs::exists(killed));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    updater.stop();
+    updater.wait();
+
+    EXPECT_FALSE(arbiterAI::server::readUpdateHistory(m_root).isFailed("1.1.0"));
+}
+
+TEST_F(UpdateApplierTest, ASelfTestKilledWithoutAStopMarksTheReleaseFailed)
+{
+    m_stopGrace=std::chrono::milliseconds(200);
+    makeRelease("1.1.0", "kill -TERM $$");
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    updater.wait();
+
+    UpdateHistory history=arbiterAI::server::readUpdateHistory(m_root);
+    EXPECT_TRUE(history.isFailed("1.1.0"));
+    EXPECT_NE(history.lastError.find("was killed by"), std::string::npos)<<history.lastError;
 }
 
 TEST_F(UpdateApplierTest, StopWaitsForARunningSwapAndSkipsTheRestart)
