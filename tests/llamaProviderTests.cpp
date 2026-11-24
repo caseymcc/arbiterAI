@@ -6,8 +6,12 @@
 #include "arbiterAI/providers/llama.h"
 #include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/modelManager.h"
+#include "arbiterAI/inferenceScheduler.h"
 
+#include <llama.h>
 #include <nlohmann/json.hpp>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -475,6 +479,215 @@ TEST(KvPrefixReuse, KvCacheTokensRequiresLoadedModel)
 {
     ModelRuntime::reset();
     EXPECT_EQ(ModelRuntime::instance().kvCacheTokens("not-loaded"), nullptr);
+}
+
+// ─── reasoning_budget on real models ─────────────────────────────────────
+// THINK_MODEL_PATH: a GGUF of a model with single-token <think>/</think> (Qwen3
+// family, e.g. Qwen3-0.6B-Q8_0); NOTHINK_MODEL_PATH: one without (Qwen2.5).
+// Each test skips when its variable is unset or the file is missing.
+
+static const std::string THINK_MODEL_NAME="reasoning-think-test";
+static const std::string NOTHINK_MODEL_NAME="reasoning-nothink-test";
+static const std::string BUDGET_PROMPT="What is 17 times 23? Reply with just the number.";
+
+class LlamaReasoningBudgetTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ModelRuntime::reset();
+        TelemetryCollector::reset();
+        ArbiterAI::instance().initialize({"tests/config"});
+    }
+
+    void TearDown() override
+    {
+        InferenceScheduler::instance().shutdown();
+        ModelRuntime::reset();
+        TelemetryCollector::reset();
+    }
+
+    /// Registers the model in the env variable's file as \p name; false when
+    /// the variable is unset or the file is missing.
+    bool useModel(const char *variable, const std::string &name)
+    {
+        const char *path=std::getenv(variable);
+        if(!path||!std::filesystem::exists(path))
+            return false;
+
+        std::filesystem::path file(path);
+        nlohmann::json modelJson={
+            {"model", name},
+            {"provider", "llama"},
+            {"ranking", 1},
+            {"version", "1.1.0"},
+            {"context_window", 4096},
+            {"max_tokens", 2048},
+            {"max_output_tokens", 1024},
+            {"hardware_requirements", {{"min_system_ram_mb", 1024}, {"parameter_count", "1B"}}},
+            {"context_scaling", {{"base_context", 4096}, {"max_context", 32768}, {"vram_per_1k_context_mb", 32}}},
+            {"variants", nlohmann::json::array({{
+                {"quantization", "test"},
+                {"file_size_mb", static_cast<int>(std::filesystem::file_size(file)/(1024*1024))},
+                {"min_vram_mb", 1024},
+                {"recommended_vram_mb", 2048},
+                {"download", {{"url", ""}, {"sha256", ""}, {"filename", file.filename().string()}}}
+            }})}
+        };
+        std::string error;
+        if(!ModelManager::instance().addModelFromJson(modelJson, error))
+        {
+            ADD_FAILURE()<<"addModelFromJson failed: "<<error;
+            return false;
+        }
+        ModelRuntime::instance().setModelsDir(file.parent_path().string());
+        return true;
+    }
+
+    /// An explicit load, as POST /api/models/{name}/load makes it: on a loaded
+    /// model it applies the budget live.
+    ErrorCode load(const std::string &name, std::optional<int> budget)
+    {
+        RuntimeOptions options;
+        options.reasoningBudget=budget;
+        return ArbiterAI::instance().loadModel(name, "test", 4096, &options);
+    }
+
+    CompletionRequest request(const std::string &name) const
+    {
+        CompletionRequest request;
+        request.model=name;
+        request.max_tokens=400;
+        request.messages={{"user", BUDGET_PROMPT}};
+        return request;
+    }
+
+    CompletionResponse complete(const std::string &name)
+    {
+        CompletionResponse response;
+        EXPECT_EQ(ArbiterAI::instance().completion(request(name), response), ErrorCode::Success);
+        return response;
+    }
+
+    std::string stream(const std::string &name)
+    {
+        std::string text;
+        EXPECT_EQ(ArbiterAI::instance().streamingCompletion(request(name),
+            [&text](const std::string &chunk) { text+=chunk; }), ErrorCode::Success);
+        return text;
+    }
+
+    /// Runs the request through the server's pipeline (tokenizer and
+    /// accelerator stages).
+    std::shared_ptr<InferenceJob> schedule(const std::string &name)
+    {
+        InferenceScheduler &scheduler=InferenceScheduler::instance();
+        if(!scheduler.isRunning())
+            scheduler.initialize({});
+        std::shared_ptr<InferenceJob> job=scheduler.submit(request(name), false);
+        std::unique_lock<std::mutex> lock(job->completionMutex);
+        EXPECT_TRUE(job->completionCv.wait_for(lock, std::chrono::minutes(5), [&job]() { return job->complete.load(); }));
+        return job;
+    }
+
+    int tokenCount(const std::string &name, const std::string &text)
+    {
+        const llama_vocab *vocab=llama_model_get_vocab(ModelRuntime::instance().getLlamaModel(name));
+        return -llama_tokenize(vocab, text.c_str(), text.size(), nullptr, 0, false, true);
+    }
+};
+
+TEST_F(LlamaReasoningBudgetTest, ThinkModelIsDetectedAtLoad)
+{
+    if(!useModel("THINK_MODEL_PATH", THINK_MODEL_NAME))
+        GTEST_SKIP()<<"THINK_MODEL_PATH not set or file missing";
+    ASSERT_EQ(load(THINK_MODEL_NAME, std::nullopt), ErrorCode::Success);
+
+    std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(THINK_MODEL_NAME);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_TRUE(state->thinkTokens.valid());
+    EXPECT_NE(state->thinkTokens.open, state->thinkTokens.close);
+}
+
+TEST_F(LlamaReasoningBudgetTest, ZeroTurnsThinkingOffOnALoadedModel)
+{
+    if(!useModel("THINK_MODEL_PATH", THINK_MODEL_NAME))
+        GTEST_SKIP()<<"THINK_MODEL_PATH not set or file missing";
+    ASSERT_EQ(load(THINK_MODEL_NAME, std::nullopt), ErrorCode::Success);
+    CompletionResponse thinking=complete(THINK_MODEL_NAME);
+    EXPECT_NE(thinking.text.find("<think>"), std::string::npos)<<thinking.text;
+
+    // applied live: no reload between the two requests
+    ASSERT_EQ(load(THINK_MODEL_NAME, 0), ErrorCode::Success);
+    CompletionResponse off=complete(THINK_MODEL_NAME);
+    EXPECT_EQ(off.text.find("<think>"), std::string::npos)<<off.text;
+    EXPECT_EQ(off.text.find("</think>"), std::string::npos)<<off.text;
+    EXPECT_NE(off.text.find("391"), std::string::npos)<<off.text;
+    EXPECT_LT(off.usage.completion_tokens*4, thinking.usage.completion_tokens)
+        <<"off: "<<off.usage.completion_tokens<<", unset: "<<thinking.usage.completion_tokens;
+
+    EXPECT_EQ(stream(THINK_MODEL_NAME), off.text);
+}
+
+TEST_F(LlamaReasoningBudgetTest, ZeroTurnsThinkingOffOnTheSchedulerPath)
+{
+    if(!useModel("THINK_MODEL_PATH", THINK_MODEL_NAME))
+        GTEST_SKIP()<<"THINK_MODEL_PATH not set or file missing";
+    ASSERT_EQ(load(THINK_MODEL_NAME, 0), ErrorCode::Success);
+
+    std::shared_ptr<InferenceJob> job=schedule(THINK_MODEL_NAME);
+    EXPECT_EQ(job->result, ErrorCode::Success);
+    EXPECT_EQ(job->resultText.find("</think>"), std::string::npos)<<job->resultText;
+    EXPECT_NE(job->resultText.find("391"), std::string::npos)<<job->resultText;
+    EXPECT_LT(job->completionTokens.load(), 40);
+}
+
+TEST_F(LlamaReasoningBudgetTest, CapClosesTheBlockThenAnswers)
+{
+    if(!useModel("THINK_MODEL_PATH", THINK_MODEL_NAME))
+        GTEST_SKIP()<<"THINK_MODEL_PATH not set or file missing";
+    const int cap=32;
+    ASSERT_EQ(load(THINK_MODEL_NAME, cap), ErrorCode::Success);
+
+    CompletionResponse capped=complete(THINK_MODEL_NAME);
+    const size_t open=capped.text.find("<think>");
+    const size_t close=capped.text.find(ReasoningBudget::closeText());
+    ASSERT_NE(open, std::string::npos)<<capped.text;
+    ASSERT_NE(close, std::string::npos)<<capped.text;
+    EXPECT_EQ(capped.text.find("</think>", close+ReasoningBudget::closeText().size()), std::string::npos)<<capped.text;
+
+    const std::string thought=capped.text.substr(open+ReasoningBudget::openTag().size(), close-open-ReasoningBudget::openTag().size());
+    EXPECT_NEAR(tokenCount(THINK_MODEL_NAME, thought), cap, 4)<<thought;
+    EXPECT_FALSE(capped.text.substr(close+ReasoningBudget::closeText().size()).empty())<<capped.text;
+
+    // the injected close is counted: completion tokens are what the KV cache
+    // holds beyond the prompt
+    std::vector<int32_t> *kv=ModelRuntime::instance().kvCacheTokens(THINK_MODEL_NAME);
+    ASSERT_NE(kv, nullptr);
+    EXPECT_EQ(capped.usage.completion_tokens, static_cast<int>(kv->size())-capped.usage.prompt_tokens);
+
+    // streaming runs the other generation loop and shows the same forced close
+    EXPECT_EQ(stream(THINK_MODEL_NAME), capped.text);
+
+    std::shared_ptr<InferenceJob> job=schedule(THINK_MODEL_NAME);
+    EXPECT_EQ(job->resultText, capped.text);
+}
+
+TEST_F(LlamaReasoningBudgetTest, ModelWithoutThinkTokensIgnoresTheBudget)
+{
+    if(!useModel("NOTHINK_MODEL_PATH", NOTHINK_MODEL_NAME))
+        GTEST_SKIP()<<"NOTHINK_MODEL_PATH not set or file missing";
+    ASSERT_EQ(load(NOTHINK_MODEL_NAME, std::nullopt), ErrorCode::Success);
+    EXPECT_FALSE(ModelRuntime::instance().getModelState(NOTHINK_MODEL_NAME)->thinkTokens.valid());
+    CompletionResponse unset=complete(NOTHINK_MODEL_NAME);
+
+    for(int budget:{0, 8})
+    {
+        ASSERT_EQ(load(NOTHINK_MODEL_NAME, budget), ErrorCode::Success);
+        CompletionResponse response=complete(NOTHINK_MODEL_NAME);
+        EXPECT_EQ(response.text, unset.text)<<"budget "<<budget;
+        EXPECT_EQ(response.usage.prompt_tokens, unset.usage.prompt_tokens)<<"budget "<<budget;
+        EXPECT_EQ(response.usage.completion_tokens, unset.usage.completion_tokens)<<"budget "<<budget;
+    }
 }
 
 } // namespace arbiterAI
