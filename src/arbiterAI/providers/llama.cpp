@@ -87,6 +87,43 @@ std::vector<llama_token> tokenizeSpecial(const llama_vocab *vocab, const std::st
     return tokens;
 }
 
+/// Forces the end of a thinking block after the token just decoded: decodes
+/// ReasoningBudget::closeText() into the KV cache and the sampler and emits it
+/// like generated text.  Returns how many tokens it added; 0 with
+/// decodeResult set when llama_decode failed.
+int injectThinkClose(llama_context *ctx, const llama_vocab *vocab, llama_sampler *sampler,
+    llama_batch &batch, int &nCur, std::vector<int32_t> &generatedInKv,
+    std::string &result, Utf8StreamBuffer &streamBuf, int &completionTokens, int &decodeResult)
+{
+    std::vector<llama_token> close=tokenizeSpecial(vocab, ReasoningBudget::closeText());
+    int count=static_cast<int>(close.size());
+
+    batch.n_tokens=count;
+    for(int i=0; i<count; ++i)
+    {
+        batch.token[i]=close[i];
+        batch.pos[i]=nCur+i;
+        batch.n_seq_id[i]=1;
+        batch.seq_id[i][0]=0;
+        batch.logits[i]=(i==count-1)?1:0;
+    }
+
+    decodeResult=llama_decode(ctx, batch);
+    if(decodeResult!=0)
+        return 0;
+
+    nCur+=count;
+    for(llama_token token:close)
+    {
+        llama_sampler_accept(sampler, token);
+        generatedInKv.push_back(token);
+    }
+    result+=ReasoningBudget::closeText();
+    streamBuf.feed(ReasoningBudget::closeText());
+    completionTokens+=count;
+    return count;
+}
+
 } // namespace
 
 ThinkTokens detectThinkTokens(llama_model *model)
@@ -940,14 +977,16 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
         // Convert token to text — use special=true for harmony to preserve special token text
         char piece[128];
         int len=llama_token_to_piece(vocab, nextToken, piece, sizeof(piece), 0, harmonyMode);
+        std::string tokenText;
         if(len>0)
         {
-            std::string tokenText(piece, len);
+            tokenText.assign(piece, len);
             result+=tokenText;
             completionTokens++;
 
             streamBuf.feed(tokenText);
         }
+        bool closeThinking=budget.observe(nextToken, tokenText);
 
         // Check stop sequences
         if(request.stop.has_value())
@@ -992,6 +1031,25 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
             return ErrorCode::GenerationError;
         }
         generatedInKv.push_back(nextToken);
+
+        if(closeThinking)
+        {
+            i+=injectThinkClose(ctx, vocab, samplerChain, batch, nCur, generatedInKv,
+                result, streamBuf, completionTokens, decodeResult);
+            if(decodeResult!=0)
+            {
+                spdlog::error("[llama] llama_decode failed injecting the reasoning_budget close (pos={}, result={})",
+                    nCur, decodeResult);
+                m_lastErrorDetail="llama backend failed to close the thinking block at the reasoning_budget (llama_decode result="
+                    +std::to_string(decodeResult)+" at position "+std::to_string(nCur)+")";
+                llama_sampler_free(samplerChain);
+                llama_batch_free(batch);
+                return ErrorCode::GenerationError;
+            }
+            budget.injected();
+            spdlog::debug("[llama] reasoning_budget reached after {} thinking tokens: closed the block",
+                budget.thinkingTokens());
+        }
     }
 
     std::chrono::steady_clock::time_point genEnd=std::chrono::steady_clock::now();
@@ -1025,7 +1083,7 @@ ReasoningBudget Llama::reasoningBudgetFor(const CompletionRequest &request,
 
 ErrorCode Llama::tokenizePrompt(llama_model *model,
     const CompletionRequest &request, const ModelInfo &modelInfo,
-    const ReasoningBudget &budget,
+    ReasoningBudget &budget,
     std::vector<int32_t> &tokens, std::string &formattedPrompt)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
@@ -1064,12 +1122,13 @@ ErrorCode Llama::tokenizePrompt(llama_model *model,
         tokens.insert(tokens.end(), prefill.begin(), prefill.end());
         formattedPrompt+=ReasoningBudget::prefillText();
     }
+    budget.observePrompt(formattedPrompt);
     return ErrorCode::Success;
 }
 
 ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
     const CompletionRequest &request, const ModelInfo &modelInfo,
-    const std::vector<int32_t> &promptTokens,
+    const std::vector<int32_t> &promptTokens, ReasoningBudget budget,
     std::string &result, int &promptTokenCount, int &completionTokens,
     double &promptTimeMs, double &generationTimeMs,
     std::function<void(const std::string &)> streamCallback,
@@ -1230,14 +1289,16 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
 
         char piece[128];
         int len=llama_token_to_piece(vocab, nextToken, piece, sizeof(piece), 0, harmonyMode);
+        std::string tokenText;
         if(len>0)
         {
-            std::string tokenText(piece, len);
+            tokenText.assign(piece, len);
             result+=tokenText;
             completionTokens++;
 
             streamBuf.feed(tokenText);
         }
+        bool closeThinking=budget.observe(nextToken, tokenText);
 
         if(request.stop.has_value())
         {
@@ -1279,6 +1340,25 @@ ErrorCode Llama::runInferenceWithTokens(llama_model *model, llama_context *ctx,
             return ErrorCode::GenerationError;
         }
         generatedInKv.push_back(nextToken);
+
+        if(closeThinking)
+        {
+            i+=injectThinkClose(ctx, vocab, samplerChain, batch, nCur, generatedInKv,
+                result, streamBuf, completionTokens, decodeResult);
+            if(decodeResult!=0)
+            {
+                spdlog::error("[llama] llama_decode failed injecting the reasoning_budget close (pos={}, result={})",
+                    nCur, decodeResult);
+                m_lastErrorDetail="llama backend failed to close the thinking block at the reasoning_budget (llama_decode result="
+                    +std::to_string(decodeResult)+" at position "+std::to_string(nCur)+")";
+                llama_sampler_free(samplerChain);
+                llama_batch_free(batch);
+                return ErrorCode::GenerationError;
+            }
+            budget.injected();
+            spdlog::debug("[llama] reasoning_budget reached after {} thinking tokens: closed the block",
+                budget.thinkingTokens());
+        }
     }
 
     std::chrono::steady_clock::time_point genEnd=std::chrono::steady_clock::now();
@@ -1373,7 +1453,7 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     double generationTimeMs=0.0;
 
     ErrorCode code=runInferenceWithTokens(llamaModel, llamaCtx, request, *modelInfo,
-        tokens, resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, callback);
+        tokens, budget, resultText, promptTokens, completionTokens, promptTimeMs, generationTimeMs, callback);
 
     std::chrono::steady_clock::time_point endTime=std::chrono::steady_clock::now();
     double totalTimeMs=std::chrono::duration<double, std::milli>(endTime-startTime).count();

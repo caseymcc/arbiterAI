@@ -556,7 +556,7 @@ void InferenceScheduler::acceleratorLoop(AcceleratorQueue &queue)
         Llama llamaProvider;
         ErrorCode code=llamaProvider.runInferenceWithTokens(
             llamaModel, llamaCtx, job->request, *modelInfo,
-            job->tokens, job->resultText,
+            job->tokens, job->reasoningBudget, job->resultText,
             job->promptTokens, completionTokens,
             job->promptTimeMs, job->generationTimeMs,
             streamCallback, abortCheck);

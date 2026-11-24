@@ -63,16 +63,17 @@ public:
 
     /// Tokenize the prompt outside of the inference mutex.
     /// Only reads llama_model/vocab (thread-safe without context lock).
-    /// A budget of 0 appends the empty thinking block.
+    /// A budget of 0 appends the empty thinking block; the budget is shown
+    /// the final prompt so it knows whether generation starts inside a block.
     ErrorCode tokenizePrompt(llama_model *model,
         const CompletionRequest &request, const ModelInfo &modelInfo,
-        const ReasoningBudget &budget,
+        ReasoningBudget &budget,
         std::vector<int32_t> &tokens, std::string &formattedPrompt);
 
     /// Run inference with pre-tokenized prompt (requires inference lock held).
     ErrorCode runInferenceWithTokens(llama_model *model, llama_context *ctx,
         const CompletionRequest &request, const ModelInfo &modelInfo,
-        const std::vector<int32_t> &promptTokens,
+        const std::vector<int32_t> &promptTokens, ReasoningBudget budget,
         std::string &result, int &promptTokenCount, int &completionTokens,
         double &promptTimeMs, double &generationTimeMs,
         std::function<void(const std::string &)> streamCallback,
