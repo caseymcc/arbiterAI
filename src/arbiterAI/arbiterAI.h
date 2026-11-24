@@ -917,7 +917,8 @@ public:
      * @param model Model name
      * @param variant Quantization variant (empty = auto-select)
      * @param contextSize Context size (0 = model default)
-     * @param optionsOverride Optional runtime options to merge on top of model config defaults (nullptr = use config defaults)
+     * @param optionsOverride Optional runtime options to merge on top of model config defaults (nullptr = use config defaults).
+     *        When given and the model is already loaded, reasoning_budget is re-resolved from the config and this override.
      * @return ErrorCode indicating success, ModelDownloading, or failure
      */
     ErrorCode loadModel(const std::string &model, const std::string &variant="", int contextSize=0,

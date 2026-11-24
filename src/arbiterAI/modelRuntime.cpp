@@ -18,6 +18,27 @@
 namespace arbiterAI
 {
 
+/// Re-resolves the options that apply per request (today reasoning_budget) on
+/// a model that is already loaded: the model config merged with this load
+/// call's override.  Load-time options keep the values the model loaded with.
+static void refreshInferenceOptions(const std::string &model, LoadedModel &entry,
+    const RuntimeOptions &optionsOverride)
+{
+    std::optional<ModelInfo> modelInfo=ModelManager::instance().getModelInfo(model);
+    if(!modelInfo.has_value())
+        return;
+
+    RuntimeOptions resolved=modelInfo->runtimeOptions;
+    resolved.mergeFrom(optionsOverride);
+
+    if(resolved.reasoningBudget!=entry.activeOptions.reasoningBudget)
+    {
+        spdlog::info("Model '{}': reasoning_budget is now {}", model,
+            resolved.reasoningBudget.has_value()?std::to_string(resolved.reasoningBudget.value()):"unset");
+    }
+    entry.activeOptions.reasoningBudget=resolved.reasoningBudget;
+}
+
 /// Map a string KV cache type name to the corresponding ggml_type enum value.
 /// Returns GGML_TYPE_COUNT if the string is not recognized.
 static ggml_type parseGgmlType(const std::string &name)
@@ -380,7 +401,8 @@ ErrorCode ModelRuntime::loadModel(
     const std::string &variant,
     int contextSize,
     const RuntimeOptions &optionsOverride,
-    const std::vector<int> &targetDevices)
+    const std::vector<int> &targetDevices,
+    bool applyToLoaded)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -394,6 +416,8 @@ ErrorCode ModelRuntime::loadModel(
         if(it->second.state==ModelState::Loaded)
         {
             it->second.lastUsed=std::chrono::steady_clock::now();
+            if(applyToLoaded)
+                refreshInferenceOptions(model, it->second, optionsOverride);
             return ErrorCode::Success;
         }
         if(it->second.state==ModelState::Downloading)
@@ -420,6 +444,8 @@ ErrorCode ModelRuntime::loadModel(
             }
             it->second.state=ModelState::Loaded;
             it->second.lastUsed=std::chrono::steady_clock::now();
+            if(applyToLoaded)
+                refreshInferenceOptions(model, it->second, optionsOverride);
             spdlog::info("Promoted model '{}' from Ready to Loaded", model);
             return ErrorCode::Success;
         }
@@ -642,6 +668,8 @@ ErrorCode ModelRuntime::loadModel(
         entry.modelName=model;
         entry.state=ModelState::Loaded;
         entry.contextSize=resolvedContext;
+        entry.activeOptions=modelInfo->runtimeOptions;
+        entry.activeOptions.mergeFrom(optionsOverride);
         entry.lastUsed=std::chrono::steady_clock::now();
     }
 

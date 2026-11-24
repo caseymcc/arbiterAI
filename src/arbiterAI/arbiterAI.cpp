@@ -813,7 +813,8 @@ ErrorCode ArbiterAI::loadModel(const std::string &model, const std::string &vari
     {
         opts=*optionsOverride;
     }
-    return ModelRuntime::instance().loadModel(model, variant, contextSize, opts, targetDevices);
+    return ModelRuntime::instance().loadModel(model, variant, contextSize, opts, targetDevices,
+        optionsOverride!=nullptr);
 }
 
 ErrorCode ArbiterAI::downloadModel(const std::string &model, const std::string &variant)

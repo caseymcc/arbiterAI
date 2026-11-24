@@ -87,6 +87,16 @@ protected:
                     "ranking": 70,
                     "context_window": 4096,
                     "max_tokens": 2048
+                },
+                {
+                    "model": "mock-think",
+                    "provider": "mock",
+                    "ranking": 60,
+                    "context_window": 4096,
+                    "max_tokens": 2048,
+                    "runtime_options": {
+                        "reasoning_budget": 512
+                    }
                 }
             ]
         })";
@@ -115,6 +125,87 @@ TEST_F(ModelRuntimeTest, LoadCloudModelSucceeds)
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->state, ModelState::Loaded);
     EXPECT_EQ(state->modelName, "mock-model");
+}
+
+TEST_F(ModelRuntimeTest, LoadResolvesReasoningBudgetFromConfigAndOverride)
+{
+    ModelRuntime &rt=ModelRuntime::instance();
+
+    ASSERT_EQ(rt.loadModel("mock-think"), ErrorCode::Success);
+    EXPECT_EQ(rt.getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(512));
+
+    ASSERT_EQ(rt.unloadModel("mock-think"), ErrorCode::Success);
+    RuntimeOptions override;
+    override.reasoningBudget=64;
+    ASSERT_EQ(rt.loadModel("mock-think", "", 0, override), ErrorCode::Success);
+    EXPECT_EQ(rt.getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(64));
+}
+
+TEST_F(ModelRuntimeTest, LoadOnLoadedModelUpdatesReasoningBudgetLive)
+{
+    ModelRuntime &rt=ModelRuntime::instance();
+    ASSERT_EQ(rt.loadModel("mock-think"), ErrorCode::Success);
+
+    RuntimeOptions off;
+    off.reasoningBudget=0;
+    ASSERT_EQ(rt.loadModel("mock-think", "", 0, off, {}, true), ErrorCode::Success);
+    EXPECT_EQ(rt.getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(0));
+
+    RuntimeOptions capped;
+    capped.reasoningBudget=4096;
+    ASSERT_EQ(rt.loadModel("mock-think", "", 0, capped, {}, true), ErrorCode::Success);
+    EXPECT_EQ(rt.getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(4096));
+
+    // Default (no override) goes back to the config's value, not the last one
+    ASSERT_EQ(rt.loadModel("mock-think", "", 0, RuntimeOptions{}, {}, true), ErrorCode::Success);
+    EXPECT_EQ(rt.getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(512));
+    EXPECT_EQ(rt.getModelState("mock-think")->state, ModelState::Loaded);
+}
+
+TEST_F(ModelRuntimeTest, EnsureLoadedCallKeepsTheLoadOverride)
+{
+    ModelRuntime &rt=ModelRuntime::instance();
+    RuntimeOptions off;
+    off.reasoningBudget=0;
+    ASSERT_EQ(rt.loadModel("mock-think", "", 0, off), ErrorCode::Success);
+
+    // what every inference request does before it runs
+    ASSERT_EQ(rt.loadModel("mock-think"), ErrorCode::Success);
+    EXPECT_EQ(rt.getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(0));
+}
+
+TEST_F(ModelRuntimeTest, ArbiterAILoadAppliesOptionsToLoadedModelOnlyWhenGiven)
+{
+    ArbiterAI &ai=ArbiterAI::instance();
+    RuntimeOptions off;
+    off.reasoningBudget=0;
+    ASSERT_EQ(ai.loadModel("mock-think", "", 0, &off), ErrorCode::Success);
+
+    // no options: an ensure-loaded call (e.g. a chat request naming a variant)
+    ASSERT_EQ(ai.loadModel("mock-think"), ErrorCode::Success);
+    EXPECT_EQ(ModelRuntime::instance().getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(0));
+
+    // options given without reasoning_budget: the dashboard's Default
+    RuntimeOptions defaults;
+    ASSERT_EQ(ai.loadModel("mock-think", "", 0, &defaults), ErrorCode::Success);
+    EXPECT_EQ(ModelRuntime::instance().getModelState("mock-think")->activeOptions.reasoningBudget, std::optional<int>(512));
+}
+
+TEST_F(ModelRuntimeTest, LoadOnLoadedModelLeavesLoadTimeOptionsAlone)
+{
+    ModelRuntime &rt=ModelRuntime::instance();
+    ASSERT_EQ(rt.loadModel("mock-think"), ErrorCode::Success);
+
+    RuntimeOptions changed;
+    changed.reasoningBudget=0;
+    changed.kvCacheTypeK="q8_0";
+    changed.flashAttn=true;
+    ASSERT_EQ(rt.loadModel("mock-think", "", 0, changed, {}, true), ErrorCode::Success);
+
+    RuntimeOptions active=rt.getModelState("mock-think")->activeOptions;
+    EXPECT_EQ(active.reasoningBudget, std::optional<int>(0));
+    EXPECT_FALSE(active.kvCacheTypeK.has_value());
+    EXPECT_FALSE(active.flashAttn.has_value());
 }
 
 TEST_F(ModelRuntimeTest, LoadUnknownModelFails)

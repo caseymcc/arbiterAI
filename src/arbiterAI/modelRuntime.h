@@ -106,13 +106,18 @@ public:
     /// @param contextSize  Context size (0 = use model default).
     /// @param optionsOverride  Optional runtime options to merge on top of model config defaults.
     /// @param targetDevices  Optional GPU indices to target (empty = auto-select).
+    /// @param applyToLoaded  On a model that is already loaded, re-resolve the
+    ///        per-request options (reasoning_budget) from the model config and
+    ///        optionsOverride.  Set for explicit load requests, not for the
+    ///        ensure-loaded calls made before each inference.
     /// @return ErrorCode::Success, ModelDownloading, ModelNotFound, ModelLoadError.
     ErrorCode loadModel(
         const std::string &model,
         const std::string &variant="",
         int contextSize=0,
         const RuntimeOptions &optionsOverride=RuntimeOptions{},
-        const std::vector<int> &targetDevices={});
+        const std::vector<int> &targetDevices={},
+        bool applyToLoaded=false);
 
     /// Download model files without loading into VRAM.
     /// Launches an async background download that respects the concurrent
