@@ -9,7 +9,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
+#include <future>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -159,8 +162,10 @@ protected:
         downloader->source=m_archive;
         m_downloader=downloader.get();
         m_applier=std::make_unique<UpdateApplier>(config, std::move(downloader),
-            []()
+            [this]()
             {
+                if(m_modelsSnapshot)
+                    return m_modelsSnapshot();
                 return nlohmann::json::array({{{"model", "qwen"}, {"variant", "Q4"}, {"context", 8192},
                     {"runtime_options", {{"flash_attn", true}}}, {"devices", {0}}, {"pinned", true}}});
             },
@@ -180,6 +185,7 @@ protected:
     FakeDownloader *m_downloader=nullptr;
     std::atomic<int> m_restarts{0};
     std::chrono::milliseconds m_idleWaitTimeout=std::chrono::seconds(20);
+    std::function<nlohmann::json()> m_modelsSnapshot;
 };
 
 /// Waits until the applier reports \p state, up to 20 s.
@@ -193,6 +199,20 @@ bool waitForState(UpdateApplier &applier, const std::string &state)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     return false;
+}
+
+/// Calls stop() on a thread of its own; false if it has not returned within \p timeout.
+/// That thread is left running then, so the caller must not destroy \p applier.
+bool stopsWithin(UpdateApplier &applier, std::chrono::milliseconds timeout)
+{
+    std::shared_ptr<std::promise<void>> done=std::make_shared<std::promise<void>>();
+    std::future<void> stopped=done->get_future();
+    std::thread([&applier, done]()
+    {
+        applier.stop();
+        done->set_value();
+    }).detach();
+    return stopped.wait_for(timeout) == std::future_status::ready;
 }
 
 TEST_F(UpdateApplierTest, ApplyInstallsWithPrevAndAsksForARestart)
@@ -532,6 +552,102 @@ TEST_F(UpdateApplierTest, StopWaitsForARunningSwapAndSkipsTheRestart)
     EXPECT_TRUE(fs::exists(m_root/"update-state.json"));
     updater.wait();
     EXPECT_EQ(m_restarts, 0);
+}
+
+TEST_F(UpdateApplierTest, AStopIsNotHeldUpByTheLoadedModelsSnapshot)
+{
+    // the snapshot takes ModelRuntime's lock, which a model load holds throughout
+    std::mutex snapshotMutex;
+    std::condition_variable snapshotCv;
+    bool snapshotStarted=false;
+    bool snapshotReleased=false;
+    m_modelsSnapshot=[&]()
+    {
+        std::unique_lock<std::mutex> lock(snapshotMutex);
+        snapshotStarted=true;
+        snapshotCv.notify_all();
+        snapshotCv.wait(lock, [&]() { return snapshotReleased; });
+        return nlohmann::json::array();
+    };
+    UpdateApplier &updater=applier();
+    std::string message;
+    ASSERT_EQ(updater.apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    {
+        std::unique_lock<std::mutex> lock(snapshotMutex);
+        ASSERT_TRUE(snapshotCv.wait_for(lock, std::chrono::seconds(20), [&]() { return snapshotStarted; }));
+    }
+
+    bool stopped=stopsWithin(updater, std::chrono::seconds(2));
+    {
+        std::lock_guard<std::mutex> lock(snapshotMutex);
+        snapshotReleased=true;
+        snapshotCv.notify_all();
+    }
+    if(!stopped)
+    {
+        // the stopper still runs on the applier
+        updater.wait();
+        m_applier.release();
+        FAIL()<<"stop() waited for the models snapshot";
+    }
+    updater.wait();
+    EXPECT_EQ(m_restarts, 0);
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+    EXPECT_FALSE(fs::exists(m_root/"update-state.json"));
+    EXPECT_FALSE(updater.busy());
+}
+
+TEST_F(UpdateApplierTest, StopWaitsForARunningRollbackAndSkipsTheRestart)
+{
+    std::string message;
+    ASSERT_EQ(applier().apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    m_applier->wait();
+    ASSERT_EQ(m_restarts, 1);
+
+    std::unique_lock<std::recursive_mutex> historyLock(arbiterAI::server::updateHistoryMutex());
+    UpdateApplier &updated=applier("1.1.0");
+    ASSERT_EQ(updated.rollback(allowed, message), UpdateApplier::Start::Started)<<message;
+    // the rollback has no state of its own before the swap: give it time to reach the history lock
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    std::atomic<bool> stopped{false};
+    std::thread stopper([&updated, &stopped]()
+    {
+        updated.stop();
+        stopped=true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(stopped);
+
+    historyLock.unlock();
+    stopper.join();
+    EXPECT_EQ(arbiterAI::server::installedVersion(m_root), "1.0.0");
+    updated.wait();
+    EXPECT_EQ(m_restarts, 1);
+}
+
+TEST_F(UpdateApplierTest, AStopAfterAFailedRollbackReturns)
+{
+    std::string message;
+    ASSERT_EQ(applier().apply("1.1.0", m_latest, allowed, message), UpdateApplier::Start::Started)<<message;
+    m_applier->wait();
+
+    // A bin.failed that cannot be removed makes the swap back fail.
+    writeFile(m_root/"bin.failed"/"locked"/"file", "x");
+    fs::permissions(m_root/"bin.failed", fs::perms::owner_read|fs::perms::owner_exec);
+
+    UpdateApplier &updated=applier("1.1.0");
+    ASSERT_EQ(updated.rollback(allowed, message), UpdateApplier::Start::Started)<<message;
+    updated.wait();
+    fs::permissions(m_root/"bin.failed", fs::perms::owner_all);
+    ASSERT_EQ(updated.statusJson()["state"], "idle");
+
+    if(!stopsWithin(updated, std::chrono::seconds(2)))
+    {
+        // the stopper still waits on the applier
+        m_applier.release();
+        FAIL()<<"stop() still waits for the failed rollback's swap";
+    }
 }
 
 TEST_F(UpdateApplierTest, ApplyAndRollbackAreRefusedOnceStopped)

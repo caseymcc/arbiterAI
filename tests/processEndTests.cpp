@@ -54,4 +54,12 @@ TEST(ProcessEndTest, MainLeavesAnEndAlreadyTakenAlone)
     EXPECT_EQ(end.afterRestartTimeout(true), EndAction::None);
 }
 
+TEST(ProcessEndTest, OnlyTheFirstCallerStopsTheListener)
+{
+    // once listen() returned, wait_until_ready() would spin and a second stop() asserts
+    ProcessEnd end;
+    EXPECT_TRUE(end.claimListenerStop());
+    EXPECT_FALSE(end.claimListenerStop());
+}
+
 } // anonymous namespace

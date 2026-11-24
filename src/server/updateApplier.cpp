@@ -326,6 +326,14 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe 
         }
     }
 
+    // Taken before the swap starts: the snapshot waits out a model load, and
+    // a stop must not wait with it.
+    UpdateState state;
+    state.from=m_config.currentVersion;
+    state.to=version;
+    state.loadedModels=m_models?m_models():nlohmann::json::array();
+    state.attempt=0;
+
     if(!beginSwap())
     {
         removeStaging(m_config.root);
@@ -333,12 +341,6 @@ void UpdateApplier::runApply(std::string version, ReleaseAsset asset, BusyProbe 
         return;
     }
     setState("installing", 0.98);
-
-    UpdateState state;
-    state.from=m_config.currentVersion;
-    state.to=version;
-    state.loadedModels=m_models?m_models():nlohmann::json::array();
-    state.attempt=0;
 
     std::string error;
     bool installed=false;

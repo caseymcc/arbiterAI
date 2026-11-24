@@ -1188,8 +1188,11 @@ int main(int argc, char *argv[])
             spdlog::info("Restarting for the update: refusing new requests, waiting up to {} s for in-flight work", drainTimeoutSec);
             if(drainController.drain(std::chrono::seconds(drainTimeoutSec)))
                 spdlog::info("Drain complete");
-            server.wait_until_ready();
-            server.stop();
+            if(processEnd.claimListenerStop())
+            {
+                server.wait_until_ready();
+                server.stop();
+            }
 
             // listen() joins the request threads; one still running after the
             // drain timeout would hold main, so restart from here instead.
@@ -1310,8 +1313,11 @@ int main(int argc, char *argv[])
             spdlog::info("Drain complete");
 
         // start() runs just before listen(), which may not have bound yet.
-        server.wait_until_ready();
-        server.stop();
+        if(processEnd.claimListenerStop())
+        {
+            server.wait_until_ready();
+            server.stop();
+        }
 
         // listen() joins the request threads, so a request still running
         // after the drain timeout would hold it; do not wait for it.

@@ -29,10 +29,16 @@ public:
     /// main, listen() returned.
     EndAction afterListen(bool restartRequested, bool stopRequested);
 
+    /// The restart worker and the stop handler both stop the listener; true
+    /// for the first. Once listen() returned, wait_until_ready() spins for
+    /// ever, and a second stop() trips httplib's assert.
+    bool claimListenerStop();
+
 private:
     bool claim();
 
     std::atomic<bool> m_claimed{false};
+    std::atomic<bool> m_listenerStopClaimed{false};
 };
 
 } // namespace server

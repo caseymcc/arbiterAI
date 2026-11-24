@@ -191,7 +191,7 @@ On `SIGTERM` or `SIGINT` (`systemctl stop`, `docker stop`, Ctrl-C) the server dr
 
 A second signal exits at once (`128+signal`). A signal that arrives before the server is listening (while it clones `arbiterAI_config`, loads startup models or runs `--self-test`) also exits at once, with `128+signal`: there is nothing to drain yet. If requests are still running 5 seconds after the drain timeout, the server logs that and exits `1` without unloading models; downloads still running then are abandoned.
 
-A stop also stops self-update: an apply or rollback that has not swapped the install yet is cancelled (`.update/` is removed), and one that is moving directories is let finish before the server exits, so `bin/` is never left half moved. A stop that comes while the server drains to restart into an update wins: the server exits instead of `execv`ing, and the supervisor starts the new install, in probation, the next time it starts the service.
+A stop also stops self-update. An apply that reaches the swap after the stop is cancelled (`.update/` is removed), and so is a rollback that has not swapped yet. One that is moving directories is let finish before the server exits, so `bin/` is never left half moved. An apply still downloading, verifying or self-testing is not waited for: the process exits around it, and the `.update/` it leaves is cleared by the next apply. A stop that comes while the server drains to restart into an update wins: the server exits instead of `execv`ing, and the supervisor starts the new install, in probation, the next time it starts the service.
 
 ### Examples
 

@@ -29,5 +29,10 @@ EndAction ProcessEnd::afterListen(bool restartRequested, bool stopRequested)
     return restartRequested && !stopRequested?EndAction::Restart:EndAction::Exit;
 }
 
+bool ProcessEnd::claimListenerStop()
+{
+    return !m_listenerStopClaimed.exchange(true);
+}
+
 } // namespace server
 } // namespace arbiterAI
