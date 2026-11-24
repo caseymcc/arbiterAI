@@ -402,8 +402,9 @@ void InferenceScheduler::tokenizerLoop()
 
         // Tokenize — this only reads llama_model/vocab (thread-safe, no context needed)
         Llama llamaProvider;
+        job->reasoningBudget=Llama::reasoningBudgetFor(job->request, *modelInfo);
         ErrorCode tokenizeResult=llamaProvider.tokenizePrompt(
-            llamaModel, job->request, *modelInfo, job->tokens, job->formattedPrompt);
+            llamaModel, job->request, *modelInfo, job->reasoningBudget, job->tokens, job->formattedPrompt);
 
         if(tokenizeResult!=ErrorCode::Success)
         {

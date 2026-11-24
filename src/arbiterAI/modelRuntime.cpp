@@ -3,6 +3,7 @@
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/telemetryCollector.h"
 #include "arbiterAI/storageManager.h"
+#include "arbiterAI/providers/llama.h"
 
 #include <llama.h>
 #include <ggml.h>
@@ -603,6 +604,15 @@ ErrorCode ModelRuntime::loadModel(
                 {
                     m_models.erase(model);
                     return loadResult;
+                }
+
+                entry.thinkTokens=detectThinkTokens(entry.llamaModel);
+                if(resolvedOptions.reasoningBudget.has_value())
+                {
+                    if(modelInfo->apiFormat=="harmony")
+                        spdlog::info("reasoning_budget is ignored for model '{}': it has no effect with api_format harmony", model);
+                    else if(!entry.thinkTokens.valid())
+                        spdlog::info("reasoning_budget is ignored for model '{}': its vocabulary has no single-token <think>/</think>", model);
                 }
             }
 

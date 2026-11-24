@@ -5,6 +5,7 @@
 #include "arbiterAI/modelManager.h"
 #include "arbiterAI/modelFitCalculator.h"
 #include "arbiterAI/modelDownloader.h"
+#include "arbiterAI/providers/reasoningBudget.h"
 
 #include <string>
 #include <vector>
@@ -87,6 +88,7 @@ struct LoadedModel {
     llama_model *llamaModel=nullptr;
     llama_context *llamaCtx=nullptr;
     RuntimeOptions activeOptions; // llama.cpp options active for this loaded model
+    ThinkTokens thinkTokens; // single-token <think>/</think> ids, invalid when the vocab has none
     std::vector<int32_t> kvCacheTokens; // tokens currently in llamaCtx's KV cache (seq 0), for cache_prompt prefix reuse
 };
 

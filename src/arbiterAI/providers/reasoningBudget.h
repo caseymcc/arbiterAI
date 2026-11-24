@@ -27,7 +27,7 @@ struct ThinkTokens {
 /// (closeText) to be injected.
 class ReasoningBudget {
 public:
-    ReasoningBudget(std::optional<int> budget, const ThinkTokens &tokens);
+    ReasoningBudget(std::optional<int> budget=std::nullopt, const ThinkTokens &tokens=ThinkTokens{});
 
     static const std::string &openTag();
     static const std::string &closeTag();

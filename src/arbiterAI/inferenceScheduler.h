@@ -2,6 +2,7 @@
 #define _ARBITERAI_INFERENCESCHEDULER_H_
 
 #include "arbiterAI/arbiterAI.h"
+#include "arbiterAI/providers/reasoningBudget.h"
 
 #include <string>
 #include <vector>
@@ -92,6 +93,9 @@ struct InferenceJob {
     /// Pre-tokenized prompt tokens (filled by tokenizer thread).
     std::vector<int32_t> tokens;
     std::string formattedPrompt;
+
+    /// reasoning_budget read when the job was tokenized; kept for its whole run.
+    ReasoningBudget reasoningBudget;
 
     /// Result for non-streaming requests.
     std::string resultText;

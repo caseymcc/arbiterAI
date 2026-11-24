@@ -71,7 +71,41 @@ private:
     std::string m_pending;
 };
 
+/// Tokenize text that may hold special tokens (no BOS added).
+std::vector<llama_token> tokenizeSpecial(const llama_vocab *vocab, const std::string &text)
+{
+    std::vector<llama_token> tokens(text.size()+8);
+    int nTokens=llama_tokenize(vocab, text.c_str(), text.length(),
+        tokens.data(), tokens.size(), false, true);
+    if(nTokens<0)
+    {
+        tokens.resize(-nTokens);
+        nTokens=llama_tokenize(vocab, text.c_str(), text.length(),
+            tokens.data(), tokens.size(), false, true);
+    }
+    tokens.resize(std::max(nTokens, 0));
+    return tokens;
+}
+
 } // namespace
+
+ThinkTokens detectThinkTokens(llama_model *model)
+{
+    ThinkTokens thinkTokens;
+    if(!model)
+        return thinkTokens;
+
+    const llama_vocab *vocab=llama_model_get_vocab(model);
+    std::vector<llama_token> open=tokenizeSpecial(vocab, ReasoningBudget::openTag());
+    std::vector<llama_token> close=tokenizeSpecial(vocab, ReasoningBudget::closeTag());
+
+    if(open.size()==1&&close.size()==1)
+    {
+        thinkTokens.open=open[0];
+        thinkTokens.close=close[0];
+    }
+    return thinkTokens;
+}
 
 Llama::Llama():
     BaseProvider("llama")
@@ -746,36 +780,16 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
     bool harmonyMode=(modelInfo.apiFormat=="harmony");
+    ReasoningBudget budget=reasoningBudgetFor(request, modelInfo);
 
-    // Apply chat template to format messages properly
     std::string prompt;
-    if(harmonyMode)
+    std::vector<llama_token> tokensList;
+    ErrorCode tokenizeResult=tokenizePrompt(model, request, modelInfo, budget, tokensList, prompt);
+    if(tokenizeResult!=ErrorCode::Success)
     {
-        prompt=formatHarmonyPrompt(request, modelInfo);
+        return tokenizeResult;
     }
-    else
-    {
-        prompt=applyTemplate(model, request.messages);
-    }
-
-    // Tokenize the formatted prompt — use special token parsing for harmony
-    std::vector<llama_token> tokensList(prompt.size()+256);
-    int nTokens=llama_tokenize(vocab, prompt.c_str(), prompt.length(),
-        tokensList.data(), tokensList.size(), true, harmonyMode);
-    if(nTokens<0)
-    {
-        // Buffer too small, resize and retry
-        tokensList.resize(-nTokens);
-        nTokens=llama_tokenize(vocab, prompt.c_str(), prompt.length(),
-            tokensList.data(), tokensList.size(), true, harmonyMode);
-        if(nTokens<0)
-        {
-            spdlog::error("Failed to tokenize prompt");
-            m_lastErrorDetail="failed to tokenize prompt";
-            return ErrorCode::GenerationError;
-        }
-    }
-    tokensList.resize(nTokens);
+    int nTokens=static_cast<int>(tokensList.size());
     promptTokens=nTokens;
 
     std::vector<int32_t> *kvRecord=ModelRuntime::instance().kvCacheTokens(request.model);
@@ -997,8 +1011,21 @@ ErrorCode Llama::runInference(llama_model *model, llama_context *ctx,
     return ErrorCode::Success;
 }
 
+ReasoningBudget Llama::reasoningBudgetFor(const CompletionRequest &request,
+    const ModelInfo &modelInfo)
+{
+    if(modelInfo.apiFormat=="harmony")
+        return ReasoningBudget();
+
+    std::optional<LoadedModel> state=ModelRuntime::instance().getModelState(request.model);
+    if(!state)
+        return ReasoningBudget();
+    return ReasoningBudget(state->activeOptions.reasoningBudget, state->thinkTokens);
+}
+
 ErrorCode Llama::tokenizePrompt(llama_model *model,
     const CompletionRequest &request, const ModelInfo &modelInfo,
+    const ReasoningBudget &budget,
     std::vector<int32_t> &tokens, std::string &formattedPrompt)
 {
     const llama_vocab *vocab=llama_model_get_vocab(model);
@@ -1029,6 +1056,14 @@ ErrorCode Llama::tokenizePrompt(llama_model *model,
         }
     }
     tokens.resize(nTokens);
+
+    if(!harmonyMode&&budget.wantsPrefill())
+    {
+        std::vector<llama_token> prefill=tokenizeSpecial(vocab, ReasoningBudget::prefillText());
+
+        tokens.insert(tokens.end(), prefill.begin(), prefill.end());
+        formattedPrompt+=ReasoningBudget::prefillText();
+    }
     return ErrorCode::Success;
 }
 
@@ -1296,7 +1331,8 @@ ErrorCode Llama::streamingCompletion(const CompletionRequest &request,
     spdlog::info("[llama] streaming: pre-tokenizing prompt for model '{}'", request.model);
     std::vector<int32_t> tokens;
     std::string formattedPrompt;
-    ErrorCode tokenizeResult=tokenizePrompt(llamaModel, request, *modelInfo, tokens, formattedPrompt);
+    ReasoningBudget budget=reasoningBudgetFor(request, *modelInfo);
+    ErrorCode tokenizeResult=tokenizePrompt(llamaModel, request, *modelInfo, budget, tokens, formattedPrompt);
     if(tokenizeResult!=ErrorCode::Success)
     {
         return tokenizeResult;

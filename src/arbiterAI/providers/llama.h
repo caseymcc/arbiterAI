@@ -2,6 +2,7 @@
 #define _ARBITERAI_PROVIDERS_LLAMA_H_
 
 #include "arbiterAI/providers/baseProvider.h"
+#include "arbiterAI/providers/reasoningBudget.h"
 
 #include <vector>
 #include <string>
@@ -20,6 +21,10 @@ namespace arbiterAI
 /// one prompt token to decode so the final position has fresh logits.
 int kvPrefixReuseLength(const std::vector<int32_t> &cachedTokens,
     const std::vector<int32_t> &promptTokens);
+
+/// The model's <think> / </think> token ids, when each tag is a single token
+/// in its vocabulary; invalid otherwise.
+ThinkTokens detectThinkTokens(llama_model *model);
 
 class Llama : public BaseProvider {
 public:
@@ -50,10 +55,18 @@ public:
     /// generation failed rather than just the error code. Empty on success.
     const std::string &lastErrorDetail() const { return m_lastErrorDetail; }
 
+    /// The reasoning_budget that applies to a request on request.model, read
+    /// once when the request starts.  A no-op for harmony models and models
+    /// without think tokens.
+    static ReasoningBudget reasoningBudgetFor(const CompletionRequest &request,
+        const ModelInfo &modelInfo);
+
     /// Tokenize the prompt outside of the inference mutex.
     /// Only reads llama_model/vocab (thread-safe without context lock).
+    /// A budget of 0 appends the empty thinking block.
     ErrorCode tokenizePrompt(llama_model *model,
         const CompletionRequest &request, const ModelInfo &modelInfo,
+        const ReasoningBudget &budget,
         std::vector<int32_t> &tokens, std::string &formattedPrompt);
 
     /// Run inference with pre-tokenized prompt (requires inference lock held).
